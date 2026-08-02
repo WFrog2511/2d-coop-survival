@@ -15,8 +15,8 @@ const local = {
     'japanese-comments': {
       meta: {
         type: 'suggestion',
-        docs: { description: '\u4eba\u9593\u5411\u3051\u306eTypeScript\u30b3\u30e1\u30f3\u30c8\u3068JSDoc\u306b\u65e5\u672c\u8a9e\u3092\u6c42\u3081\u308b\u3002' },
-        messages: { missingJapanese: '\u4eba\u9593\u5411\u3051\u30b3\u30e1\u30f3\u30c8\u3068JSDoc\u306b\u306f\u65e5\u672c\u8a9e\u30921\u6587\u5b57\u4ee5\u4e0a\u542b\u3081\u3066\u304f\u3060\u3055\u3044\u3002' },
+        docs: { description: '人間向けのTypeScriptコメントとJSDocに日本語を求める。' },
+        messages: { missingJapanese: '人間向けコメントとJSDocには日本語を1文字以上含めてください。' },
         schema: [],
       },
       create(context) {
