@@ -6,14 +6,17 @@ import {
   completeReload,
   damageEnemy,
   damagePlayer,
+  droneLateralSpeedAt,
   fireWeapon,
   isEnemyDefeated,
+  resolveDamage,
   respawnEnemy,
   retryCombat,
   selectWeapon,
   startReload,
   type CombatState,
   type EnemyInstanceId,
+  type DamageType,
   type EnemyKind,
   type WeaponId,
 } from './rules';
@@ -38,7 +41,7 @@ const ENEMIES: Record<EnemyInstanceId, EnemyConfig> = {
   'basic-1': { kind: 'basic', x: 90, y: 90, speed: 68, damage: 8, cooldown: 1500, respawn: 1600 },
   'basic-2': { kind: 'basic', x: 90, y: 410, speed: 68, damage: 8, cooldown: 1500, respawn: 1600 },
   'basic-3': { kind: 'basic', x: 690, y: 420, speed: 68, damage: 8, cooldown: 1500, respawn: 1600 },
-  'drone-1': { kind: 'drone', x: 710, y: 80, speed: 120, damage: 6, cooldown: 1200, respawn: 1200 },
+  'drone-1': { kind: 'drone', x: 710, y: 80, speed: 150, damage: 6, cooldown: 1200, respawn: 1200 },
 };
 
 const ENEMY_LABELS: Record<EnemyInstanceId, string> = {
@@ -58,6 +61,7 @@ type Controls = Phaser.Types.Input.Keyboard.CursorKeys & {
 
 type BulletMeta = {
   weapon: WeaponId;
+  damageType: DamageType;
   damage: number;
   range: number;
   knockback: number;
@@ -343,7 +347,7 @@ class Arena extends Phaser.Scene {
     const config = ENEMIES[enemyId];
     const directionX = x / length;
     const directionY = y / length;
-    const sideSpeed = config.kind === 'drone' ? Math.sin(this.time.now / 180) * 70 : 0;
+    const sideSpeed = config.kind === 'drone' ? droneLateralSpeedAt(this.time.now) : 0;
     enemy.setVelocity(
       directionX * config.speed - directionY * sideSpeed,
       directionY * config.speed + directionX * sideSpeed,
@@ -380,6 +384,7 @@ class Arena extends Phaser.Scene {
       bullet.setVelocity(Math.cos(angle) * weapon.speed, Math.sin(angle) * weapon.speed);
       this.bulletMeta.set(bullet, {
         weapon: this.state.weapon,
+        damageType: weapon.damageType,
         damage: weapon.damage,
         range: weapon.range,
         knockback: weapon.knockback,
@@ -404,8 +409,9 @@ class Arena extends Phaser.Scene {
     const meta = this.bulletMeta.get(bullet);
     if (!meta || enemy !== this.enemies[enemyId] || !enemy.active || this.state.defeated) return;
     this.disableBullet(bullet);
-    this.state = damageEnemy(this.state, enemyId, meta.damage);
-    this.showHit(enemy, enemyId, meta);
+    const resolved = resolveDamage(this.state.enemies[enemyId].kind, meta.damageType, meta.damage);
+    this.state = damageEnemy(this.state, enemyId, resolved.amount);
+    this.showHit(enemy, enemyId, meta, resolved.resisted);
     this.refreshHud();
     if (!isEnemyDefeated(this.state, enemyId)) return;
     enemy.disableBody(true, true);
@@ -426,8 +432,10 @@ class Arena extends Phaser.Scene {
     enemy: Phaser.Physics.Arcade.Sprite,
     enemyId: EnemyInstanceId,
     meta: BulletMeta,
+    resisted: boolean,
   ): void {
-    feedback.textContent = `命中: ${WEAPONS[meta.weapon].label} → ${ENEMY_LABELS[enemyId]}`;
+    const prefix = resisted ? '耐性' : '命中';
+    feedback.textContent = `${prefix}: ${WEAPONS[meta.weapon].label} → ${ENEMY_LABELS[enemyId]}`;
     this.feedbackTimers.get(enemyId)?.remove(false);
     enemy.setTint(0xffffff);
     const timer = this.time.delayedCall(90, () => {

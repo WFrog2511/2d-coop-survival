@@ -7,8 +7,10 @@ import {
   completeReload,
   damageEnemy,
   damagePlayer,
+  droneLateralSpeedAt,
   fireWeapon,
   isEnemyDefeated,
+  resolveDamage,
   respawnEnemy,
   retryCombat,
   selectWeapon,
@@ -16,8 +18,10 @@ import {
 } from '../src/rules';
 
 describe('戦闘ルール', () => {
-  it('武器ごとの射撃、弾倉、リロード契約を定義する', () => {
+  it('武器ごとの射撃、弾倉、リロード、弾種契約を定義する', () => {
     expect(WEAPONS.rifle).toMatchObject({
+      damageType: 'smallCaliber',
+      damage: 2,
       automatic: true,
       fireIntervalMs: 150,
       magazineSize: 20,
@@ -26,6 +30,8 @@ describe('戦闘ルール', () => {
       knockback: 0,
     });
     expect(WEAPONS.shotgun).toMatchObject({
+      damageType: 'scatter',
+      damage: 2,
       automatic: false,
       fireIntervalMs: 750,
       magazineSize: 4,
@@ -35,6 +41,22 @@ describe('戦闘ルール', () => {
     });
     expect(WEAPONS.shotgun.spread).toBeGreaterThan(0);
     expect(WEAPONS.shotgun.range).toBeLessThan(WEAPONS.rifle.range);
+  });
+
+  it('敵種と弾種のダメージ倍率を解決する', () => {
+    expect(resolveDamage('basic', 'smallCaliber', 2)).toEqual({ amount: 2, resisted: false });
+    expect(resolveDamage('basic', 'scatter', 2)).toEqual({ amount: 2, resisted: false });
+    const smallCaliber = resolveDamage('drone', 'smallCaliber', 2);
+    const scatter = resolveDamage('drone', 'scatter', 2);
+    expect(smallCaliber).toEqual({ amount: 1, resisted: true });
+    expect(scatter).toEqual({ amount: 2, resisted: false });
+    expect(damageEnemy(INITIAL_STATE, 'drone-1', smallCaliber.amount).enemies['drone-1'].hp).toBe(3);
+    expect(damageEnemy(INITIAL_STATE, 'drone-1', scatter.amount).enemies['drone-1'].hp).toBe(2);
+  });
+
+  it('ドローン横速度は決定的で複数時刻に応じて変化する', () => {
+    expect(droneLateralSpeedAt(100)).toBe(droneLateralSpeedAt(100));
+    expect(new Set([droneLateralSpeedAt(0), droneLateralSpeedAt(100), droneLateralSpeedAt(200)])).toHaveLength(3);
   });
 
   it('ライフルは発射時に1発消費し、境界時だけ次弾を許可する', () => {
@@ -78,11 +100,11 @@ describe('戦闘ルール', () => {
     const damaged = damageEnemy(INITIAL_STATE, 'basic-2', 9);
     expect(ENEMY_INSTANCE_IDS).toHaveLength(4);
     expect(damaged.enemies['basic-2']).toMatchObject({ hp: 0, defeated: true });
-    expect(damaged.enemies['basic-1']).toMatchObject({ hp: 3, defeated: false });
-    expect(damaged.enemies['basic-3']).toMatchObject({ hp: 3, defeated: false });
-    expect(damaged.enemies['drone-1']).toMatchObject({ hp: 2, defeated: false });
+    expect(damaged.enemies['basic-1']).toMatchObject({ hp: 6, defeated: false });
+    expect(damaged.enemies['basic-3']).toMatchObject({ hp: 6, defeated: false });
+    expect(damaged.enemies['drone-1']).toMatchObject({ hp: 4, defeated: false });
     expect(isEnemyDefeated(damaged, 'basic-2')).toBe(true);
-    expect(respawnEnemy(damaged, 'basic-2').enemies['basic-2']).toMatchObject({ hp: 3, defeated: false });
+    expect(respawnEnemy(damaged, 'basic-2').enemies['basic-2']).toMatchObject({ hp: 6, defeated: false });
   });
 
   it('プレイヤーへの部分ダメージと致死ダメージを区別する', () => {

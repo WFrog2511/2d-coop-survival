@@ -1,11 +1,13 @@
 export type WeaponId = 'rifle' | 'shotgun';
 export type EnemyKind = 'basic' | 'drone';
+export type DamageType = 'smallCaliber' | 'scatter';
 export type EnemyInstanceId = 'basic-1' | 'basic-2' | 'basic-3' | 'drone-1';
 
 export const ENEMY_INSTANCE_IDS: EnemyInstanceId[] = ['basic-1', 'basic-2', 'basic-3', 'drone-1'];
 
 export type WeaponDefinition = {
   label: string;
+  damageType: DamageType;
   automatic: boolean;
   fireIntervalMs: number;
   magazineSize: number;
@@ -43,12 +45,13 @@ export type FireResult = {
 export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
   rifle: {
     label: 'アサルトライフル',
+    damageType: 'smallCaliber',
     automatic: true,
     fireIntervalMs: 150,
     magazineSize: 20,
     reloadMs: 1200,
     pellets: 1,
-    damage: 1,
+    damage: 2,
     speed: 600,
     range: 520,
     spread: 0,
@@ -56,12 +59,13 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
   },
   shotgun: {
     label: 'ショットガン',
+    damageType: 'scatter',
     automatic: false,
     fireIntervalMs: 750,
     magazineSize: 4,
     reloadMs: 1600,
     pellets: 5,
-    damage: 1,
+    damage: 2,
     speed: 420,
     range: 220,
     spread: 0.2,
@@ -69,11 +73,29 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
   },
 };
 
+const DAMAGE_MULTIPLIERS: Record<EnemyKind, Record<DamageType, number>> = {
+  basic: { smallCaliber: 1, scatter: 1 },
+  drone: { smallCaliber: 0.5, scatter: 1 },
+};
+
+export function resolveDamage(
+  kind: EnemyKind,
+  damageType: DamageType,
+  baseDamage: number,
+): { amount: number; resisted: boolean } {
+  const multiplier = DAMAGE_MULTIPLIERS[kind][damageType];
+  return { amount: baseDamage * multiplier, resisted: multiplier < 1 };
+}
+
+export function droneLateralSpeedAt(now: number): number {
+  return Math.sin(now / 95) * 85 + Math.sin(now / 37) * 35;
+}
+
 const INITIAL_ENEMIES: Record<EnemyInstanceId, EnemyState> = {
-  'basic-1': { kind: 'basic', hp: 3, maxHp: 3, defeated: false },
-  'basic-2': { kind: 'basic', hp: 3, maxHp: 3, defeated: false },
-  'basic-3': { kind: 'basic', hp: 3, maxHp: 3, defeated: false },
-  'drone-1': { kind: 'drone', hp: 2, maxHp: 2, defeated: false },
+  'basic-1': { kind: 'basic', hp: 6, maxHp: 6, defeated: false },
+  'basic-2': { kind: 'basic', hp: 6, maxHp: 6, defeated: false },
+  'basic-3': { kind: 'basic', hp: 6, maxHp: 6, defeated: false },
+  'drone-1': { kind: 'drone', hp: 4, maxHp: 4, defeated: false },
 };
 
 export const INITIAL_STATE: CombatState = {

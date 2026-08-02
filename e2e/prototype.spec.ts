@@ -13,10 +13,11 @@ test('自動射撃、ショットガンの発射待ち、リロード、再挑�
   await expect(page.getByTestId('ammo')).toHaveText('20/20');
   await expect(page.getByTestId('reload')).toHaveText('待機');
   await expect(page.getByTestId('hp')).toHaveText('100');
-  await expect(page.getByTestId('basic-1-hp')).toHaveText('3');
-  await expect(page.getByTestId('basic-2-hp')).toHaveText('3');
-  await expect(page.getByTestId('basic-3-hp')).toHaveText('3');
-  await expect(page.getByTestId('drone-hp')).toHaveText('2');
+  await expect(page.getByTestId('basic-1-hp')).toHaveText('6');
+  await expect(page.getByTestId('basic-2-hp')).toHaveText('6');
+  await expect(page.getByTestId('basic-3-hp')).toHaveText('6');
+  await expect(page.getByTestId('drone-hp')).toHaveText('4');
+  await expect(page.getByTestId('affinity')).toContainText('小口径弾 50% / 散弾 100%');
   const bounds = await page.locator('#game canvas').boundingBox();
   if (!bounds) throw new Error('戦闘アリーナのcanvasが見つかりません。');
 
@@ -46,10 +47,10 @@ test('自動射撃、ショットガンの発射待ち、リロード、再挑�
   await expect(page.getByTestId('ammo')).toHaveText('20/20');
   await expect(page.getByTestId('reload')).toHaveText('待機');
   await expect(page.getByTestId('hp')).toHaveText('100');
-  await expect(page.getByTestId('basic-1-hp')).toHaveText('3');
-  await expect(page.getByTestId('basic-2-hp')).toHaveText('3');
-  await expect(page.getByTestId('basic-3-hp')).toHaveText('3');
-  await expect(page.getByTestId('drone-hp')).toHaveText('2');
+  await expect(page.getByTestId('basic-1-hp')).toHaveText('6');
+  await expect(page.getByTestId('basic-2-hp')).toHaveText('6');
+  await expect(page.getByTestId('basic-3-hp')).toHaveText('6');
+  await expect(page.getByTestId('drone-hp')).toHaveText('4');
   await expect(page.getByTestId('feedback')).toHaveText('-');
   expect(errors).toEqual([]);
 });
