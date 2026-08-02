@@ -1,6 +1,6 @@
 # 2D協力メカサバイバル
 
-ブラウザから1〜4人で参加し、視界と情報を共有しながら暴走機械群に対処して全員生還を目指す、見下ろし型2D協力サバイバルゲームです。現在は、二武器・二敵を対象にしたcombat-choice-v1を実装しています。
+ブラウザから1〜4人で参加し、視界と情報を共有しながら暴走機械群に対処して全員生還を目指す、見下ろし型2D協力サバイバルゲームです。現在は、二武器、3体の基本敵、1体の高速ドローンを対象にしたcombat-choice-v1を実装しています。
 
 合意済みの範囲は[Definition of Delivery Issue #12](https://github.com/WFrog2511/2d-coop-survival/issues/12)と[combat-choice-v1要件](docs/20_requirements/combat-choice-v1.md)を参照してください。[docs/企画書.md](docs/企画書.md)は企画入力であり、完了判断の正本ではありません。
 
@@ -43,9 +43,9 @@ Viteが表示するローカルURL（通常は`http://127.0.0.1:5173/`）をPC�
 ## 操作
 
 - 移動: WASD または矢印キー
-- 武器: 1 アサルトライフル / 2 ショットガン
+- 武器: 1 アサルトライフル（左ボタン長押しで自動射撃） / 2 ショットガン（1クリック1射）
 - 照準: マウス移動
-- 射撃: マウス左クリック
+- リロード: R（選択武器の残弾を補充。リロード中の射撃不可）
 - 再挑戦: 敗北表示の「再挑戦」ボタン
 
 ## TypeScript品質ゲート
@@ -67,7 +67,7 @@ pnpm check
 
 `pnpm lint`はlint違反と未整形を拒否します。`pnpm lint:fix`は安全なlint修正を適用し、`pnpm format`はESLintのlayout修正だけを適用します。pre-commit hookは、ステージ済みファイルがTypeScript、JavaScript、ESLint設定、package manifest、lockfile、TypeScript設定、hook自身に該当するときだけ`pnpm check`を実行し、作業ファイルを変更しません。人間向けのTypeScriptコメントとJSDocには日本語を1文字以上含めます。ESLint、TypeScript、triple-slash、coverage、formatter、shebang、generatedのdirectiveは対象外です。
 
-`pnpm test:e2e`はPlaywright Chromiumを使います。Google Chrome最新版での武器操作は[GitHub Issue #14](https://github.com/WFrog2511/2d-coop-survival/issues/14)、敵二種の確認は[GitHub Issue #15](https://github.com/WFrog2511/2d-coop-survival/issues/15)で人間確認します。
+`pnpm test:e2e`はPlaywright Chromiumを使います。Google Chrome最新版での武器操作は[GitHub Issue #14](https://github.com/WFrog2511/2d-coop-survival/issues/14)、高速ドローンによる撃破優先度の確認は[GitHub Issue #15](https://github.com/WFrog2511/2d-coop-survival/issues/15)で人間確認します。
 
 ## Python・文書検査
 

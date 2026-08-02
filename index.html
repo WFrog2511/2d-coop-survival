@@ -10,12 +10,18 @@
     <main>
       <header>
         <h1>メカサバイバル</h1>
-        <p>移動: WASD / 矢印　武器: 1 ライフル / 2 ショットガン　照準・射撃: マウス左クリック</p>
+        <p>
+          移動: WASD / 矢印　武器: 1 ライフル / 2 ショットガン　照準: マウス移動　射撃: マウス左ボタン　リロード: R
+        </p>
         <p data-testid="hud">
           武器: <output data-testid="weapon">アサルトライフル</output>
+          残弾: <output data-testid="ammo">20/20</output>
+          リロード: <output data-testid="reload">待機</output>
           プレイヤーHP: <output data-testid="hp">100</output>
-          基本敵HP: <output data-testid="enemy-hp">3</output>
-          ドローンHP: <output data-testid="drone-hp">2</output>
+          基本敵 #1 HP: <output data-testid="basic-1-hp">3</output>
+          基本敵 #2 HP: <output data-testid="basic-2-hp">3</output>
+          基本敵 #3 HP: <output data-testid="basic-3-hp">3</output>
+          高速ドローン HP: <output data-testid="drone-hp">2</output>
           FPS: <output data-testid="fps">0</output>
         </p>
         <p data-testid="feedback" aria-live="polite">-</p>

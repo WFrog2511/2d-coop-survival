@@ -1,40 +1,51 @@
 import Phaser from 'phaser';
 import {
+  ENEMY_INSTANCE_IDS,
   WEAPONS,
+  cancelReload,
+  completeReload,
   damageEnemy,
   damagePlayer,
+  fireWeapon,
   isEnemyDefeated,
   respawnEnemy,
   retryCombat,
   selectWeapon,
+  startReload,
   type CombatState,
-  type EnemyId,
+  type EnemyInstanceId,
+  type EnemyKind,
   type WeaponId,
 } from './rules';
 
 const WIDTH = 800;
 const HEIGHT = 500;
+const BULLET_POOL_SIZE = 48;
 const PLAYER_POSITION = { x: 400, y: 250 };
-const ENEMY_IDS: EnemyId[] = ['basic', 'drone'];
-const ENEMIES = {
-  basic: {
-    x: 90,
-    y: 90,
-    texture: 'basic',
-    speed: 115,
-    damage: 20,
-    cooldown: 900,
-    respawn: 700,
-  },
-  drone: {
-    x: 710,
-    y: 80,
-    texture: 'drone',
-    speed: 170,
-    damage: 10,
-    cooldown: 700,
-    respawn: 500,
-  },
+const ENEMY_IDS = ENEMY_INSTANCE_IDS;
+
+type EnemyConfig = {
+  kind: EnemyKind;
+  x: number;
+  y: number;
+  speed: number;
+  damage: number;
+  cooldown: number;
+  respawn: number;
+};
+
+const ENEMIES: Record<EnemyInstanceId, EnemyConfig> = {
+  'basic-1': { kind: 'basic', x: 90, y: 90, speed: 68, damage: 8, cooldown: 1500, respawn: 1600 },
+  'basic-2': { kind: 'basic', x: 90, y: 410, speed: 68, damage: 8, cooldown: 1500, respawn: 1600 },
+  'basic-3': { kind: 'basic', x: 690, y: 420, speed: 68, damage: 8, cooldown: 1500, respawn: 1600 },
+  'drone-1': { kind: 'drone', x: 710, y: 80, speed: 120, damage: 6, cooldown: 1200, respawn: 1200 },
+};
+
+const ENEMY_LABELS: Record<EnemyInstanceId, string> = {
+  'basic-1': '基本敵 #1',
+  'basic-2': '基本敵 #2',
+  'basic-3': '基本敵 #3',
+  'drone-1': '高速ドローン',
 };
 
 type Controls = Phaser.Types.Input.Keyboard.CursorKeys & {
@@ -42,6 +53,7 @@ type Controls = Phaser.Types.Input.Keyboard.CursorKeys & {
   a: Phaser.Input.Keyboard.Key;
   s: Phaser.Input.Keyboard.Key;
   d: Phaser.Input.Keyboard.Key;
+  r: Phaser.Input.Keyboard.Key;
 };
 
 type BulletMeta = {
@@ -61,10 +73,20 @@ function element<ElementType extends Element>(selector: string): ElementType {
   return found;
 }
 
+function enemyNumbers(): Record<EnemyInstanceId, number> {
+  return { 'basic-1': 0, 'basic-2': 0, 'basic-3': 0, 'drone-1': 0 };
+}
+
 const playerHp = element<HTMLOutputElement>('[data-testid="hp"]');
-const basicHp = element<HTMLOutputElement>('[data-testid="enemy-hp"]');
-const droneHp = element<HTMLOutputElement>('[data-testid="drone-hp"]');
+const enemyHp: Record<EnemyInstanceId, HTMLOutputElement> = {
+  'basic-1': element<HTMLOutputElement>('[data-testid="basic-1-hp"]'),
+  'basic-2': element<HTMLOutputElement>('[data-testid="basic-2-hp"]'),
+  'basic-3': element<HTMLOutputElement>('[data-testid="basic-3-hp"]'),
+  'drone-1': element<HTMLOutputElement>('[data-testid="drone-hp"]'),
+};
 const weaponHud = element<HTMLOutputElement>('[data-testid="weapon"]');
+const ammoHud = element<HTMLOutputElement>('[data-testid="ammo"]');
+const reloadHud = element<HTMLOutputElement>('[data-testid="reload"]');
 const fps = element<HTMLOutputElement>('[data-testid="fps"]');
 const feedback = element<HTMLElement>('[data-testid="feedback"]');
 const defeat = element<HTMLElement>('[data-testid="defeat"]');
@@ -73,15 +95,16 @@ let resetArena: (() => void) | undefined;
 
 class Arena extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Sprite;
-  private enemies!: Record<EnemyId, Phaser.Physics.Arcade.Sprite>;
+  private enemies!: Record<EnemyInstanceId, Phaser.Physics.Arcade.Sprite>;
   private bullets!: Phaser.Physics.Arcade.Group;
   private keys!: Controls;
   private state: CombatState = retryCombat();
   private bulletMeta = new Map<Phaser.Physics.Arcade.Sprite, BulletMeta>();
-  private contactAt: Record<EnemyId, number> = { basic: 0, drone: 0 };
-  private knockbackUntil: Record<EnemyId, number> = { basic: 0, drone: 0 };
-  private respawns = new Map<EnemyId, Phaser.Time.TimerEvent>();
-  private feedbackTimers = new Map<EnemyId, Phaser.Time.TimerEvent>();
+  private contactAt = enemyNumbers();
+  private knockbackUntil = enemyNumbers();
+  private respawns = new Map<EnemyInstanceId, Phaser.Time.TimerEvent>();
+  private feedbackTimers = new Map<EnemyInstanceId, Phaser.Time.TimerEvent>();
+  private reloadTimer: Phaser.Time.TimerEvent | undefined;
 
   constructor() {
     super('arena');
@@ -97,19 +120,20 @@ class Arena extends Phaser.Scene {
     this.player = this.physics.add
       .sprite(PLAYER_POSITION.x, PLAYER_POSITION.y, 'player')
       .setCollideWorldBounds(true);
-    this.enemies = {
-      basic: this.createEnemy('basic'),
-      drone: this.createEnemy('drone'),
-    };
+    this.enemies = {} as Record<EnemyInstanceId, Phaser.Physics.Arcade.Sprite>;
+    ENEMY_IDS.forEach((enemyId) => {
+      this.enemies[enemyId] = this.createEnemy(enemyId);
+    });
     this.bullets = this.physics.add.group({
       classType: Phaser.Physics.Arcade.Sprite,
-      maxSize: 32,
+      maxSize: BULLET_POOL_SIZE,
     });
     this.keys = this.input.keyboard!.addKeys({
       w: 'W',
       a: 'A',
       s: 'S',
       d: 'D',
+      r: 'R',
       up: 'UP',
       down: 'DOWN',
       left: 'LEFT',
@@ -117,7 +141,10 @@ class Arena extends Phaser.Scene {
     }) as Controls;
     this.input.keyboard?.on('keydown-ONE', () => this.changeWeapon('rifle'));
     this.input.keyboard?.on('keydown-TWO', () => this.changeWeapon('shotgun'));
-    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => this.fire(pointer));
+    this.input.keyboard?.on('keydown-R', () => this.reload());
+    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (!WEAPONS[this.state.weapon].automatic) this.tryFire(pointer);
+    });
     ENEMY_IDS.forEach((enemyId) => {
       this.physics.add.overlap(
         this.bullets,
@@ -135,6 +162,7 @@ class Arena extends Phaser.Scene {
       'A',
       'S',
       'D',
+      'R',
       'UP',
       'DOWN',
       'LEFT',
@@ -156,18 +184,23 @@ class Arena extends Phaser.Scene {
       this.input.activePointer.worldX,
       this.input.activePointer.worldY,
     );
+    if (WEAPONS[this.state.weapon].automatic && this.input.activePointer.isDown) {
+      this.tryFire(this.input.activePointer);
+    }
     this.disableExpiredBullets();
   }
 
   reset(): void {
     this.respawns.forEach(timer => timer.remove(false));
     this.feedbackTimers.forEach(timer => timer.remove(false));
+    this.reloadTimer?.remove(false);
     this.respawns.clear();
     this.feedbackTimers.clear();
+    this.reloadTimer = undefined;
     this.physics.resume();
     this.state = retryCombat();
-    this.contactAt = { basic: 0, drone: 0 };
-    this.knockbackUntil = { basic: 0, drone: 0 };
+    this.contactAt = enemyNumbers();
+    this.knockbackUntil = enemyNumbers();
     this.disableAllBullets();
     this.player.enableBody(true, PLAYER_POSITION.x, PLAYER_POSITION.y, true, true).setVelocity(0, 0);
     ENEMY_IDS.forEach((enemyId) => {
@@ -182,9 +215,10 @@ class Arena extends Phaser.Scene {
     this.refreshHud();
   }
 
-  private createEnemy(enemyId: EnemyId): Phaser.Physics.Arcade.Sprite {
+  private createEnemy(enemyId: EnemyInstanceId): Phaser.Physics.Arcade.Sprite {
     const config = ENEMIES[enemyId];
-    return this.physics.add.sprite(config.x, config.y, config.texture).setCollideWorldBounds(true);
+    const texture = config.kind === 'basic' ? 'basic' : 'drone';
+    return this.physics.add.sprite(config.x, config.y, texture).setCollideWorldBounds(true);
   }
 
   private createTextures(): void {
@@ -244,7 +278,12 @@ class Arena extends Phaser.Scene {
     });
   }
 
-  private texture(key: string, width: number, height: number, draw: (context: CanvasRenderingContext2D) => void): void {
+  private texture(
+    key: string,
+    width: number,
+    height: number,
+    draw: (context: CanvasRenderingContext2D) => void,
+  ): void {
     const texture = this.textures.createCanvas(key, width, height);
     if (!texture) return;
     draw(texture.context);
@@ -252,10 +291,40 @@ class Arena extends Phaser.Scene {
   }
 
   private changeWeapon(weapon: WeaponId): void {
-    if (this.state.defeated) return;
+    if (this.state.defeated || this.state.weapon === weapon) return;
+    const interrupted = this.state.reloading !== null;
+    if (interrupted) this.stopReload();
     this.state = selectWeapon(this.state, weapon);
-    feedback.textContent = `武器: ${WEAPONS[weapon].label}`;
+    feedback.textContent = interrupted
+      ? `リロード中断: ${WEAPONS[weapon].label}`
+      : `武器: ${WEAPONS[weapon].label}`;
     this.refreshHud();
+  }
+
+  private reload(): void {
+    if (this.state.defeated) return;
+    const weapon = this.state.weapon;
+    const reloading = startReload(this.state);
+    if (reloading === this.state) {
+      feedback.textContent = this.state.reloading === null ? '弾倉は満タンです' : 'リロード中です';
+      return;
+    }
+    this.state = reloading;
+    feedback.textContent = `リロード中: ${WEAPONS[weapon].label}`;
+    this.reloadTimer = this.time.delayedCall(WEAPONS[weapon].reloadMs, () => {
+      if (this.state.defeated) return;
+      this.state = completeReload(this.state, weapon);
+      this.reloadTimer = undefined;
+      feedback.textContent = `リロード完了: ${WEAPONS[weapon].label}`;
+      this.refreshHud();
+    });
+    this.refreshHud();
+  }
+
+  private stopReload(): void {
+    this.reloadTimer?.remove(false);
+    this.reloadTimer = undefined;
+    this.state = cancelReload(this.state);
   }
 
   private movePlayer(): void {
@@ -265,18 +334,32 @@ class Arena extends Phaser.Scene {
     this.player.setVelocity((x / length) * 210, (y / length) * 210);
   }
 
-  private moveEnemy(enemyId: EnemyId): void {
+  private moveEnemy(enemyId: EnemyInstanceId): void {
     const enemy = this.enemies[enemyId];
     if (!enemy.active || this.time.now < this.knockbackUntil[enemyId]) return;
     const x = this.player.x - enemy.x;
     const y = this.player.y - enemy.y;
     const length = Math.hypot(x, y) || 1;
-    enemy.setVelocity((x / length) * ENEMIES[enemyId].speed, (y / length) * ENEMIES[enemyId].speed);
+    const config = ENEMIES[enemyId];
+    const directionX = x / length;
+    const directionY = y / length;
+    const sideSpeed = config.kind === 'drone' ? Math.sin(this.time.now / 180) * 70 : 0;
+    enemy.setVelocity(
+      directionX * config.speed - directionY * sideSpeed,
+      directionY * config.speed + directionX * sideSpeed,
+    );
   }
 
-  private fire(pointer: Phaser.Input.Pointer): void {
-    if (this.state.defeated) return;
+  private tryFire(pointer: Phaser.Input.Pointer): void {
     const weapon = WEAPONS[this.state.weapon];
+    if (BULLET_POOL_SIZE - this.bullets.countActive(true) < weapon.pellets) return;
+    const result = fireWeapon(this.state, this.time.now);
+    this.state = result.state;
+    if (!result.fired) {
+      if (this.state.reloading !== null) feedback.textContent = 'リロード中です';
+      else if (this.state.ammo[this.state.weapon] === 0) feedback.textContent = '弾切れ: Rでリロード';
+      return;
+    }
     const baseAngle = Phaser.Math.Angle.Between(
       this.player.x,
       this.player.y,
@@ -287,7 +370,7 @@ class Arena extends Phaser.Scene {
       const bullet = this.bullets.get(
         this.player.x,
         this.player.y,
-        'bullet-' + this.state.weapon,
+        `bullet-${this.state.weapon}`,
       ) as Phaser.Physics.Arcade.Sprite | null;
       if (!bullet) continue;
       const ratio = weapon.pellets === 1 ? 0 : index / (weapon.pellets - 1) - 0.5;
@@ -306,26 +389,20 @@ class Arena extends Phaser.Scene {
         directionY: Math.sin(angle),
       });
     }
+    this.refreshHud();
   }
 
   private hitEnemy(
     firstObject: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Physics.Arcade.Body | Phaser.Physics.Arcade.StaticBody | Phaser.Tilemaps.Tile,
     secondObject: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Physics.Arcade.Body | Phaser.Physics.Arcade.StaticBody | Phaser.Tilemaps.Tile,
-    enemyId: EnemyId,
+    enemyId: EnemyInstanceId,
   ): void {
     const first = firstObject as Phaser.Physics.Arcade.Sprite;
     const second = secondObject as Phaser.Physics.Arcade.Sprite;
     const bullet = this.bulletMeta.has(first) ? first : second;
     const enemy = bullet === first ? second : first;
     const meta = this.bulletMeta.get(bullet);
-    if (
-      !meta
-      || enemy !== this.enemies[enemyId]
-      || !enemy.active
-      || this.state.defeated
-    ) {
-      return;
-    }
+    if (!meta || enemy !== this.enemies[enemyId] || !enemy.active || this.state.defeated) return;
     this.disableBullet(bullet);
     this.state = damageEnemy(this.state, enemyId, meta.damage);
     this.showHit(enemy, enemyId, meta);
@@ -339,13 +416,18 @@ class Arena extends Phaser.Scene {
       this.enemies[enemyId]
         .enableBody(true, config.x, config.y, true, true)
         .setVelocity(0, 0);
+      this.respawns.delete(enemyId);
       this.refreshHud();
     });
     this.respawns.set(enemyId, timer);
   }
 
-  private showHit(enemy: Phaser.Physics.Arcade.Sprite, enemyId: EnemyId, meta: BulletMeta): void {
-    feedback.textContent = `命中: ${WEAPONS[meta.weapon].label} → ${enemyId === 'basic' ? '基本敵' : '高速ドローン'}`;
+  private showHit(
+    enemy: Phaser.Physics.Arcade.Sprite,
+    enemyId: EnemyInstanceId,
+    meta: BulletMeta,
+  ): void {
+    feedback.textContent = `命中: ${WEAPONS[meta.weapon].label} → ${ENEMY_LABELS[enemyId]}`;
     this.feedbackTimers.get(enemyId)?.remove(false);
     enemy.setTint(0xffffff);
     const timer = this.time.delayedCall(90, () => {
@@ -354,14 +436,11 @@ class Arena extends Phaser.Scene {
     });
     this.feedbackTimers.set(enemyId, timer);
     if (meta.knockback === 0) return;
-    enemy.setVelocity(
-      meta.directionX * meta.knockback,
-      meta.directionY * meta.knockback,
-    );
+    enemy.setVelocity(meta.directionX * meta.knockback, meta.directionY * meta.knockback);
     this.knockbackUntil[enemyId] = this.time.now + 180;
   }
 
-  private hitPlayer(enemyId: EnemyId): void {
+  private hitPlayer(enemyId: EnemyInstanceId): void {
     if (
       this.state.defeated
       || this.time.now - this.contactAt[enemyId] < ENEMIES[enemyId].cooldown
@@ -370,8 +449,12 @@ class Arena extends Phaser.Scene {
     }
     this.contactAt[enemyId] = this.time.now;
     this.state = damagePlayer(this.state, ENEMIES[enemyId].damage);
+    if (!this.state.defeated) {
+      this.refreshHud();
+      return;
+    }
+    this.stopReload();
     this.refreshHud();
-    if (!this.state.defeated) return;
     this.player.setVelocity(0, 0);
     ENEMY_IDS.forEach(id => this.enemies[id].setVelocity(0, 0));
     this.disableAllBullets();
@@ -407,14 +490,28 @@ class Arena extends Phaser.Scene {
 
   private refreshHud(): void {
     playerHp.value = String(this.state.playerHp);
-    basicHp.value = String(this.state.enemies.basic.hp);
-    droneHp.value = String(this.state.enemies.drone.hp);
+    ENEMY_IDS.forEach((enemyId) => {
+      enemyHp[enemyId].value = String(this.state.enemies[enemyId].hp);
+    });
     weaponHud.value = WEAPONS[this.state.weapon].label;
+    ammoHud.value = `${this.state.ammo[this.state.weapon]}/${WEAPONS[this.state.weapon].magazineSize}`;
+    reloadHud.value = this.state.reloading === null ? '待機' : `リロード中: ${WEAPONS[this.state.reloading].label}`;
   }
 }
 
-new Phaser.Game({ type: Phaser.AUTO, parent: 'game', width: WIDTH, height: HEIGHT, backgroundColor: '#101827', physics: { default: 'arcade', arcade: { debug: false } }, scene: Arena });
+new Phaser.Game({
+  type: Phaser.AUTO,
+  parent: 'game',
+  width: WIDTH,
+  height: HEIGHT,
+  backgroundColor: '#101827',
+  physics: { default: 'arcade', arcade: { debug: false } },
+  scene: Arena,
+});
 retry.addEventListener('click', () => resetArena?.());
 window.addEventListener('keydown', (event) => {
-  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'w', 'a', 's', 'd', '1', '2'].includes(event.key.toLowerCase()) || ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) event.preventDefault();
+  const key = event.key.toLowerCase();
+  if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ', 'w', 'a', 's', 'd', 'r', '1', '2'].includes(key)) {
+    event.preventDefault();
+  }
 });
