@@ -1,0 +1,4 @@
+interface:
+  display_name: "プロジェクトKnowledge管理"
+  short_description: "根拠付きKnowledgeを管理しLLM-Wikiへ連携"
+  default_prompt: "$manage-project-knowledge を使って、今回の知見をKnowledgeとして整理してください。"

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ponytail最小実装"
+  short_description: "YAGNIと既存資産優先で最小の正しい実装を選ぶ"
+  default_prompt: "$ponytail を使って、要求を満たす最小の正しい変更を実装してください。"

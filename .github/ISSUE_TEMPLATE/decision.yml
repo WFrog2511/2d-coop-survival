@@ -1,0 +1,23 @@
+name: 判断
+description: 人間の選択または承認が必要な事項を起票する。
+title: "decision: "
+labels: ["type:decision"]
+body:
+  - type: textarea
+    id: decision
+    attributes:
+      label: 決めること
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: 選択肢と推奨案
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: 影響と判断期限
+    validations:
+      required: true

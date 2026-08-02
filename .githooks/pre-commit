@@ -1,0 +1,25 @@
+#!/usr/bin/env sh
+
+if [ -x ".venv/Scripts/python.exe" ]; then
+  PYTHON=".venv/Scripts/python.exe"
+elif [ -x ".venv/bin/python" ]; then
+  PYTHON=".venv/bin/python"
+elif command -v python >/dev/null 2>&1; then
+  PYTHON="python"
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON="python3"
+else
+  echo "Pythonが見つからないためコミット前検査を実行できません。" >&2
+  exit 2
+fi
+
+"$PYTHON" scripts/check_japanese_comments.py --staged || exit $?
+"$PYTHON" scripts/check_acceptance_matrix.py --staged || exit $?
+
+if [ -d "docs" ]; then
+  "$PYTHON" scripts/check_markdown_links.py docs || exit $?
+fi
+
+if [ -d "docs/40_design/detail" ] && find "docs/40_design/detail" -type f -name '*.md' -print -quit | grep -q .; then
+  "$PYTHON" scripts/docgen.py --check 'docs/40_design/detail/**/*.md' || exit $?
+fi

@@ -1,0 +1,4 @@
+interface:
+  display_name: "納品準備と証跡"
+  short_description: "納品前診断、三層判定、証跡収集、closeoutを実行"
+  default_prompt: "納品前のpreflight、三層ゲート、証跡パッケージ、closeoutを順に確認してください。"

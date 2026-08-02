@@ -1,0 +1,4 @@
+interface:
+  display_name: "GitHub Issue開発"
+  short_description: "GitHub IssueとPR中心の最小AI開発運用"
+  default_prompt: "$github-issue-development を使って、GitHub Issue中心の開発を開始してください。"

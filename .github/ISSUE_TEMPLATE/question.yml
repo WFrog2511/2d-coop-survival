@@ -1,0 +1,23 @@
+name: 質問
+description: 要件、業務、技術の未確定事項を起票する。
+title: "question: "
+labels: ["type:question"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: 質問
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: 背景と影響
+    validations:
+      required: true
+  - type: textarea
+    id: desired_answer
+    attributes:
+      label: 欲しい回答
+    validations:
+      required: true

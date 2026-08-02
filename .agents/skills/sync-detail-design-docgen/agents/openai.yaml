@@ -1,0 +1,4 @@
+interface:
+  display_name: "詳細設計DOCGEN同期"
+  short_description: "Pythonコード由来の事実を詳細設計書へ安全に同期"
+  default_prompt: "$sync-detail-design-docgen を使って、詳細設計書のDOCGENブロックを同期してください。"

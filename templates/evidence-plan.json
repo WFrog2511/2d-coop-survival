@@ -1,0 +1,16 @@
+{
+  "commands": [
+    {
+      "name": "preflight",
+      "argv": ["python", "scripts/project_preflight.py", "--release"]
+    },
+    {
+      "name": "delivery-readiness",
+      "argv": ["python", "scripts/check_delivery_readiness.py", "--release", "docs/70_delivery/<release-name>/release-readiness.md"]
+    },
+    {
+      "name": "acceptance-matrix",
+      "argv": ["python", "scripts/check_acceptance_matrix.py", "--release", "docs/70_delivery/<release-name>/acceptance-matrix.md"]
+    }
+  ]
+}

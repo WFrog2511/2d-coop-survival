@@ -1,0 +1,4 @@
+interface:
+  display_name: "納品受け入れ管理"
+  short_description: "受け入れマトリクスの更新と納品判定の検査を安全に進める"
+  default_prompt: "Use $manage-delivery-acceptance to update the acceptance matrix and verify delivery readiness."

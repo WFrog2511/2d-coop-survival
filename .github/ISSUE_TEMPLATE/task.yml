@@ -1,0 +1,24 @@
+name: タスク
+description: 実装、調査、文書化などの作業を起票する。
+title: "task: "
+labels: ["type:task"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: 目的
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 対象範囲と対象外
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 受け入れ条件
+      placeholder: "- [ ] 条件"
+    validations:
+      required: true
