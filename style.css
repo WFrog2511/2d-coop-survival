@@ -24,6 +24,11 @@ h1 {
   height: auto;
 }
 
+[data-testid='feedback'] {
+  min-height: 1.5em;
+  color: #ffef76;
+}
+
 [data-testid='defeat'] {
   margin-top: 12px;
   padding: 16px;

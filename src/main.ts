@@ -1,62 +1,87 @@
 import Phaser from 'phaser';
 import {
+  WEAPONS,
   damageEnemy,
   damagePlayer,
   isEnemyDefeated,
+  respawnEnemy,
   retryCombat,
+  selectWeapon,
   type CombatState,
+  type EnemyId,
+  type WeaponId,
 } from './rules';
 
-const ARENA_WIDTH = 800;
-const ARENA_HEIGHT = 500;
-const PLAYER_X = 400;
-const PLAYER_Y = 250;
-const ENEMY_X = 90;
-const ENEMY_Y = 90;
-const PLAYER_SPEED = 210;
-const ENEMY_SPEED = 115;
-const BULLET_SPEED = 520;
-const CONTACT_DAMAGE = 20;
-const CONTACT_COOLDOWN_MS = 900;
-const ENEMY_RESPAWN_MS = 700;
+const WIDTH = 800;
+const HEIGHT = 500;
+const PLAYER_POSITION = { x: 400, y: 250 };
+const ENEMY_IDS: EnemyId[] = ['basic', 'drone'];
+const ENEMIES = {
+  basic: {
+    x: 90,
+    y: 90,
+    texture: 'basic',
+    speed: 115,
+    damage: 20,
+    cooldown: 900,
+    respawn: 700,
+  },
+  drone: {
+    x: 710,
+    y: 80,
+    texture: 'drone',
+    speed: 170,
+    damage: 10,
+    cooldown: 700,
+    respawn: 500,
+  },
+};
 
-function requireElement<ElementType extends Element>(selector: string): ElementType {
-  const element = document.querySelector<ElementType>(selector);
-  if (!element) {
-    throw new Error(`必要なHUD要素が見つかりません: ${selector}`);
-  }
-
-  return element;
-}
-
-const playerHp = requireElement<HTMLOutputElement>('[data-testid="hp"]');
-const enemyHp = requireElement<HTMLOutputElement>('[data-testid="enemy-hp"]');
-const fps = requireElement<HTMLOutputElement>('[data-testid="fps"]');
-const defeat = requireElement<HTMLElement>('[data-testid="defeat"]');
-const retry = requireElement<HTMLButtonElement>('[data-testid="retry"]');
-
-type Controls = {
+type Controls = Phaser.Types.Input.Keyboard.CursorKeys & {
   w: Phaser.Input.Keyboard.Key;
   a: Phaser.Input.Keyboard.Key;
   s: Phaser.Input.Keyboard.Key;
   d: Phaser.Input.Keyboard.Key;
-  up: Phaser.Input.Keyboard.Key;
-  down: Phaser.Input.Keyboard.Key;
-  left: Phaser.Input.Keyboard.Key;
-  right: Phaser.Input.Keyboard.Key;
 };
 
+type BulletMeta = {
+  weapon: WeaponId;
+  damage: number;
+  range: number;
+  knockback: number;
+  startX: number;
+  startY: number;
+  directionX: number;
+  directionY: number;
+};
+
+function element<ElementType extends Element>(selector: string): ElementType {
+  const found = document.querySelector<ElementType>(selector);
+  if (!found) throw new Error(`必要なHUD要素が見つかりません: ${selector}`);
+  return found;
+}
+
+const playerHp = element<HTMLOutputElement>('[data-testid="hp"]');
+const basicHp = element<HTMLOutputElement>('[data-testid="enemy-hp"]');
+const droneHp = element<HTMLOutputElement>('[data-testid="drone-hp"]');
+const weaponHud = element<HTMLOutputElement>('[data-testid="weapon"]');
+const fps = element<HTMLOutputElement>('[data-testid="fps"]');
+const feedback = element<HTMLElement>('[data-testid="feedback"]');
+const defeat = element<HTMLElement>('[data-testid="defeat"]');
+const retry = element<HTMLButtonElement>('[data-testid="retry"]');
 let resetArena: (() => void) | undefined;
 
 class Arena extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Sprite;
-  private enemy!: Phaser.Physics.Arcade.Sprite;
+  private enemies!: Record<EnemyId, Phaser.Physics.Arcade.Sprite>;
   private bullets!: Phaser.Physics.Arcade.Group;
   private keys!: Controls;
-
   private state: CombatState = retryCombat();
-  private lastContactAt = 0;
-  private enemyRespawn?: Phaser.Time.TimerEvent;
+  private bulletMeta = new Map<Phaser.Physics.Arcade.Sprite, BulletMeta>();
+  private contactAt: Record<EnemyId, number> = { basic: 0, drone: 0 };
+  private knockbackUntil: Record<EnemyId, number> = { basic: 0, drone: 0 };
+  private respawns = new Map<EnemyId, Phaser.Time.TimerEvent>();
+  private feedbackTimers = new Map<EnemyId, Phaser.Time.TimerEvent>();
 
   constructor() {
     super('arena');
@@ -65,20 +90,20 @@ class Arena extends Phaser.Scene {
   create(): void {
     resetArena = () => this.reset();
     this.add
-      .rectangle(ARENA_WIDTH / 2, ARENA_HEIGHT / 2, ARENA_WIDTH, ARENA_HEIGHT, 0x16243b)
+      .rectangle(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT, 0x16243b)
       .setStrokeStyle(4, 0x7ee7ff);
     this.createTextures();
-    this.physics.world.setBounds(18, 18, ARENA_WIDTH - 36, ARENA_HEIGHT - 36);
-
+    this.physics.world.setBounds(18, 18, WIDTH - 36, HEIGHT - 36);
     this.player = this.physics.add
-      .sprite(PLAYER_X, PLAYER_Y, 'player')
+      .sprite(PLAYER_POSITION.x, PLAYER_POSITION.y, 'player')
       .setCollideWorldBounds(true);
-    this.enemy = this.physics.add
-      .sprite(ENEMY_X, ENEMY_Y, 'enemy')
-      .setCollideWorldBounds(true);
+    this.enemies = {
+      basic: this.createEnemy('basic'),
+      drone: this.createEnemy('drone'),
+    };
     this.bullets = this.physics.add.group({
       classType: Phaser.Physics.Arcade.Sprite,
-      maxSize: 24,
+      maxSize: 32,
     });
     this.keys = this.input.keyboard!.addKeys({
       w: 'W',
@@ -90,12 +115,21 @@ class Arena extends Phaser.Scene {
       left: 'LEFT',
       right: 'RIGHT',
     }) as Controls;
-
-    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      this.fire(pointer);
+    this.input.keyboard?.on('keydown-ONE', () => this.changeWeapon('rifle'));
+    this.input.keyboard?.on('keydown-TWO', () => this.changeWeapon('shotgun'));
+    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => this.fire(pointer));
+    ENEMY_IDS.forEach((enemyId) => {
+      this.physics.add.overlap(
+        this.bullets,
+        this.enemies[enemyId],
+        (first, second) => this.hitEnemy(first, second, enemyId),
+      );
+      this.physics.add.overlap(
+        this.player,
+        this.enemies[enemyId],
+        () => this.hitPlayer(enemyId),
+      );
     });
-    this.physics.add.overlap(this.bullets, this.enemy, this.onBulletEnemyHit, undefined, this);
-    this.physics.add.overlap(this.player, this.enemy, this.onPlayerEnemyContact, undefined, this);
     this.input.keyboard?.addCapture([
       'W',
       'A',
@@ -105,269 +139,282 @@ class Arena extends Phaser.Scene {
       'DOWN',
       'LEFT',
       'RIGHT',
+      'ONE',
+      'TWO',
     ]);
-    this.events.on('shutdown', () => {
-      this.input.keyboard?.removeCapture([
-        'W',
-        'A',
-        'S',
-        'D',
-        'UP',
-        'DOWN',
-        'LEFT',
-        'RIGHT',
-      ]);
-    });
     this.refreshHud();
   }
 
   update(): void {
     fps.value = String(Math.round(this.game.loop.actualFps));
-    if (this.state.defeated) {
-      return;
-    }
-
+    if (this.state.defeated) return;
     this.movePlayer();
-    this.moveEnemy();
+    ENEMY_IDS.forEach(enemyId => this.moveEnemy(enemyId));
     this.player.rotation = Phaser.Math.Angle.Between(
       this.player.x,
       this.player.y,
       this.input.activePointer.worldX,
       this.input.activePointer.worldY,
     );
-    this.disableOutOfBoundsBullets();
+    this.disableExpiredBullets();
   }
 
   reset(): void {
-    this.enemyRespawn?.remove(false);
-    this.enemyRespawn = undefined;
+    this.respawns.forEach(timer => timer.remove(false));
+    this.feedbackTimers.forEach(timer => timer.remove(false));
+    this.respawns.clear();
+    this.feedbackTimers.clear();
     this.physics.resume();
     this.state = retryCombat();
-    this.lastContactAt = 0;
+    this.contactAt = { basic: 0, drone: 0 };
+    this.knockbackUntil = { basic: 0, drone: 0 };
     this.disableAllBullets();
-    this.player.enableBody(true, PLAYER_X, PLAYER_Y, true, true).setVelocity(0, 0);
-    this.enemy.enableBody(true, ENEMY_X, ENEMY_Y, true, true).setVelocity(0, 0);
+    this.player.enableBody(true, PLAYER_POSITION.x, PLAYER_POSITION.y, true, true).setVelocity(0, 0);
+    ENEMY_IDS.forEach((enemyId) => {
+      const config = ENEMIES[enemyId];
+      this.enemies[enemyId]
+        .enableBody(true, config.x, config.y, true, true)
+        .setVelocity(0, 0)
+        .clearTint();
+    });
+    feedback.textContent = '-';
     defeat.hidden = true;
     this.refreshHud();
   }
 
+  private createEnemy(enemyId: EnemyId): Phaser.Physics.Arcade.Sprite {
+    const config = ENEMIES[enemyId];
+    return this.physics.add.sprite(config.x, config.y, config.texture).setCollideWorldBounds(true);
+  }
+
   private createTextures(): void {
-    this.createPlayerTexture();
-    this.createEnemyTexture();
-    this.createBulletTexture();
+    this.texture('player', 50, 38, (context) => {
+      context.fillStyle = '#55d6ff';
+      context.beginPath();
+      context.moveTo(48, 19);
+      context.lineTo(30, 3);
+      context.lineTo(8, 7);
+      context.lineTo(3, 19);
+      context.lineTo(8, 31);
+      context.lineTo(30, 35);
+      context.closePath();
+      context.fill();
+      context.fillStyle = '#c7f7ff';
+      context.fillRect(28, 14, 13, 10);
+    });
+    this.texture('basic', 46, 46, (context) => {
+      context.fillStyle = '#431f36';
+      context.fillRect(5, 32, 9, 11);
+      context.fillRect(32, 32, 9, 11);
+      context.fillStyle = '#9f3656';
+      context.beginPath();
+      context.moveTo(23, 2);
+      context.lineTo(43, 16);
+      context.lineTo(36, 37);
+      context.lineTo(10, 37);
+      context.lineTo(3, 16);
+      context.closePath();
+      context.fill();
+      context.fillStyle = '#ff7b7b';
+      context.beginPath();
+      context.arc(23, 21, 7, 0, Math.PI * 2);
+      context.fill();
+    });
+    this.texture('drone', 36, 28, (context) => {
+      context.fillStyle = '#6d4cff';
+      context.beginPath();
+      context.moveTo(18, 1);
+      context.lineTo(35, 14);
+      context.lineTo(18, 27);
+      context.lineTo(1, 14);
+      context.closePath();
+      context.fill();
+      context.fillStyle = '#d7c7ff';
+      context.fillRect(13, 10, 10, 8);
+    });
+    this.texture('bullet-rifle', 10, 10, (context) => {
+      context.fillStyle = '#55d6ff';
+      context.fillRect(1, 1, 8, 8);
+    });
+    this.texture('bullet-shotgun', 8, 8, (context) => {
+      context.fillStyle = '#ffef76';
+      context.beginPath();
+      context.arc(4, 4, 3, 0, Math.PI * 2);
+      context.fill();
+    });
   }
 
-  private createPlayerTexture(): void {
-    const texture = this.textures.createCanvas('player', 50, 38);
-    if (!texture) {
-      return;
-    }
-
-    const { context } = texture;
-    context.fillStyle = '#55d6ff';
-    context.beginPath();
-    context.moveTo(48, 19);
-    context.lineTo(30, 3);
-    context.lineTo(8, 7);
-    context.lineTo(3, 19);
-    context.lineTo(8, 31);
-    context.lineTo(30, 35);
-    context.closePath();
-    context.fill();
-    context.fillStyle = '#c7f7ff';
-    context.fillRect(28, 14, 13, 10);
+  private texture(key: string, width: number, height: number, draw: (context: CanvasRenderingContext2D) => void): void {
+    const texture = this.textures.createCanvas(key, width, height);
+    if (!texture) return;
+    draw(texture.context);
     texture.refresh();
   }
 
-  private createEnemyTexture(): void {
-    const texture = this.textures.createCanvas('enemy', 46, 46);
-    if (!texture) {
-      return;
-    }
-
-    const { context } = texture;
-    context.fillStyle = '#431f36';
-    context.fillRect(5, 32, 9, 11);
-    context.fillRect(32, 32, 9, 11);
-    context.fillStyle = '#9f3656';
-    context.beginPath();
-    context.moveTo(23, 2);
-    context.lineTo(43, 16);
-    context.lineTo(36, 37);
-    context.lineTo(10, 37);
-    context.lineTo(3, 16);
-    context.closePath();
-    context.fill();
-    context.fillStyle = '#ff7b7b';
-    context.beginPath();
-    context.arc(23, 21, 7, 0, Math.PI * 2);
-    context.fill();
-    texture.refresh();
-  }
-
-  private createBulletTexture(): void {
-    const texture = this.textures.createCanvas('bullet', 12, 12);
-    if (!texture) {
-      return;
-    }
-
-    const { context } = texture;
-    context.fillStyle = '#ffef76';
-    context.beginPath();
-    context.arc(6, 6, 5, 0, Math.PI * 2);
-    context.fill();
-    texture.refresh();
+  private changeWeapon(weapon: WeaponId): void {
+    if (this.state.defeated) return;
+    this.state = selectWeapon(this.state, weapon);
+    feedback.textContent = `武器: ${WEAPONS[weapon].label}`;
+    this.refreshHud();
   }
 
   private movePlayer(): void {
-    const x
-      = Number(this.keys.d.isDown || this.keys.right.isDown)
-        - Number(this.keys.a.isDown || this.keys.left.isDown);
-    const y
-      = Number(this.keys.s.isDown || this.keys.down.isDown)
-        - Number(this.keys.w.isDown || this.keys.up.isDown);
+    const x = Number(this.keys.d.isDown || this.keys.right.isDown) - Number(this.keys.a.isDown || this.keys.left.isDown);
+    const y = Number(this.keys.s.isDown || this.keys.down.isDown) - Number(this.keys.w.isDown || this.keys.up.isDown);
     const length = Math.hypot(x, y) || 1;
-    this.player.setVelocity((x / length) * PLAYER_SPEED, (y / length) * PLAYER_SPEED);
+    this.player.setVelocity((x / length) * 210, (y / length) * 210);
   }
 
-  private moveEnemy(): void {
-    if (!this.enemy.active) {
-      return;
-    }
-
-    const x = this.player.x - this.enemy.x;
-    const y = this.player.y - this.enemy.y;
+  private moveEnemy(enemyId: EnemyId): void {
+    const enemy = this.enemies[enemyId];
+    if (!enemy.active || this.time.now < this.knockbackUntil[enemyId]) return;
+    const x = this.player.x - enemy.x;
+    const y = this.player.y - enemy.y;
     const length = Math.hypot(x, y) || 1;
-    this.enemy.setVelocity((x / length) * ENEMY_SPEED, (y / length) * ENEMY_SPEED);
+    enemy.setVelocity((x / length) * ENEMIES[enemyId].speed, (y / length) * ENEMIES[enemyId].speed);
   }
 
   private fire(pointer: Phaser.Input.Pointer): void {
-    if (this.state.defeated) {
-      return;
-    }
-
-    const bullet = this.bullets.get(this.player.x, this.player.y, 'bullet') as
-      | Phaser.Physics.Arcade.Sprite
-      | null;
-    if (!bullet) {
-      return;
-    }
-
-    const angle = Phaser.Math.Angle.Between(
+    if (this.state.defeated) return;
+    const weapon = WEAPONS[this.state.weapon];
+    const baseAngle = Phaser.Math.Angle.Between(
       this.player.x,
       this.player.y,
       pointer.worldX,
       pointer.worldY,
     );
-    bullet.enableBody(true, this.player.x, this.player.y, true, true);
-    bullet.setVelocity(Math.cos(angle) * BULLET_SPEED, Math.sin(angle) * BULLET_SPEED);
+    for (let index = 0; index < weapon.pellets; index += 1) {
+      const bullet = this.bullets.get(
+        this.player.x,
+        this.player.y,
+        'bullet-' + this.state.weapon,
+      ) as Phaser.Physics.Arcade.Sprite | null;
+      if (!bullet) continue;
+      const ratio = weapon.pellets === 1 ? 0 : index / (weapon.pellets - 1) - 0.5;
+      const angle = baseAngle + ratio * weapon.spread * 2;
+      bullet.enableBody(true, this.player.x, this.player.y, true, true);
+      bullet.setTexture(`bullet-${this.state.weapon}`);
+      bullet.setVelocity(Math.cos(angle) * weapon.speed, Math.sin(angle) * weapon.speed);
+      this.bulletMeta.set(bullet, {
+        weapon: this.state.weapon,
+        damage: weapon.damage,
+        range: weapon.range,
+        knockback: weapon.knockback,
+        startX: this.player.x,
+        startY: this.player.y,
+        directionX: Math.cos(angle),
+        directionY: Math.sin(angle),
+      });
+    }
   }
 
-  private onBulletEnemyHit = (
-    bulletObject: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Physics.Arcade.Body | Phaser.Physics.Arcade.StaticBody | Phaser.Tilemaps.Tile,
-    enemyObject: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Physics.Arcade.Body | Phaser.Physics.Arcade.StaticBody | Phaser.Tilemaps.Tile,
-  ): void => {
-    const first = bulletObject as Phaser.Physics.Arcade.Sprite;
-    const second = enemyObject as Phaser.Physics.Arcade.Sprite;
-    const bullet = first.texture.key === 'bullet' ? first : second;
+  private hitEnemy(
+    firstObject: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Physics.Arcade.Body | Phaser.Physics.Arcade.StaticBody | Phaser.Tilemaps.Tile,
+    secondObject: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Physics.Arcade.Body | Phaser.Physics.Arcade.StaticBody | Phaser.Tilemaps.Tile,
+    enemyId: EnemyId,
+  ): void {
+    const first = firstObject as Phaser.Physics.Arcade.Sprite;
+    const second = secondObject as Phaser.Physics.Arcade.Sprite;
+    const bullet = this.bulletMeta.has(first) ? first : second;
     const enemy = bullet === first ? second : first;
+    const meta = this.bulletMeta.get(bullet);
     if (
-      this.state.defeated
-      || bullet.texture.key !== 'bullet'
-      || enemy !== this.enemy
-      || !bullet.active
+      !meta
+      || enemy !== this.enemies[enemyId]
       || !enemy.active
+      || this.state.defeated
     ) {
       return;
     }
-
-    bullet.disableBody(true, true);
-    this.state = damageEnemy(this.state, 1);
+    this.disableBullet(bullet);
+    this.state = damageEnemy(this.state, enemyId, meta.damage);
+    this.showHit(enemy, enemyId, meta);
     this.refreshHud();
-    if (!isEnemyDefeated(this.state)) {
-      return;
-    }
-
+    if (!isEnemyDefeated(this.state, enemyId)) return;
     enemy.disableBody(true, true);
-    this.enemyRespawn = this.time.delayedCall(ENEMY_RESPAWN_MS, () => {
-      if (this.state.defeated) {
-        return;
-      }
-
-      this.state = {
-        ...this.state,
-        enemyHp: retryCombat().enemyHp,
-      };
-      this.enemy.enableBody(true, ENEMY_X, ENEMY_Y, true, true).setVelocity(0, 0);
+    const timer = this.time.delayedCall(ENEMIES[enemyId].respawn, () => {
+      if (this.state.defeated) return;
+      this.state = respawnEnemy(this.state, enemyId);
+      const config = ENEMIES[enemyId];
+      this.enemies[enemyId]
+        .enableBody(true, config.x, config.y, true, true)
+        .setVelocity(0, 0);
       this.refreshHud();
     });
-  };
+    this.respawns.set(enemyId, timer);
+  }
 
-  private onPlayerEnemyContact = (): void => {
-    if (this.state.defeated || this.time.now - this.lastContactAt < CONTACT_COOLDOWN_MS) {
+  private showHit(enemy: Phaser.Physics.Arcade.Sprite, enemyId: EnemyId, meta: BulletMeta): void {
+    feedback.textContent = `命中: ${WEAPONS[meta.weapon].label} → ${enemyId === 'basic' ? '基本敵' : '高速ドローン'}`;
+    this.feedbackTimers.get(enemyId)?.remove(false);
+    enemy.setTint(0xffffff);
+    const timer = this.time.delayedCall(90, () => {
+      enemy.clearTint();
+      this.feedbackTimers.delete(enemyId);
+    });
+    this.feedbackTimers.set(enemyId, timer);
+    if (meta.knockback === 0) return;
+    enemy.setVelocity(
+      meta.directionX * meta.knockback,
+      meta.directionY * meta.knockback,
+    );
+    this.knockbackUntil[enemyId] = this.time.now + 180;
+  }
+
+  private hitPlayer(enemyId: EnemyId): void {
+    if (
+      this.state.defeated
+      || this.time.now - this.contactAt[enemyId] < ENEMIES[enemyId].cooldown
+    ) {
       return;
     }
-
-    this.lastContactAt = this.time.now;
-    this.state = damagePlayer(this.state, CONTACT_DAMAGE);
+    this.contactAt[enemyId] = this.time.now;
+    this.state = damagePlayer(this.state, ENEMIES[enemyId].damage);
     this.refreshHud();
-    if (!this.state.defeated) {
-      return;
-    }
-
+    if (!this.state.defeated) return;
     this.player.setVelocity(0, 0);
-    this.enemy.setVelocity(0, 0);
+    ENEMY_IDS.forEach(id => this.enemies[id].setVelocity(0, 0));
     this.disableAllBullets();
     this.physics.pause();
     defeat.hidden = false;
     retry.focus();
-  };
+  }
 
-  private disableOutOfBoundsBullets(): void {
+  private disableExpiredBullets(): void {
     const bounds = this.physics.world.bounds;
     this.bullets.getChildren().forEach((child) => {
       const bullet = child as Phaser.Physics.Arcade.Sprite;
-      if (bullet.active && !Phaser.Geom.Rectangle.Contains(bounds, bullet.x, bullet.y)) {
-        bullet.disableBody(true, true);
+      const meta = this.bulletMeta.get(bullet);
+      const exceededRange = meta
+        && Phaser.Math.Distance.Between(meta.startX, meta.startY, bullet.x, bullet.y) > meta.range;
+      if (
+        bullet.active
+        && (!Phaser.Geom.Rectangle.Contains(bounds, bullet.x, bullet.y) || exceededRange)
+      ) {
+        this.disableBullet(bullet);
       }
     });
   }
 
+  private disableBullet(bullet: Phaser.Physics.Arcade.Sprite): void {
+    this.bulletMeta.delete(bullet);
+    bullet.setVelocity(0, 0).disableBody(true, true);
+  }
+
   private disableAllBullets(): void {
-    this.bullets.getChildren().forEach((child) => {
-      const bullet = child as Phaser.Physics.Arcade.Sprite;
-      bullet.setVelocity(0, 0).disableBody(true, true);
-    });
+    this.bullets.getChildren().forEach(child => this.disableBullet(child as Phaser.Physics.Arcade.Sprite));
   }
 
   private refreshHud(): void {
     playerHp.value = String(this.state.playerHp);
-    enemyHp.value = String(this.state.enemyHp);
+    basicHp.value = String(this.state.enemies.basic.hp);
+    droneHp.value = String(this.state.enemies.drone.hp);
+    weaponHud.value = WEAPONS[this.state.weapon].label;
   }
 }
 
-const game = new Phaser.Game({
-  type: Phaser.AUTO,
-  parent: 'game',
-  width: ARENA_WIDTH,
-  height: ARENA_HEIGHT,
-  backgroundColor: '#101827',
-  physics: {
-    default: 'arcade',
-    arcade: { debug: false },
-  },
-  scene: Arena,
-});
-
-retry.addEventListener('click', () => {
-  resetArena?.();
-});
-
+new Phaser.Game({ type: Phaser.AUTO, parent: 'game', width: WIDTH, height: HEIGHT, backgroundColor: '#101827', physics: { default: 'arcade', arcade: { debug: false } }, scene: Arena });
+retry.addEventListener('click', () => resetArena?.());
 window.addEventListener('keydown', (event) => {
-  const keys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'w', 'a', 's', 'd'];
-  if (keys.includes(event.key) || keys.includes(event.key.toLowerCase())) {
-    event.preventDefault();
-  }
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'w', 'a', 's', 'd', '1', '2'].includes(event.key.toLowerCase()) || ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) event.preventDefault();
 });
-
-void game;

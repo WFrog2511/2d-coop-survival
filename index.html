@@ -3,19 +3,22 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>メカサバイバル prototype-v0</title>
+    <title>メカサバイバル combat-choice-v1</title>
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
     <main>
       <header>
         <h1>メカサバイバル</h1>
-        <p>移動: WASD / 矢印　照準・射撃: マウス左クリック</p>
+        <p>移動: WASD / 矢印　武器: 1 ライフル / 2 ショットガン　照準・射撃: マウス左クリック</p>
         <p data-testid="hud">
+          武器: <output data-testid="weapon">アサルトライフル</output>
           プレイヤーHP: <output data-testid="hp">100</output>
-          敵HP: <output data-testid="enemy-hp">3</output>
+          基本敵HP: <output data-testid="enemy-hp">3</output>
+          ドローンHP: <output data-testid="drone-hp">2</output>
           FPS: <output data-testid="fps">0</output>
         </p>
+        <p data-testid="feedback" aria-live="polite">-</p>
       </header>
       <div id="game" aria-label="戦闘アリーナ"></div>
       <section data-testid="defeat" hidden aria-live="assertive">
