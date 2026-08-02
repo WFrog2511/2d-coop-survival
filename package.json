@@ -1,6 +1,7 @@
 {
   "name": "2d-coop-survival",
   "private": true,
+  "type": "module",
   "version": "0.0.0",
   "packageManager": "pnpm@10.33.2",
   "engines": {
@@ -8,18 +9,29 @@
     "pnpm": "10.33.2"
   },
   "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix --max-warnings 0",
     "format": "eslint . --fix --fix-type layout --max-warnings 0",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.ts",
+    "test:e2e": "playwright test",
     "test:quality": "node tools/quality/japanese-comment-rule.test.mjs",
-    "check": "pnpm lint && pnpm typecheck && pnpm test:quality"
+    "check": "pnpm lint && pnpm typecheck && pnpm test:quality && pnpm test"
+  },
+  "dependencies": {
+    "phaser": "4.2.1"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.62.1",
     "@stylistic/eslint-plugin": "5.10.0",
     "eslint": "10.8.0",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.65.0"
+    "typescript-eslint": "8.65.0",
+    "vite": "8.2.0",
+    "vitest": "4.1.10"
   }
 }
