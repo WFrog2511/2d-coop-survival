@@ -1,6 +1,6 @@
-# LOCAL-003: 公開リポジトリのライセンスを決める
+# GitHub Issue #2: 公開リポジトリのライセンスを決める
 
-> GitHub repository未作成のための一時decision。GitHub接続後に`type:decision` Issueへ移行する。
+> [GitHub Issue #2](https://github.com/WFrog2511/2d-coop-survival/issues/2)へ移行済み。この文書はオフライン作業時の決定記録として保持する。
 
 ## 状態
 
@@ -37,7 +37,6 @@
 - ルートMIT本文、Ponytail同梱MIT、Third-Party Noticesの参照を確認した。
 - リポジトリ内の秘密鍵、代表的なtoken、固定credential形式の簡易パターン検査は該当なし。
 - package lockfileとゲーム素材はまだ存在しないため、導入時と公開build前の再監査を必須とする。
-## GitHub移行時
+## GitHub移行結果
 
-- GitHub Issue URL: 未移行
-- 調査時点、選定理由、第三者通知、素材境界を`type:decision` Issueへ移す。
+- GitHub Issue: [#2](https://github.com/WFrog2511/2d-coop-survival/issues/2)（completed）
