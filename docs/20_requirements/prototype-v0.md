@@ -1,7 +1,7 @@
 ---
 id: REQ-PROTOTYPE-LOOP
 status: agreed
-definition_of_delivery: ../01_project-journal/local-issues/2026-08-02_definition-of-delivery.md
+definition_of_delivery: https://github.com/WFrog2511/2d-coop-survival/issues/4
 approved_on: 2026-08-02
 ---
 

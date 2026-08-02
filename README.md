@@ -2,7 +2,7 @@
 
 ブラウザから1〜4人で参加し、視界と情報を共有しながら暴走機械群に対処して全員生還を目指す、見下ろし型2D協力サバイバルゲームです。
 
-現在は開発環境の初期化段階です。企画内容は [docs/企画書.md](docs/企画書.md) にありますが、まだ合意済み要件やDefinition of Deliveryではありません。プロダクト用の`package.json`、依存パッケージ、実装コードは、最初のDelivery範囲を人間確認してから追加します。
+開発環境の初期化とGitHub正本の準備が完了し、最初の縦切りプロトタイプのDefinition of Deliveryは [Issue #4](https://github.com/WFrog2511/2d-coop-survival/issues/4) で合意済みです。[docs/企画書.md](docs/企画書.md) は企画全体の入力であり、合意済み範囲は [prototype-v0要件](docs/20_requirements/prototype-v0.md) を参照します。プロダクト用の`package.json`、依存パッケージ、実装コードは、この範囲に限定して追加します。
 
 ## 正本と入口
 
@@ -13,9 +13,9 @@
 | [docs/README.md](docs/README.md) | 正本ドキュメントの配置案内 |
 | [docs/20_requirements/](docs/20_requirements/README.md) | 人間確認後の要件・受け入れ条件 |
 | [docs/30_specs/](docs/30_specs/README.md) | 実装とテストが参照する検証可能な仕様 |
-| [docs/01_project-journal/local-issues/](docs/01_project-journal/local-issues/README.md) | GitHub未接続中だけ使う一時Issue |
+| [docs/01_project-journal/local-issues/](docs/01_project-journal/local-issues/README.md) | GitHubを使えない単独作業時の一時Issueと移行履歴 |
 
-GitHub接続後はtask、decision、question、customer-review、承認、PRをGitHub Issue/PRで管理します。ローカルIssueは移行後にGitHubへのリンクへ置き換えます。
+task、decision、question、customer-review、承認、PRの正本は [GitHub Issues](https://github.com/WFrog2511/2d-coop-survival/issues) とPRです。ローカルIssueはGitHubを使えない単独作業時だけ利用し、復帰後に移行します。
 
 ## 予定する技術構成
 
@@ -67,11 +67,12 @@ Codexが自動検出できるよう、Skillsは [.agents/skills/](.agents/skills
 
 ## 実装開始までのゲート
 
-1. [Definition of Deliveryの一時decision](docs/01_project-journal/local-issues/2026-08-02_definition-of-delivery.md)を人間確認する。
-2. 初回コミットの対象と除外を確認し、`main`の基準commitを作る。
-3. `develop`を作り、以後は`feature/<topic>`から`develop`へPRを出す。
-4. GitHub remoteを接続し、ラベルと最初のdecision/task Issueを作る。
-5. 承認済み範囲に限ってpnpm workspaceと最初の縦切りを実装する。
+- [x] [Definition of Delivery Issue #4](https://github.com/WFrog2511/2d-coop-survival/issues/4)を人間確認する。
+- [x] 初回コミットの対象と除外を確認し、`main`の基準commitを作る。
+- [x] `develop`を作り、以後は`feature/<topic>`から`develop`へPRを出す。
+- [x] GitHub remoteを接続し、必須ラベルとIssue #1〜#4を作る。
+- [ ] [Issue #5](https://github.com/WFrog2511/2d-coop-survival/issues/5)の文書参照移行を`develop`へ取り込む。
+- [ ] 承認済みの[prototype-v0要件](docs/20_requirements/prototype-v0.md)に限ってpnpm workspaceと最初の縦切りを実装する。
 
 段階1〜4の詳細と初期リリース判定基準は [企画書の開発段階](docs/企画書.md#26-開発段階) を参照してください。
 

@@ -1,6 +1,6 @@
-# LOCAL-004: prototype-v0のプレイ結果を確認する
+# GitHub Issue #3: prototype-v0のプレイ結果を確認する
 
-> GitHub repository未作成のための一時customer-review。実装後、GitHubの`type:customer-review` Issueへ移行して回答を正本化する。
+> [GitHub Issue #3](https://github.com/WFrog2511/2d-coop-survival/issues/3)へ移行済み。今後の回答と反映先はGitHub Issueを正本とする。
 
 ## 状態
 
@@ -25,7 +25,7 @@
 - Chromeでの手動プレイ結果とfps計測
 - 既知の制約と段階1への残件
 
-## GitHub移行時
+## GitHub移行結果
 
-- GitHub Issue URL: 未移行
-- 一つの確認事項として`type:customer-review`を付け、回答と反映先をコメントへ残す。
+- GitHub Issue: [#3](https://github.com/WFrog2511/2d-coop-survival/issues/3)（実装待ち）
+- 回答と反映先はIssueコメントへ記録し、反映確認後に閉じる。
