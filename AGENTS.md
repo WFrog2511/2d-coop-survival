@@ -154,3 +154,9 @@ main -> develop -> feature/<topic>
 - 複数プロジェクトで使えるKnowledgeだけを候補化し、人間確認後にLLM-Wikiへ取り込む。
 - LLM-Wikiには秘密情報、生ログ、プロダクト固有情報、未検証の主張をコピーしない。
 - `docs/` を変更した場合は `python scripts/check_markdown_links.py docs` を実行する。
+
+## TypeScript品質ゲート
+
+- 人間向けのTypeScriptコメントとJSDocには日本語を1文字以上含める。ESLint、TypeScript、triple-slash、coverage、formatter、shebang、generatedのdirectiveは検査対象外とする。
+- TypeScript品質変更では`pnpm lint`、`pnpm typecheck`、`pnpm check`を実行する。`pnpm lint:fix`は安全なlint修正、`pnpm format`はESLintのlayout修正だけを行う。
+- Solが計画・レビューし、Terraが実装する。writerは常に1 Agentとし、Agentの結果は人間承認の代替にしない。

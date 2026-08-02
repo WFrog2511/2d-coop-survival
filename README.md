@@ -48,9 +48,24 @@ git config core.hooksPath .githooks
 ```powershell
 python -X utf8 -m pytest
 python -X utf8 scripts/check_japanese_comments.py .
-python -X utf8 scripts/check_markdown_links.py .
+python -X utf8 scripts/check_markdown_links.py docs
 python -X utf8 scripts/docgen.py --check "docs/40_design/detail/**/*.md"
 ```
+
+## TypeScript品質ゲート
+
+品質ツールはNode 22系とpnpm 10.33.2を使う。TypeScript品質関連を変更する前に、lockfileどおりの開発依存を導入する。
+
+```powershell
+pnpm install --frozen-lockfile
+pnpm lint
+pnpm lint:fix
+pnpm format
+pnpm typecheck
+pnpm check
+```
+
+`pnpm lint`はlint違反と未整形を拒否する。`pnpm lint:fix`は安全なESLint修正を適用し、`pnpm format`はlayout修正だけを適用する。既存のpre-commit hookは、ステージ済みファイルがTypeScript、JavaScript、ESLint設定、package manifest、lockfile、TypeScript設定、hook自身に該当するときだけ`pnpm check`を実行し、作業ファイルを変更しない。人間向けのTypeScriptコメントとJSDocには日本語を1文字以上含める。ESLint、TypeScript、triple-slash、coverage、formatter、shebang、generatedのdirectiveはこの規約の対象外とする。
 
 ## Repository Skills
 
