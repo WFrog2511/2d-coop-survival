@@ -1,0 +1,38 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+  background: #101827;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 840px;
+  margin: auto;
+  padding: 16px;
+}
+
+h1 {
+  color: #7ee7ff;
+}
+
+#game canvas {
+  border-radius: 12px;
+  max-width: 100%;
+  height: auto;
+}
+
+[data-testid='defeat'] {
+  margin-top: 12px;
+  padding: 16px;
+  border: 2px solid #ff7b7b;
+  border-radius: 12px;
+  background: #341a28;
+}
+
+button {
+  padding: 10px 18px;
+  font: inherit;
+}

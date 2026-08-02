@@ -10,6 +10,8 @@ tests/**/*.py text eol=lf
 *.tsx text eol=lf
 *.mts text eol=lf
 *.cts text eol=lf
+*.html text eol=lf
+*.css text eol=lf
 
 eslint.config.mjs text eol=lf
 package.json text eol=lf
