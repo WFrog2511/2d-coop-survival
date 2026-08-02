@@ -16,3 +16,15 @@ This repository includes a locally adapted core Skill derived from Ponytail.
 ## Future dependencies and assets
 
 No product package lockfile or game assets exist yet. When dependencies or assets are added, record their source, version or revision, license, attribution requirements, modifications, and redistribution notices before public distribution. The root MIT License does not replace those terms.
+
+## TypeScript quality tooling
+
+The following direct development dependencies are recorded in `pnpm-lock.yaml`. They are not relicensed by the root MIT License.
+
+| Package | Recorded version | License |
+| --- | --- | --- |
+| `@eslint/js` | 10.0.1 | MIT |
+| `@stylistic/eslint-plugin` | 5.10.0 | MIT |
+| `eslint` | 10.8.0 | MIT |
+| `typescript` | 6.0.3 | Apache-2.0 |
+| `typescript-eslint` | 8.65.0 | MIT |
