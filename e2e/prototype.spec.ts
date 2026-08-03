@@ -13,6 +13,8 @@ test('自動射撃、ショットガンの発射待ち、リロード、再挑�
   await expect(page.getByTestId('ammo')).toHaveText('20/20');
   await expect(page.getByTestId('reload')).toHaveText('待機');
   await expect(page.getByTestId('hp')).toHaveText('100');
+  await expect(page.getByTestId('map-seed')).not.toHaveText('0');
+  await expect(page.getByTestId('player-tile')).toHaveText(/\d+,\d+/);
   await expect(page.getByTestId('basic-1-hp')).toHaveText('6');
   await expect(page.getByTestId('basic-2-hp')).toHaveText('6');
   await expect(page.getByTestId('basic-3-hp')).toHaveText('6');
@@ -20,6 +22,12 @@ test('自動射撃、ショットガンの発射待ち、リロード、再挑�
   await expect(page.getByTestId('affinity')).toContainText('小口径弾 50% / 散弾 100%');
   const bounds = await page.locator('#game canvas').boundingBox();
   if (!bounds) throw new Error('戦闘アリーナのcanvasが見つかりません。');
+
+  const initialTile = await page.getByTestId('player-tile').textContent();
+  await page.keyboard.down('d');
+  await page.waitForTimeout(350);
+  await page.keyboard.up('d');
+  await expect(page.getByTestId('player-tile')).not.toHaveText(initialTile ?? '');
 
   await page.mouse.move(bounds.x + (bounds.width * 90) / 800, bounds.y + (bounds.height * 90) / 500);
   await page.mouse.down();
@@ -40,7 +48,8 @@ test('自動射撃、ショットガンの発射待ち、リロード、再挑�
   await expect(page.getByTestId('reload')).toHaveText('待機', { timeout: 3_000 });
   await expect(page.getByTestId('ammo')).toHaveText('4/4');
 
-  await expect(page.getByTestId('defeat')).toBeVisible({ timeout: 30_000 });
+  const initialSeed = await page.getByTestId('map-seed').textContent();
+  await expect(page.getByTestId('defeat')).toBeVisible({ timeout: 45_000 });
   await page.getByTestId('retry').click();
   await expect(page.getByTestId('defeat')).toBeHidden();
   await expect(page.getByTestId('weapon')).toHaveText('アサルトライフル');
@@ -52,5 +61,6 @@ test('自動射撃、ショットガンの発射待ち、リロード、再挑�
   await expect(page.getByTestId('basic-3-hp')).toHaveText('6');
   await expect(page.getByTestId('drone-hp')).toHaveText('4');
   await expect(page.getByTestId('feedback')).toHaveText('-');
+  await expect(page.getByTestId('map-seed')).not.toHaveText(initialSeed ?? '');
   expect(errors).toEqual([]);
 });
