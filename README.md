@@ -1,8 +1,8 @@
 # 2D協力メカサバイバル
 
-ブラウザから1〜4人で参加し、視界と情報を共有しながら暴走機械群に対処して全員生還を目指す、見下ろし型2D協力サバイバルゲームです。現在は、1人用の最小戦闘ループを対象にしたprototype-v0を実装しています。
+ブラウザから1〜4人で参加し、視界と情報を共有しながら暴走機械群に対処して全員生還を目指す、見下ろし型2D協力サバイバルゲームです。現在は、二武器、3体の基本敵、1体の高速ドローン、簡易自動生成マップと追従カメラを対象にしたcombat-choice-v1を実装しています。
 
-合意済みの範囲は[Definition of Delivery Issue #4](https://github.com/WFrog2511/2d-coop-survival/issues/4)と[prototype-v0要件](docs/20_requirements/prototype-v0.md)を参照してください。[docs/企画書.md](docs/企画書.md)は企画入力であり、完了判断の正本ではありません。
+合意済みの範囲は[Definition of Delivery Issue #12](https://github.com/WFrog2511/2d-coop-survival/issues/12)と[combat-choice-v1要件](docs/20_requirements/combat-choice-v1.md)を参照してください。[docs/企画書.md](docs/企画書.md)は企画入力であり、完了判断の正本ではありません。
 
 ## 正本と入口
 
@@ -19,9 +19,9 @@ task、decision、question、customer-review、承認、PRの正本は[GitHub Is
 
 ## 技術構成
 
-prototype-v0で使用中の構成は、クライアントのTypeScript、Phaser、Vite、HTML、CSSと、Vitest・Playwrightによるテストです。Node.js 22系とpnpm 10.33.2を使用します。
+combat-choice-v1で使用中の構成は、クライアントのTypeScript、Phaser、Vite、HTML、CSSと、Vitest・Playwrightによるテストです。Node.js 22系とpnpm 10.33.2を使用します。
 
-サーバーのTypeScript/Node.js/Colyseus、pnpm workspace、Zod、共有型・ゲームデータ、Colyseus統合テストは将来候補であり、prototype-v0には含めません。導入時期と対応バージョンは、対象範囲を拡張するDefinition of Deliveryで決めます。
+サーバーのTypeScript/Node.js/Colyseus、pnpm workspace、Zod、共有型・ゲームデータ、Colyseus統合テストは将来候補であり、combat-choice-v1には含めません。導入時期と対応バージョンは、対象範囲を拡張するDefinition of Deliveryで決めます。
 
 ## 起動
 
@@ -43,8 +43,10 @@ Viteが表示するローカルURL（通常は`http://127.0.0.1:5173/`）をPC�
 ## 操作
 
 - 移動: WASD または矢印キー
+- 武器: 1 アサルトライフル（左ボタン長押しで自動射撃） / 2 ショットガン（1クリック1射）
 - 照準: マウス移動
-- 射撃: マウス左クリック
+- リロード: R（選択武器の残弾を補充。リロード中の射撃不可）
+- 高速ドローン耐性: 小口径弾は50%、散弾は100%のダメージ
 - 再挑戦: 敗北表示の「再挑戦」ボタン
 
 ## TypeScript品質ゲート
@@ -66,7 +68,41 @@ pnpm check
 
 `pnpm lint`はlint違反と未整形を拒否します。`pnpm lint:fix`は安全なlint修正を適用し、`pnpm format`はESLintのlayout修正だけを適用します。pre-commit hookは、ステージ済みファイルがTypeScript、JavaScript、ESLint設定、package manifest、lockfile、TypeScript設定、hook自身に該当するときだけ`pnpm check`を実行し、作業ファイルを変更しません。人間向けのTypeScriptコメントとJSDocには日本語を1文字以上含めます。ESLint、TypeScript、triple-slash、coverage、formatter、shebang、generatedのdirectiveは対象外です。
 
-`pnpm test:e2e`はPlaywright Chromiumを使います。Google Chrome最新版での操作とFPS実測は[GitHub Issue #3](https://github.com/WFrog2511/2d-coop-survival/issues/3)で人間確認します。
+`pnpm test:e2e`はPlaywright Chromiumを使います。Google Chrome最新版での武器操作は[GitHub Issue #14](https://github.com/WFrog2511/2d-coop-survival/issues/14)、高速ドローンによる撃破優先度は[GitHub Issue #15](https://github.com/WFrog2511/2d-coop-survival/issues/15)、自動生成マップでの移動と遮蔽物判断は[GitHub Issue #17](https://github.com/WFrog2511/2d-coop-survival/issues/17)で人間確認しました。
+
+### E2Eテストを画面で確認する
+
+初回だけPlaywright Chromiumをインストールします。
+
+```powershell
+pnpm exec playwright install chromium
+```
+
+通常のE2Eテストはブラウザを表示しないheadlessモードで実行します。
+
+```powershell
+pnpm test:e2e
+```
+
+実際のブラウザ操作を表示する場合はheadedモードを使います。現在の代表E2Eは、移動、ライフル自動射撃、ショットガンの連射制限、リロード、敗北、再挑戦、マップseed変更を順番に操作します。
+
+```powershell
+pnpm test:e2e --headed --workers=1
+```
+
+テストコード、実行ステップ、ブラウザ表示を一緒に確認する場合はUIモードを使います。Playwright画面で`prototype.spec.ts`の再生ボタンを押してください。
+
+```powershell
+pnpm test:e2e --ui
+```
+
+1ステップずつ停止しながら確認する場合はdebugモードを使います。
+
+```powershell
+pnpm test:e2e --debug
+```
+
+いずれのモードも`playwright.config.ts`がViteを`http://127.0.0.1:4173`で自動起動するため、別のターミナルで`pnpm dev`を起動する必要はありません。Node.jsまたはpnpmのバージョン警告が出る環境では、各コマンドの`pnpm`を`corepack pnpm`へ置き換えてください。Windowsで`pnpm exec playwright`が見つからない場合は、Chromium導入コマンドだけ`.\node_modules\.bin\playwright.cmd install chromium`を使用できます。
 
 ## Python・文書検査
 

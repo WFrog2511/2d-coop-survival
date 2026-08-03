@@ -1,32 +1,66 @@
 import { expect, test } from '@playwright/test';
 
-test('敵に敗北した後、再挑戦で両HPと通常状態が復元される', async ({ page }) => {
+async function currentAmmo(page: import('@playwright/test').Page): Promise<number> {
+  const text = await page.getByTestId('ammo').textContent();
+  return Number(text?.split('/')[0]);
+}
+
+test('自動射撃、ショットガンの発射待ち、リロード、再挑戦を確認できる', async ({ page }) => {
   const errors: string[] = [];
-  page.on('pageerror', (error) => {
-    errors.push(error.message);
-  });
-
+  page.on('pageerror', error => errors.push(error.message));
   await page.goto('/');
+  await expect(page.getByTestId('weapon')).toHaveText('アサルトライフル');
+  await expect(page.getByTestId('ammo')).toHaveText('20/20');
+  await expect(page.getByTestId('reload')).toHaveText('待機');
   await expect(page.getByTestId('hp')).toHaveText('100');
-  await expect(page.getByTestId('enemy-hp')).toHaveText('3');
-  await expect(page.getByTestId('defeat')).toBeHidden();
+  await expect(page.getByTestId('map-seed')).not.toHaveText('0');
+  await expect(page.getByTestId('player-tile')).toHaveText(/\d+,\d+/);
+  await expect(page.getByTestId('basic-1-hp')).toHaveText('6');
+  await expect(page.getByTestId('basic-2-hp')).toHaveText('6');
+  await expect(page.getByTestId('basic-3-hp')).toHaveText('6');
+  await expect(page.getByTestId('drone-hp')).toHaveText('4');
+  await expect(page.getByTestId('affinity')).toContainText('小口径弾 50% / 散弾 100%');
+  const bounds = await page.locator('#game canvas').boundingBox();
+  if (!bounds) throw new Error('戦闘アリーナのcanvasが見つかりません。');
 
-  const arena = page.locator('#game canvas');
-  const bounds = await arena.boundingBox();
-  if (!bounds) {
-    throw new Error('戦闘アリーナのcanvasが見つかりません。');
-  }
+  const initialTile = await page.getByTestId('player-tile').textContent();
+  await page.keyboard.down('d');
+  await page.waitForTimeout(350);
+  await page.keyboard.up('d');
+  await expect(page.getByTestId('player-tile')).not.toHaveText(initialTile ?? '');
 
-  const enemyX = bounds.x + (bounds.width * 90) / 800;
-  const enemyY = bounds.y + (bounds.height * 90) / 500;
-  await page.mouse.click(enemyX, enemyY);
-  await expect(page.getByTestId('enemy-hp')).toHaveText('2', { timeout: 3_000 });
+  await page.mouse.move(bounds.x + (bounds.width * 90) / 800, bounds.y + (bounds.height * 90) / 500);
+  await page.mouse.down();
+  await page.waitForTimeout(380);
+  await page.mouse.up();
+  expect(await currentAmmo(page)).toBeLessThanOrEqual(18);
 
-  await expect(page.getByTestId('defeat')).toBeVisible({ timeout: 15_000 });
+  await page.keyboard.press('2');
+  await expect(page.getByTestId('weapon')).toHaveText('ショットガン');
+  await expect(page.getByTestId('ammo')).toHaveText('4/4');
+  await page.mouse.click(bounds.x + (bounds.width * 90) / 800, bounds.y + (bounds.height * 90) / 500);
+  await page.mouse.click(bounds.x + (bounds.width * 90) / 800, bounds.y + (bounds.height * 90) / 500);
+  await page.mouse.click(bounds.x + (bounds.width * 90) / 800, bounds.y + (bounds.height * 90) / 500);
+  await expect(page.getByTestId('ammo')).toHaveText('3/4');
+  await page.keyboard.press('r');
+  await expect(page.getByTestId('reload')).toContainText('リロード中');
+  await expect(page.getByTestId('ammo')).toHaveText('3/4');
+  await expect(page.getByTestId('reload')).toHaveText('待機', { timeout: 3_000 });
+  await expect(page.getByTestId('ammo')).toHaveText('4/4');
+
+  const initialSeed = await page.getByTestId('map-seed').textContent();
+  await expect(page.getByTestId('defeat')).toBeVisible({ timeout: 45_000 });
   await page.getByTestId('retry').click();
-
   await expect(page.getByTestId('defeat')).toBeHidden();
+  await expect(page.getByTestId('weapon')).toHaveText('アサルトライフル');
+  await expect(page.getByTestId('ammo')).toHaveText('20/20');
+  await expect(page.getByTestId('reload')).toHaveText('待機');
   await expect(page.getByTestId('hp')).toHaveText('100');
-  await expect(page.getByTestId('enemy-hp')).toHaveText('3');
+  await expect(page.getByTestId('basic-1-hp')).toHaveText('6');
+  await expect(page.getByTestId('basic-2-hp')).toHaveText('6');
+  await expect(page.getByTestId('basic-3-hp')).toHaveText('6');
+  await expect(page.getByTestId('drone-hp')).toHaveText('4');
+  await expect(page.getByTestId('feedback')).toHaveText('-');
+  await expect(page.getByTestId('map-seed')).not.toHaveText(initialSeed ?? '');
   expect(errors).toEqual([]);
 });
