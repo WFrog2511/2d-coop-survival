@@ -68,7 +68,41 @@ pnpm check
 
 `pnpm lint`はlint違反と未整形を拒否します。`pnpm lint:fix`は安全なlint修正を適用し、`pnpm format`はESLintのlayout修正だけを適用します。pre-commit hookは、ステージ済みファイルがTypeScript、JavaScript、ESLint設定、package manifest、lockfile、TypeScript設定、hook自身に該当するときだけ`pnpm check`を実行し、作業ファイルを変更しません。人間向けのTypeScriptコメントとJSDocには日本語を1文字以上含めます。ESLint、TypeScript、triple-slash、coverage、formatter、shebang、generatedのdirectiveは対象外です。
 
-`pnpm test:e2e`はPlaywright Chromiumを使います。Google Chrome最新版での武器操作は[GitHub Issue #14](https://github.com/WFrog2511/2d-coop-survival/issues/14)、高速ドローンによる撃破優先度は[GitHub Issue #15](https://github.com/WFrog2511/2d-coop-survival/issues/15)、自動生成マップでの移動と遮蔽物判断は[GitHub Issue #17](https://github.com/WFrog2511/2d-coop-survival/issues/17)で人間確認します。
+`pnpm test:e2e`はPlaywright Chromiumを使います。Google Chrome最新版での武器操作は[GitHub Issue #14](https://github.com/WFrog2511/2d-coop-survival/issues/14)、高速ドローンによる撃破優先度は[GitHub Issue #15](https://github.com/WFrog2511/2d-coop-survival/issues/15)、自動生成マップでの移動と遮蔽物判断は[GitHub Issue #17](https://github.com/WFrog2511/2d-coop-survival/issues/17)で人間確認しました。
+
+### E2Eテストを画面で確認する
+
+初回だけPlaywright Chromiumをインストールします。
+
+```powershell
+pnpm exec playwright install chromium
+```
+
+通常のE2Eテストはブラウザを表示しないheadlessモードで実行します。
+
+```powershell
+pnpm test:e2e
+```
+
+実際のブラウザ操作を表示する場合はheadedモードを使います。現在の代表E2Eは、移動、ライフル自動射撃、ショットガンの連射制限、リロード、敗北、再挑戦、マップseed変更を順番に操作します。
+
+```powershell
+pnpm test:e2e --headed --workers=1
+```
+
+テストコード、実行ステップ、ブラウザ表示を一緒に確認する場合はUIモードを使います。Playwright画面で`prototype.spec.ts`の再生ボタンを押してください。
+
+```powershell
+pnpm test:e2e --ui
+```
+
+1ステップずつ停止しながら確認する場合はdebugモードを使います。
+
+```powershell
+pnpm test:e2e --debug
+```
+
+いずれのモードも`playwright.config.ts`がViteを`http://127.0.0.1:4173`で自動起動するため、別のターミナルで`pnpm dev`を起動する必要はありません。Node.jsまたはpnpmのバージョン警告が出る環境では、各コマンドの`pnpm`を`corepack pnpm`へ置き換えてください。Windowsで`pnpm exec playwright`が見つからない場合は、Chromium導入コマンドだけ`.\node_modules\.bin\playwright.cmd install chromium`を使用できます。
 
 ## Python・文書検査
 
