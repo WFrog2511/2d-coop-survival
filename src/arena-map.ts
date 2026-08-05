@@ -9,6 +9,7 @@ export type TileRect = { left: number; top: number; right: number; bottom: numbe
 export type Room = { x: number; y: number; width: number; height: number };
 export type Corridor = { from: TilePosition; to: TilePosition; width: number; horizontalFirst: boolean };
 export type ArenaEnemyKind = 'basic' | 'drone';
+export type EnemyVisibility = 'normal' | 'boundary' | 'hidden';
 
 export type ArenaMap = {
   seed: number;
@@ -71,6 +72,30 @@ export function isFloor(map: ArenaMap, position: TilePosition): boolean {
     && position.x < map.width
     && position.y < map.height
     && map.tiles[position.y][position.x] === 'floor';
+}
+
+/** プレイヤーから対象tileへの見通しを、cornerを含む全通過tileで判定する。 */
+export function hasLineOfSight(
+  map: ArenaMap,
+  player: TilePosition,
+  target: TilePosition,
+): boolean {
+  if (!isFloor(map, player) || !inBounds(map, target)) return false;
+  const line = supercoverLine(player, target);
+  return line.every((position, index) => index === line.length - 1 || map.tiles[position.y][position.x] !== 'wall');
+}
+
+/** 敵floorの通常表示、壁際の共通silhouette、非表示を純粋に決める。 */
+export function enemyVisibility(
+  map: ArenaMap,
+  player: TilePosition,
+  enemy: TilePosition,
+): EnemyVisibility {
+  if (!isFloor(map, player) || !isFloor(map, enemy)) return 'hidden';
+  if (hasLineOfSight(map, player, enemy)) return 'normal';
+  return neighbours(enemy).some(neighbour => hasLineOfSight(map, player, neighbour))
+    ? 'boundary'
+    : 'hidden';
 }
 
 export function findPath(
@@ -301,6 +326,47 @@ function floorTiles(map: ArenaMap): TilePosition[] {
     }
   }
   return result;
+}
+
+function inBounds(map: ArenaMap, position: TilePosition): boolean {
+  return position.x >= 0
+    && position.y >= 0
+    && position.x < map.width
+    && position.y < map.height;
+}
+
+function supercoverLine(start: TilePosition, target: TilePosition): TilePosition[] {
+  const tiles: TilePosition[] = [{ ...start }];
+  const dx = target.x - start.x;
+  const dy = target.y - start.y;
+  const countX = Math.abs(dx);
+  const countY = Math.abs(dy);
+  const stepX = Math.sign(dx);
+  const stepY = Math.sign(dy);
+  let x = start.x;
+  let y = start.y;
+  let movedX = 0;
+  let movedY = 0;
+  while (movedX < countX || movedY < countY) {
+    const decision = (1 + 2 * movedX) * countY - (1 + 2 * movedY) * countX;
+    if (decision === 0) {
+      // 中心線がcornerへ触れるとき、両側tileも遮蔽候補に含めて斜め抜けを防ぐ。
+      tiles.push({ x: x + stepX, y });
+      tiles.push({ x, y: y + stepY });
+      x += stepX;
+      y += stepY;
+      movedX += 1;
+      movedY += 1;
+    } else if (decision < 0) {
+      x += stepX;
+      movedX += 1;
+    } else {
+      y += stepY;
+      movedY += 1;
+    }
+    tiles.push({ x, y });
+  }
+  return tiles;
 }
 
 function roomCenter(room: Room): TilePosition {

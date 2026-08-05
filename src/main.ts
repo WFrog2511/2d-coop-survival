@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, findPath, generateArenaMap, generateNextArenaMap, nextSeed, respawnDelayFor, selectSpawnTile, type ArenaMap, type TilePosition } from './arena-map';
+import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, enemyVisibility, findPath, hasLineOfSight, type EnemyVisibility, generateArenaMap, generateNextArenaMap, nextSeed, respawnDelayFor, selectSpawnTile, type ArenaMap, type TilePosition } from './arena-map';
 import { ENEMY_INSTANCE_IDS, WEAPONS, cancelReload, completeReload, damageEnemy, damagePlayer, droneLateralSpeedAt, fireWeapon, isEnemyDefeated, resolveDamage, respawnEnemy, retryCombat, selectWeapon, startReload, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type WeaponId } from './rules';
 const WIDTH = 800;
 const HEIGHT = 500;
@@ -77,10 +77,13 @@ let resetArena: (() => void) | undefined;
 class Arena extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Sprite;
   private enemies!: Record<EnemyInstanceId, Phaser.Physics.Arcade.Sprite>;
+  private silhouettes!: Record<EnemyInstanceId, Phaser.GameObjects.Image>;
   private bullets!: Phaser.Physics.Arcade.Group;
   private walls!: Phaser.Physics.Arcade.StaticGroup;
   private ground: Phaser.GameObjects.Graphics | undefined;
   private wallArt: Phaser.GameObjects.Graphics | undefined;
+  private visibilityMask!: Phaser.GameObjects.Graphics;
+  private visibilityMaskPlayerTile: TilePosition | undefined;
   private keys!: Controls;
   private map!: ArenaMap;
   private mapSeed = Date.now() >>> 0;
@@ -94,6 +97,7 @@ class Arena extends Phaser.Scene {
   private respawns = new Map<EnemyInstanceId, Phaser.Time.TimerEvent>();
   private flashes = new Map<EnemyInstanceId, Phaser.Time.TimerEvent>();
   private reloadTimer: Phaser.Time.TimerEvent | undefined;
+  private visibilityTiles = {} as Partial<Record<EnemyInstanceId, { player: TilePosition; enemy: TilePosition }>>;
   constructor() {
     super('arena');
   }
@@ -105,16 +109,21 @@ class Arena extends Phaser.Scene {
     this.player = this.physics.add
       .sprite(0, 0, 'player')
       .setCollideWorldBounds(true)
-      .setBodySize(28, 28);
+      .setBodySize(28, 28)
+      .setDepth(3);
+    this.visibilityMask = this.add.graphics().setDepth(2).setAlpha(0.25);
     this.enemies = {} as Record<EnemyInstanceId, Phaser.Physics.Arcade.Sprite>;
+    this.silhouettes = {} as Record<EnemyInstanceId, Phaser.GameObjects.Image>;
     ENEMY_IDS.forEach((id) => {
       const config = ENEMIES[id];
       const bodySize = config.kind === 'basic' ? { width: 28, height: 28 } : { width: 24, height: 20 };
       this.enemies[id] = this.physics.add
         .sprite(0, 0, config.kind === 'basic' ? 'basic' : 'drone')
         .setCollideWorldBounds(true)
-        .setBodySize(bodySize.width, bodySize.height);
+        .setBodySize(bodySize.width, bodySize.height)
+        .setDepth(0);
       this.enemies[id].disableBody(true, true);
+      this.silhouettes[id] = this.add.image(0, 0, 'enemy-silhouette').setDepth(1).setVisible(false);
       this.physics.add.collider(this.enemies[id], this.walls);
       this.physics.add.overlap(this.player, this.enemies[id], () => this.hitPlayer(id));
     });
@@ -143,7 +152,9 @@ class Arena extends Phaser.Scene {
     const length = Math.hypot(x, y) || 1;
     this.player.setVelocity((x / length) * 210, (y / length) * 210);
     this.updateTileHud();
+    this.updateVisibilityMask();
     ENEMY_IDS.forEach(id => this.moveEnemy(id));
+    this.updateEnemyVisibility();
     this.player.rotation = Phaser.Math.Angle.Between(this.player.x, this.player.y, this.input.activePointer.worldX, this.input.activePointer.worldY);
     if (WEAPONS[this.state.weapon].automatic && this.input.activePointer.isDown)
       this.tryFire(this.input.activePointer);
@@ -169,13 +180,18 @@ class Arena extends Phaser.Scene {
     this.knockbackUntil = enemyNumbers();
     this.respawnCount = enemyNumbers();
     this.paths = {} as Record<EnemyInstanceId, PathState>;
+    this.visibilityTiles = {};
+    this.visibilityMaskPlayerTile = undefined;
+    this.visibilityMask.clear();
     this.disableAllBullets();
+    ENEMY_IDS.forEach(id => this.hideEnemyVisuals(id));
     ENEMY_IDS.forEach(id => this.enemies[id].disableBody(true, true));
     this.map = initial ? generateArenaMap(this.mapSeed) : generateNextArenaMap(this.map);
     this.mapSeed = this.map.seed;
     this.buildMap();
     const start = this.world(this.map.start);
     this.player.enableBody(true, start.x, start.y, true, true).setVelocity(0, 0);
+    this.updateVisibilityMask(true);
     const camera = this.cameras.main;
     camera.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     camera.centerOn(start.x, start.y);
@@ -184,6 +200,7 @@ class Arena extends Phaser.Scene {
       if (!this.spawnEnemy(id))
         throw new Error('マップ上に敵の出現位置を確保できません。');
     });
+    this.updateEnemyVisibility(true);
     feedback.textContent = '-';
     defeat.hidden = true;
     this.refreshHud();
@@ -211,6 +228,24 @@ class Arena extends Phaser.Scene {
           this.walls.add(wall);
         }
     this.walls.refresh();
+  }
+
+  private updateVisibilityMask(force = false): void {
+    const playerTile = this.tile(this.player);
+    if (!force && this.visibilityMaskPlayerTile && sameTile(this.visibilityMaskPlayerTile, playerTile))
+      return;
+    this.visibilityMask.clear().fillStyle(0x000000, 1);
+    let obscuredTileCount = 0;
+    for (let y = 0; y < this.map.height; y += 1)
+      for (let x = 0; x < this.map.width; x += 1)
+        if (!hasLineOfSight(this.map, playerTile, { x, y })) {
+          this.visibilityMask.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          obscuredTileCount += 1;
+        }
+    this.visibilityMaskPlayerTile = { ...playerTile };
+    playerTileHud.dataset.visibilityMaskAlpha = String(this.visibilityMask.alpha);
+    playerTileHud.dataset.obscuredTileCount = String(obscuredTileCount);
+    playerTileHud.dataset.visibilityPlayerTile = `${playerTile.x},${playerTile.y}`;
   }
 
   private moveEnemy(id: EnemyInstanceId): void {
@@ -261,6 +296,7 @@ class Arena extends Phaser.Scene {
     );
     if (!tile) {
       this.enemies[id].disableBody(true, true);
+      this.hideEnemyVisuals(id);
       return false;
     }
     const point = this.world(tile);
@@ -274,7 +310,67 @@ class Arena extends Phaser.Scene {
       playerTile: this.tile(this.player),
       enemyTile: tile,
     };
+    this.updateVisibilityMask(true);
+    this.updateEnemyVisibility(true);
     return true;
+  }
+
+  private updateEnemyVisibility(force = false): void {
+    const playerTile = this.tile(this.player);
+    ENEMY_IDS.forEach((id) => {
+      const enemy = this.enemies[id];
+      const silhouette = this.silhouettes[id];
+      if (!enemy.active) {
+        this.hideEnemyVisuals(id);
+        delete this.visibilityTiles[id];
+        return;
+      }
+      silhouette.setPosition(enemy.x, enemy.y);
+      const enemyTile = this.tile(enemy);
+      const previous = this.visibilityTiles[id];
+      if (!force && previous && sameTile(previous.player, playerTile) && sameTile(previous.enemy, enemyTile)) {
+        this.syncEnemyHud(id, enemyHp[id].dataset.visibility as EnemyVisibility);
+        return;
+      }
+      const visibility = enemyVisibility(this.map, playerTile, enemyTile);
+      this.applyEnemyVisibility(id, visibility);
+      this.visibilityTiles[id] = { player: playerTile, enemy: enemyTile };
+    });
+  }
+
+  private applyEnemyVisibility(id: EnemyInstanceId, visibility: EnemyVisibility): void {
+    const enemy = this.enemies[id];
+    const silhouette = this.silhouettes[id];
+    if (visibility === 'normal') {
+      enemy.setVisible(true).setAlpha(1);
+      silhouette.setVisible(false);
+    } else if (visibility === 'boundary') {
+      enemy.setVisible(false);
+      silhouette.setPosition(enemy.x, enemy.y).setAlpha(0.3).setVisible(true);
+    } else {
+      enemy.setVisible(false);
+      silhouette.setVisible(false);
+    }
+    this.syncEnemyHud(id, visibility);
+  }
+
+  private hideEnemyVisuals(id: EnemyInstanceId): void {
+    this.enemies[id].setVisible(false);
+    this.silhouettes[id].setVisible(false);
+    this.syncEnemyHud(id, 'hidden');
+  }
+
+  private syncEnemyHud(id: EnemyInstanceId, visibility: EnemyVisibility): void {
+    const enemy = this.enemies[id];
+    const silhouette = this.silhouettes[id];
+    const hud = enemyHp[id];
+    hud.dataset.visibility = visibility;
+    hud.dataset.spriteTexture = enemy.texture.key;
+    hud.dataset.spriteAlpha = String(enemy.alpha);
+    hud.dataset.spriteVisible = String(enemy.visible);
+    hud.dataset.silhouetteTexture = silhouette.texture.key;
+    hud.dataset.silhouetteAlpha = String(silhouette.alpha);
+    hud.dataset.silhouetteVisible = String(silhouette.visible);
   }
 
   private changeWeapon(weapon: WeaponId): void {
@@ -371,6 +467,7 @@ class Arena extends Phaser.Scene {
     if (!isEnemyDefeated(this.state, id))
       return;
     enemy.disableBody(true, true);
+    this.hideEnemyVisuals(id);
     this.respawnCount[id] += 1;
     const delay = respawnDelayFor(ENEMIES[id].kind, id, this.respawnCount[id], this.map.seed);
     this.respawns.set(id, this.time.delayedCall(delay, () => {
@@ -397,7 +494,10 @@ class Arena extends Phaser.Scene {
     }
     this.stopReload();
     this.player.setVelocity(0, 0);
-    ENEMY_IDS.forEach(enemyId => this.enemies[enemyId].setVelocity(0, 0));
+    ENEMY_IDS.forEach((enemyId) => {
+      this.enemies[enemyId].setVelocity(0, 0);
+      this.hideEnemyVisuals(enemyId);
+    });
     this.disableAllBullets();
     this.physics.pause();
     defeat.hidden = false;
@@ -499,6 +599,12 @@ class Arena extends Phaser.Scene {
       context.fill();
       context.fillStyle = '#d7c7ff';
       context.fillRect(13, 10, 10, 8);
+    });
+    this.texture('enemy-silhouette', 36, 36, (context) => {
+      context.fillStyle = '#9aa4b2';
+      context.beginPath();
+      context.arc(18, 18, 15, 0, Math.PI * 2);
+      context.fill();
     });
     this.texture('wall', TILE_SIZE, TILE_SIZE, (context) => {
       context.fillStyle = '#26374a';

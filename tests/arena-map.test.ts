@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import {
   allFloorsReachable,
+  enemyVisibility,
+  hasLineOfSight,
   ARENA_HEIGHT_TILES,
   ARENA_WIDTH_TILES,
   findPath,
@@ -16,6 +18,20 @@ const seed = 20_260_802;
 
 function tileKey(position: { x: number; y: number }): string {
   return `${position.x},${position.y}`;
+}
+
+function mapFrom(rows: ArenaMap['tiles']): ArenaMap {
+  return {
+    seed: 1,
+    width: rows[0].length,
+    height: rows.length,
+    tileSize: 40,
+    rooms: [],
+    corridors: [],
+    obstacles: [],
+    start: { x: 1, y: 1 },
+    tiles: rows,
+  };
 }
 
 describe('自動生成アリーナ', () => {
@@ -116,5 +132,83 @@ describe('自動生成アリーナ', () => {
     expect(drone).toBeGreaterThanOrEqual(900);
     expect(drone).toBeLessThanOrEqual(1500);
     expect(respawnDelayFor('basic', 'basic-1', 2, seed)).toBe(basic);
+  });
+});
+
+describe('敵の視界遮蔽', () => {
+  const open = mapFrom([
+    ['wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall'],
+    ['wall', 'floor', 'floor', 'floor', 'floor', 'floor', 'wall'],
+    ['wall', 'floor', 'floor', 'floor', 'floor', 'floor', 'wall'],
+    ['wall', 'floor', 'floor', 'floor', 'floor', 'floor', 'wall'],
+    ['wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall'],
+  ]);
+  const blocked = mapFrom([
+    ['wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall'],
+    ['wall', 'floor', 'floor', 'floor', 'floor', 'floor', 'wall'],
+    ['wall', 'floor', 'floor', 'wall', 'floor', 'floor', 'wall'],
+    ['wall', 'floor', 'floor', 'floor', 'floor', 'floor', 'wall'],
+    ['wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall'],
+  ]);
+
+  test('same tileはnormalである', () => {
+    expect(enemyVisibility(open, { x: 1, y: 1 }, { x: 1, y: 1 })).toBe('normal');
+  });
+
+  test('開けた水平・垂直・斜めLOSはnormalである', () => {
+    expect(enemyVisibility(open, { x: 1, y: 2 }, { x: 5, y: 2 })).toBe('normal');
+    expect(enemyVisibility(open, { x: 2, y: 1 }, { x: 2, y: 3 })).toBe('normal');
+    expect(enemyVisibility(open, { x: 1, y: 1 }, { x: 5, y: 3 })).toBe('normal');
+  });
+
+  test('wall endpointは見え、その奥は遮られる', () => {
+    expect(hasLineOfSight(blocked, { x: 1, y: 2 }, { x: 3, y: 2 })).toBe(true);
+    expect(hasLineOfSight(blocked, { x: 1, y: 2 }, { x: 4, y: 2 })).toBe(false);
+  });
+
+  test('wall直後の敵はboundaryで、さらに2tile奥はhiddenである', () => {
+    expect(enemyVisibility(blocked, { x: 1, y: 2 }, { x: 4, y: 2 })).toBe('boundary');
+    expect(enemyVisibility(blocked, { x: 1, y: 2 }, { x: 5, y: 2 })).toBe('hidden');
+  });
+
+  test('orthogonal 4近傍だけをboundary候補にし、斜めだけではboundaryにしない', () => {
+    const diagonalOnly = mapFrom([
+      ['wall', 'wall', 'wall', 'wall', 'wall', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'floor', 'wall', 'wall', 'floor', 'wall'],
+      ['wall', 'floor', 'wall', 'floor', 'wall', 'wall'],
+      ['wall', 'floor', 'floor', 'wall', 'floor', 'wall'],
+      ['wall', 'wall', 'wall', 'wall', 'wall', 'wall'],
+    ]);
+    expect(hasLineOfSight(diagonalOnly, { x: 1, y: 1 }, { x: 4, y: 2 })).toBe(false);
+    expect(enemyVisibility(diagonalOnly, { x: 1, y: 1 }, { x: 3, y: 3 })).toBe('hidden');
+  });
+
+  test('exact cornerの両側wallは斜めLOSを遮る', () => {
+    const corner = mapFrom([
+      ['wall', 'wall', 'wall', 'wall', 'wall'],
+      ['wall', 'floor', 'wall', 'floor', 'wall'],
+      ['wall', 'wall', 'floor', 'floor', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'wall', 'wall', 'wall', 'wall'],
+    ]);
+    expect(hasLineOfSight(corner, { x: 1, y: 1 }, { x: 3, y: 3 })).toBe(false);
+  });
+
+  test('playerまたはenemyがwall、またはいずれかがmap外ならhiddenである', () => {
+    expect(enemyVisibility(blocked, { x: 3, y: 2 }, { x: 4, y: 2 })).toBe('hidden');
+    expect(enemyVisibility(blocked, { x: 1, y: 2 }, { x: 3, y: 2 })).toBe('hidden');
+    expect(enemyVisibility(blocked, { x: -1, y: 2 }, { x: 4, y: 2 })).toBe('hidden');
+    expect(enemyVisibility(blocked, { x: 1, y: 2 }, { x: 7, y: 2 })).toBe('hidden');
+  });
+
+  test('距離上限はなく、直接LOSのnormalがboundaryより優先される', () => {
+    const far = mapFrom([
+      ['wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'floor', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall'],
+    ]);
+    expect(enemyVisibility(far, { x: 1, y: 1 }, { x: 7, y: 1 })).toBe('normal');
+    expect(enemyVisibility(open, { x: 1, y: 1 }, { x: 5, y: 1 })).toBe('normal');
   });
 });
