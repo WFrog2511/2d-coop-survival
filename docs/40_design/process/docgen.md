@@ -55,6 +55,10 @@ flowchart LR
 | `python_class_source` | 対象クラスのソース抜粋 |
 | `python_api_routes` | FastAPI `APIRouter` のルート一覧 |
 
+## TypeScriptの境界
+
+bundled transformは現在Python sourceだけを対象にする。TypeScript詳細設計のpublic export、type、interface、class、function signatureは手動reviewで確認し、`docgen.py --check`のPASSをTypeScript同期のPASSへ読み替えない。安定したTypeScript public情報transformは[Issue #31](https://github.com/WFrog2511/2d-coop-survival/issues/31)の対象であり、この仕組みやtransformを本sliceでは追加しない。
+
 ## 実行
 
 リポジトリルートから実行します。

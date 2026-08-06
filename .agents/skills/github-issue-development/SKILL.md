@@ -9,13 +9,14 @@ GitHub is the source of truth when it is available. The repository contains only
 
 ## Workflow
 
-1. Read `AGENTS.md`, the relevant GitHub Issue, and its linked pull requests.
-2. Start a decision Issue when the Definition of Delivery is not agreed. Use [the template](../../../templates/definition-of-delivery.md) and record scope, acceptance, risk, and deferred work.
+1. Read `AGENTS.md`, the relevant GitHub Issue, its linked pull requests, and current changes.
+2. Choose one harness profile. For a clear `Prototype standard` slice, the task Issue can hold the completed Definition of Delivery after human confirmation. Use a separate decision Issue only for unresolved choices, conditions shared by multiple tasks, or an independently managed decision record.
 3. Create one task Issue per independently reviewable slice. Apply `type:task`, `type:decision`, or `type:question`.
-4. Create one `type:customer-review` Issue per confirmation that needs a customer or project-owner response. Use the dedicated Issue Form, record the answer and affected artifacts in comments, and close it only after the decision is reflected.
+4. Create one `type:customer-review` Issue per confirmation that needs a customer or project-owner response. Keep the answer and approval there; technical validation never substitutes for it.
 5. Branch from `develop` as `feature/<topic>`. Keep the pull request target as `develop`; merge `develop` into `main` only after an explicit release confirmation.
-6. Put the task Issue number and acceptance result in the PR using [the PR template](../../../templates/pr-description.md). Do not claim unexecuted checks as verified.
-7. After the user approves and merges, close the Issue. Record reusable decisions and unresolved work with [the closeout template](../../../templates/closeout.md).
+6. Run the change-driven gates from `AGENTS.md` once on the final tree. Record only invalidated-gate reruns and their reason in the PR.
+7. Put the task Issue, selected profile, scope/exclusions, current validation, and known limits in the PR using [the PR template](../../../templates/pr-description.md). The PR is the live source for its head SHA and state; do not create a repository backfill commit for them.
+8. Close the Issue only after user approval and every acceptance condition is met and reflected; merge alone is not sufficient. Record reusable decisions and unresolved work with [the closeout template](../../../templates/closeout.md).
 
 ## Offline fallback
 
@@ -31,6 +32,6 @@ PowerShellでは、外部コマンドの複数行出力を変数に代入する�
 
 ## Risk boundary
 
-Use the light gate for isolated documentation or small changes, the standard gate for normal code changes, and the strict gate for authorization, personal data, irreversible side effects, external jobs, time boundaries, or state transitions. Record the selected gate and results in the PR.
+Use the light gate for isolated documentation or small changes, the standard gate for normal code changes, and the strict gate for authorization, personal data, irreversible side effects, external jobs, time boundaries, or state transitions. Record the selected profile and results in the PR.
 
 Do not add GitHub Actions, branch-protection rules, or project-specific tooling unless the project explicitly needs them.
