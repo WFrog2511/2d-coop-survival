@@ -98,7 +98,7 @@ PR前に最終treeへ必要なgateを一度だけ実行する。修正でtreeが
 | Python / tooling変更 | 関連pytestと対象Pythonの日本語コメント検査 | Python未変更ならpytest全体を要求しない |
 | `docs/`変更 | `python -X utf8 scripts/check_markdown_links.py docs` | 変更後の文書リンクを確認する |
 | 詳細設計またはPython DOCGEN source変更 | `python -X utf8 scripts/docgen.py --check "docs/40_design/detail/**/*.md"` | TypeScript設計同期の保証ではない |
-| `.codex/`変更 | `python -X utf8 scripts/check_codex_agents.py` | 固定role、Luna Max既定、capを静的確認する |
+| `.codex/`変更 | 3つのTOML差分をreviewし、新しいtrusted taskでrole smokeを行う | 設定がtaskのstarting refに存在し、実際のmodel / effort / sandbox動作を観測するまで完了扱いにしない |
 | matrix変更 | `python -X utf8 scripts/check_acceptance_matrix.py --check <matrix>` | Delivery-strictでだけ`--release`を追加する |
 | Delivery-strict | `project_preflight.py --release`、matrix `--release`、readiness check、evidence collection | 固定clean revision、rollback、顧客承認を含める |
 
