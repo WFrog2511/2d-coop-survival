@@ -1,8 +1,32 @@
 name: タスク
-description: 実装、調査、文書化などの作業を起票する。
+description: 実装、調査、文書化などのレビュー可能な作業を起票する。
 title: "task: "
 labels: ["type:task"]
 body:
+  - type: dropdown
+    id: harness_profile
+    attributes:
+      label: 開発ハーネスprofile
+      description: このtaskに適用するprofileを一つ選ぶ。
+      options:
+        - Publish-only
+        - Prototype standard
+        - Delivery-strict
+    validations:
+      required: true
+  - type: textarea
+    id: definition_of_delivery
+    attributes:
+      label: Definition of Delivery
+      description: 安定したtask正本として5項目を埋める。Prototype standardは人間確認後、このtask Issue本文をDefinition of Deliveryの正本にできる。
+      placeholder: |
+        - 成果物の段階:
+        - 必須範囲と明確な対象外:
+        - 実行環境と外部依存:
+        - 検証方法と人間確認:
+        - 証跡とリリース時の扱い:
+    validations:
+      required: true
   - type: textarea
     id: goal
     attributes:
@@ -22,3 +46,9 @@ body:
       placeholder: "- [ ] 条件"
     validations:
       required: true
+  - type: textarea
+    id: validation_plan
+    attributes:
+      label: 変更駆動gateとpilot計測
+      description: 必要な最終tree gateを記す。Issue #28から3 sliceだけ、phase時間・gate回数・Agent handoff数を集計する。
+      placeholder: "- gate:\n- 追加gateの条件:\n- pilot計測（該当時）:"

@@ -13,24 +13,6 @@ else
   exit 2
 fi
 
-"$PYTHON" scripts/check_japanese_comments.py --staged || exit $?
-"$PYTHON" scripts/check_acceptance_matrix.py --staged || exit $?
-if ! git diff --cached --quiet -- \
-  ':(glob)**/*.js' ':(glob)**/*.jsx' ':(glob)**/*.mjs' ':(glob)**/*.cjs' \
-  ':(glob)**/*.ts' ':(glob)**/*.tsx' ':(glob)**/*.mts' ':(glob)**/*.cts' \
-  'eslint.config.*' 'package.json' 'pnpm-lock.yaml' 'pnpm-workspace.yaml' \
-  'tsconfig*.json' '.githooks/pre-commit'; then
-  if ! command -v pnpm >/dev/null 2>&1; then
-    echo "pnpmが見つからないためTypeScript品質検査を実行できません。" >&2
-    exit 2
-  fi
-  pnpm check || exit $?
-fi
-
-if [ -d "docs" ]; then
-  "$PYTHON" scripts/check_markdown_links.py docs || exit $?
-fi
-
-if [ -d "docs/40_design/detail" ] && find "docs/40_design/detail" -type f -name '*.md' -print -quit | grep -q .; then
-  "$PYTHON" scripts/docgen.py --check 'docs/40_design/detail/**/*.md' || exit $?
-fi
+git diff --cached --check || exit $?
+"$PYTHON" -X utf8 scripts/check_japanese_comments.py --staged || exit $?
+"$PYTHON" -X utf8 scripts/check_acceptance_matrix.py --staged || exit $?

@@ -51,22 +51,18 @@ Viteが表示するローカルURL（通常は`http://127.0.0.1:5173/`）をPC�
 
 ## TypeScript品質ゲート
 
-TypeScript品質を変更する前に、lockfileどおりの依存を導入します。
+profileと変更駆動gateは[AGENTS.md](AGENTS.md)を正本にします。TypeScript品質を変更する前に、lockfileどおりの依存を導入します。
 
 ```powershell
 pnpm install --frozen-lockfile
-pnpm lint
-pnpm lint:fix
-pnpm format
-pnpm typecheck
-pnpm test
-pnpm build
-pnpm exec playwright install chromium
-pnpm test:e2e
 pnpm check
+# bundle / Vite runtime変更時だけ、pnpm checkの後に実行する
+pnpm build:bundle
 ```
 
-`pnpm lint`はlint違反と未整形を拒否します。`pnpm lint:fix`は安全なlint修正を適用し、`pnpm format`はESLintのlayout修正だけを適用します。pre-commit hookは、ステージ済みファイルがTypeScript、JavaScript、ESLint設定、package manifest、lockfile、TypeScript設定、hook自身に該当するときだけ`pnpm check`を実行し、作業ファイルを変更しません。人間向けのTypeScriptコメントとJSDocには日本語を1文字以上含めます。ESLint、TypeScript、triple-slash、coverage、formatter、shebang、generatedのdirectiveは対象外です。
+`pnpm check`はlint、typecheck、TypeScript日本語コメント規則、unitを内包する最終treeのcanonical full gateです。同じtreeへ`pnpm lint`、`pnpm typecheck`、`pnpm test`を重ねません。`pnpm build`は後方互換用でtypecheckを再実行するため、PR検証では`pnpm build:bundle`を使います。`pnpm lint:fix`は安全なlint修正、`pnpm format`はESLintのlayout修正だけを適用します。
+
+pre-commit hookは`git diff --cached --check`、staged Python日本語コメント、staged acceptance matrixの高速で決定的な機械検査だけを行います。full TypeScript gate、全docs link、DOCGENはPR前の変更駆動gateです。人間向けのTypeScriptコメントとJSDocには日本語を1文字以上含めます。ESLint、TypeScript、triple-slash、coverage、formatter、shebang、generatedのdirectiveは対象外です。
 
 `pnpm test:e2e`はPlaywright Chromiumを使います。Google Chrome最新版での武器操作は[GitHub Issue #14](https://github.com/WFrog2511/2d-coop-survival/issues/14)、高速ドローンによる撃破優先度は[GitHub Issue #15](https://github.com/WFrog2511/2d-coop-survival/issues/15)、自動生成マップでの移動と遮蔽物判断は[GitHub Issue #17](https://github.com/WFrog2511/2d-coop-survival/issues/17)で人間確認しました。
 
@@ -137,7 +133,8 @@ Codexが自動検出できるよう、Skillsは[.agents/skills/](.agents/skills/
 ## 開発フレームワーク
 
 - [.github/ISSUE_TEMPLATE/](.github/ISSUE_TEMPLATE/): task / decision / question / customer-reviewのIssue Forms
-- [.githooks/pre-commit](.githooks/pre-commit): Python日本語、受け入れマトリクス、Markdownリンク、DOCGEN差分の検査
+- [.githooks/pre-commit](.githooks/pre-commit): staged diff、Python日本語、受け入れマトリクスだけの機械検査
+- [.codex/](.codex/config.toml): trustedな新しいtaskで有効になる固定Luna Max planner/reviewer・sole writer設定
 - [templates/](templates/): Definition of Delivery、PR、証跡、closeout、Agent引き継ぎ
 - [scripts/](scripts/): 文書・設計・受け入れ・納品証跡の機械検査
 - [third_party/ponytail/LICENSE](third_party/ponytail/LICENSE): Ponytail由来部分のMITライセンス

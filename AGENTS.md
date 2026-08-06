@@ -14,7 +14,8 @@
 - 顧客またはプロジェクトオーナーの確認事項は、`type:customer-review` を付けたGitHub Issueを正本にする。一つのIssueには一つの確認事項を書く。
 - 作業開始前に既存Issue、関連PR、設計、直近の変更を確認する。
 - 単独オフライン時だけ、`docs/01_project-journal/local-issues/YYYY-MM-DD_簡潔な題名.md` に記録する。オンライン復帰後はGitHub Issueを作り、ローカル記録からリンクする。
-- 新規プロジェクトは、実装前にDefinition of Deliveryを `decision:` Issueで人間確認する。
+- 未確定な選択肢、複数taskに効く条件、独立した承認履歴が必要なDefinition of Deliveryは、実装前に`type:decision` Issueで人間確認する。範囲が明確な小さなプロトタイプは、task Issue本文のDefinition of Deliveryと人間確認コメントを正本にできる。
+- task / decision Issueには、選択した開発ハーネスprofile、成果物段階、必須範囲・対象外、検証、人間確認、条件変更を安定した記録として残す。
 
 ## ドキュメント配置
 
@@ -47,6 +48,60 @@ main -> develop -> feature/<topic>
 - `type`は`chore`、`docs`、`feat`、`fix`、`test`、`refactor`など変更目的を表す語、`scope`は`project`、`frontend`、`backend`、具体的なservice名など変更対象を表す語にする。
 - 例: `chore(project): 開発環境とMITライセンスを初期化`
 
+## 開発ハーネスと正本の境界
+
+| 情報 | 正本 |
+| --- | --- |
+| 安定したtask、Definition of Delivery、受け入れ条件、変更判断 | task / decision Issue |
+| 顧客・プロジェクトオーナーの回答と承認 | `type:customer-review` Issue |
+| 実装差分、PR head、現在の検証結果、既知制約 | PR |
+| 長期に再利用する要件、仕様、設計、固定版の納品索引 | repository Markdown |
+| 実行可能な期待値 | unit / E2E |
+| 固定revisionを複数Issue・PRから納品する索引 | `docs/70_delivery/<release>/acceptance-matrix.md` |
+
+PR番号、open / mergeable状態、現在head SHAをリポジトリ文書へ転記するだけの追補commitは作らない。固定revisionの納品証跡だけがSHAを固定する。受け入れマトリクスは要件・承認の正本ではない。
+
+### 開発ハーネスprofile
+
+開始時に一つだけ選び、必要な成果物とgateをDefinition of Deliveryへ記録する。
+
+| profile | 適用 | 必須成果物・gate | 原則不要 |
+| --- | --- | --- | --- |
+| Publish-only | 検証済みでcleanなexact treeのcommit / push / PR | branch・差分・除外、既存のexact-tree検証記録、意図したstage、PR本文を確認する | 新規matrix、readiness、evidence、sub-agent、tree未変更時の品質gate再実行 |
+| Prototype standard | 通常のTypeScript機能・POC | task IssueのDefinition of Delivery、必要な要件/仕様、変更対象unit、利用経路・描画変更時の代表E2E、最終treeへのPR gate一式、必要時だけcustomer-review | featureごとのmatrix、release-readiness、evidence collection |
+| Delivery-strict | main統合、tag、配布、外部引渡し、認可・PII・不可逆副作用 | 一つのnamed release matrix、固定clean revision、readiness、evidence、rollback、顧客承認、重要領域gate | featureごとの個別納品資料 |
+
+Prototype standardでmatrix、release-readiness、evidenceを作成・更新するのは、Definition of DeliveryがDelivery-strictへ変更された場合だけとする。既存の`docs/70_delivery/*` matrixとreadinessは履歴であり、この方針への移行だけを理由に編集しない。
+
+### Codex Agent checkpoint
+
+`.codex/config.toml`と`.codex/agents/`はtrusted projectだけで有効になる。変更後は新しいtrusted taskを開始し、`luna_max_planner_reviewer`と`luna_max_writer`が使えることを確認してから依存する。最大sub-agent数は3とし、将来のproject sub-agentは`gpt-5.6-luna` / `max`を使う。別モデルへのfallbackはユーザー確認後だけ行う。
+
+- `luna_max_planner_reviewer`はread-onlyで、実装前のplanと最終diff reviewを一つのcheckpointとして担当する。workspace、GitHub、Gitの書換えはしない。
+- `luna_max_writer`はworkspace-writeの唯一のwriterである。同じtaskで他のwriterを並行起動せず、stage、commit、push、merge、顧客承認は親の明示権限なしに行わない。
+- Prototype standardの標準コード変更は、plan → sole writer → final diff reviewを原則とする。軽微なfinding修正後は変更箇所だけを再reviewし、厳格変更、重大finding、Definition of Delivery変更後は独立reviewを広げる。Publish-onlyではsub-agentを使わない。
+- handoffにはIssue / Definition of Delivery、対象ファイル、現在diff、直近gate結果、停止条件だけを渡す。長い履歴やraw logを複製しない。
+- 通常の`apply_patch`が一度実際に書込み失敗したと確認した場合だけ、対象パスを検証したcandidate、SHA-256、backup、原子的置換を使う。helperを先回りして追加せず、backupは検証とreviewが終わるまで保持する。
+
+Issue #28はpilot slice 1である。次の二つのsliceを含む合計3 sliceまで、IssueまたはPRに集計値だけを残す: discovery / DOD、implementation、independent reviewとfinding修正、automated validation、customer review待ち、commit / push / PRのphase時間、full gate回数と再実行理由、Agent数とhandoff数、要求変更とハーネス起因の再作業。利用量が取得できる場合だけクレジット量を記録し、raw logや推測値は残さない。3 slice後に採用・修正・撤回を人間が判断する。
+
+### 変更駆動validation DAG
+
+PR前に最終treeへ必要なgateを一度だけ実行する。修正でtreeが変わったときだけ、無効化されたgateを再実行し、理由をPRへ記録する。個別commandと集約commandを同じtreeへ重ねない。
+
+| 変更またはphase | gate | 境界 |
+| --- | --- | --- |
+| すべてのcommit | `git diff --cached --check`、`python -X utf8 scripts/check_japanese_comments.py --staged`、`python -X utf8 scripts/check_acceptance_matrix.py --staged` | pre-commitは高速で決定的なstaged機械検査だけ。full品質gate、全docs link、DOCGENは実行しない |
+| TypeScript品質変更 | `pnpm check` | `lint`、`typecheck`、`test:quality`、unitを内包する唯一のfull TypeScript gate。最終treeで`pnpm lint`や`pnpm typecheck`を別途重ねない |
+| bundle / Vite runtime変更 | `pnpm build:bundle` | `pnpm check`後にVite bundleだけを検証する。`pnpm build`は後方互換用の`typecheck && build:bundle`であり、PR手順では使わない |
+| 利用経路、描画、ブラウザ状態変更 | 関連する`pnpm test:e2e` | Definition of Deliveryの代表利用経路を対象化する |
+| Python / tooling変更 | 関連pytestと対象Pythonの日本語コメント検査 | Python未変更ならpytest全体を要求しない |
+| `docs/`変更 | `python -X utf8 scripts/check_markdown_links.py docs` | 変更後の文書リンクを確認する |
+| 詳細設計またはPython DOCGEN source変更 | `python -X utf8 scripts/docgen.py --check "docs/40_design/detail/**/*.md"` | TypeScript設計同期の保証ではない |
+| `.codex/`変更 | 3つのTOML差分をreviewし、新しいtrusted taskでrole smokeを行う | 設定がtaskのstarting refに存在し、実際のmodel / effort / sandbox動作を観測するまで完了扱いにしない |
+| matrix変更 | `python -X utf8 scripts/check_acceptance_matrix.py --check <matrix>` | Delivery-strictでだけ`--release`を追加する |
+| Delivery-strict | `project_preflight.py --release`、matrix `--release`、readiness check、evidence collection | 固定clean revision、rollback、顧客承認を含める |
+
 ## ライセンスと公開資産
 
 - このプロジェクトが著作権を持つコードと文書は、ルート`LICENSE`のMIT Licenseを正本とする。
@@ -74,25 +129,24 @@ main -> develop -> feature/<topic>
 
 ## 受け入れマトリクス
 
-受け入れマトリクスは要件や承認の正本ではなく、要件・仕様・実装・検証・顧客確認を結ぶ納品索引です。
+受け入れマトリクスは要件や承認の正本ではなく、固定した納品revisionで要件・仕様・実装・検証・顧客確認を結ぶ索引である。Delivery-strictのnamed releaseだけで、`docs/70_delivery/templates/acceptance-matrix.md`を`docs/70_delivery/<release-name>/acceptance-matrix.md`へコピーする。
 
-1. Definition of Delivery承認後、`docs/70_delivery/templates/acceptance-matrix.md`を`docs/70_delivery/<release-name>/acceptance-matrix.md`へコピーする。
-2. 受け入れIDには既存の要件ID・仕様ID・GitHub Issue番号を再利用し、独自連番を増やさない。
-3. 受け入れ範囲、実装、証跡、顧客確認が変わるときだけ更新する。無関係な通常コミットでは更新しない。
-4. コミット時はhookが`python scripts/check_acceptance_matrix.py --staged`を実行する。ステージ済みマトリクスがなければ即終了し、エージェントやネットワークは使わない。
-5. 関連PRの前に`python scripts/check_acceptance_matrix.py --check <matrix>`を実行し、変更した作業単位の反映漏れを確認する。
-6. 納品前に`type:customer-review` Issueのラベル・回答・反映先をGitHubで確認し、`python scripts/check_acceptance_matrix.py --release <matrix>`を実行する。
+1. Prototype standardではtask Issueの受け入れ条件、PR検証、unit / E2E、必要時のcustomer-reviewを追跡に使い、featureごとのmatrixを原則作成・更新しない。
+2. Delivery-strictでは既存の要件ID・仕様ID・GitHub Issue番号を受け入れIDに再利用し、同じ内容の要件行とIssue行を重複させない。
+3. matrixを変更したときだけPR前に`python -X utf8 scripts/check_acceptance_matrix.py --check <matrix>`を実行する。hookの`--staged`はエージェントやネットワークを使わない機械検査だけである。
+4. 納品前に`type:customer-review` Issueのラベル・回答・反映先をGitHubで確認し、`python -X utf8 scripts/check_acceptance_matrix.py --release <matrix>`を実行する。
 
-通常検査は`未検証`と`待ち`を許可する。納品検査では技術検証`PASS`、顧客確認`不要`または`承認`、実装参照、証跡を必須とする。テスト成功から顧客承認を推測せず、スクリプトからマトリクスを自動更新しない。
+通常検査は`未検証`と`待ち`を許可する。納品検査では技術検証`PASS`、顧客確認`不要`または`承認`、実装参照、証跡を必須とする。テスト成功から顧客承認を推測せず、スクリプトからマトリクスを自動更新しない。既存matrixは履歴として保持し、方針移行だけの遡及編集をしない。
 
 ## 納品準備と証跡
 
-1. 本検証前に`python scripts/project_preflight.py`を実行し、Definition of Deliveryに応じて必要コマンド、環境変数、書込先、DB等のポートを指定する。
-2. `docs/70_delivery/templates/release-readiness.md`をリリース別フォルダへコピーし、文書整合、製品品質、納品受け入れを別々に判定する。
-3. 固定revisionの納品検証ではpreflightへ`--release`を付け、未コミット・未追跡差分を失敗扱いにする。
-4. `templates/evidence-plan.json`をコピーして検証コマンドをargv配列で定義し、`collect_delivery_evidence.py`で新規証跡ディレクトリへ収集する。
-5. 証跡のcommit、終了コード、ログ、SHA-256 manifestを確認する。技術検証の成功を顧客承認へ読み替えない。
-6. 完了時は`templates/closeout.md`でopen Issue、顧客レビュー、branch、差分、tag、制約、残件、Knowledgeを棚卸しする。
+この節はDelivery-strictだけに適用する。Prototype standardとPublish-onlyはrelease-readinessやevidence collectionを新規作成・更新しない。
+
+1. named release、Definition of Delivery、rollback、対象revisionを固定し、clean treeで`python -X utf8 scripts/project_preflight.py --release`を実行する。
+2. `docs/70_delivery/templates/release-readiness.md`をrelease別フォルダへコピーし、文書整合、製品品質、納品受け入れを別々に判定する。
+3. `templates/evidence-plan.json`をコピーして検証コマンドをargv配列で定義し、`collect_delivery_evidence.py`で新規証跡ディレクトリへ収集する。
+4. matrix `--release`、readiness、顧客Issue、commit、終了コード、ログ、SHA-256 manifestを確認する。技術検証の成功を顧客承認へ読み替えない。
+5. 完了時は`templates/closeout.md`でopen Issue、顧客レビュー、branch、差分、tag、rollback、制約、残件、Knowledgeを棚卸しする。
 
 条件変更後の旧GOと旧証跡は削除せず、履歴化または無効化の判断をGitHub Issueへ残す。preflightと証跡収集はコミットごとに実行せず、最初の縦切り、納品判定前、環境変更時に実行する。
 
@@ -135,8 +189,9 @@ main -> develop -> feature/<topic>
 
 - 人間向けのPythonコメントとdocstringには、日本語を1文字以上含める。
 - formatter、lint、型検査などのdirectiveコメントは検査対象外とする。
-- pre-commitではステージ済みPythonだけを `python scripts/check_japanese_comments.py --staged` で検査する。
-- リポジトリ全体を確認するときは `python scripts/check_japanese_comments.py .` を使う。
+- pre-commitではステージ済みPythonだけを `python -X utf8 scripts/check_japanese_comments.py --staged` で検査する。
+- リポジトリ全体を確認するときは `python -X utf8 scripts/check_japanese_comments.py .` を使う。
+- WindowsでUTF-8のGitHubデータを取得・解析するPython subprocessは、呼出しを`python -X utf8`にし、`text=True`で出力を読む場合は`encoding="utf-8"`を明示する。plugin cacheをvendor・編集して回避しない。
 
 ## 詳細設計とDOCGEN
 
@@ -146,6 +201,7 @@ main -> develop -> feature/<topic>
 - 実装前は `DOCGEN_TODO`、実装後は `DOCGEN` を使い、生成範囲を手編集しない。
 - 同期は `python scripts/docgen.py "docs/40_design/detail/**/*.md"`、検査は `python scripts/docgen.py --check "docs/40_design/detail/**/*.md"` を使う。
 - DOCGEN差分がある状態で設計・実装・テストを完了扱いにしない。
+- 現行DOCGEN transformはPython sourceだけを対象にする。TypeScript詳細設計は手動reviewを行い、`docgen.py --check`のPASSをTypeScript同期のPASSへ読み替えない。TypeScript transformは本sliceで追加せず、[Issue #31](https://github.com/WFrog2511/2d-coop-survival/issues/31)で扱う。
 ## 完了時
 
 - PR前に、対象の品質検査とリンク確認を実行する。
@@ -158,5 +214,6 @@ main -> develop -> feature/<topic>
 ## TypeScript品質ゲート
 
 - 人間向けのTypeScriptコメントとJSDocには日本語を1文字以上含める。ESLint、TypeScript、triple-slash、coverage、formatter、shebang、generatedのdirectiveは検査対象外とする。
-- TypeScript品質変更では`pnpm lint`、`pnpm typecheck`、`pnpm check`を実行する。`pnpm lint:fix`は安全なlint修正、`pnpm format`はESLintのlayout修正だけを行う。
-- Solが計画・レビューし、Terraが実装する。writerは常に1 Agentとし、Agentの結果は人間承認の代替にしない。
+- 最終treeのTypeScript full gateは`pnpm check`だけである。`pnpm check`に含まれる`pnpm lint`、`pnpm typecheck`、`pnpm test:quality`、`pnpm test`を同じtreeへ別途実行しない。`pnpm lint:fix`は安全なlint修正、`pnpm format`はESLintのlayout修正だけを行う。
+- bundle検証が必要な場合は、`pnpm check`後に`pnpm build:bundle`を実行する。`pnpm build`は後方互換であり、PR gateの重複回避には使わない。
+- Luna Max planner/reviewerが計画・reviewし、Luna Max writerが唯一の実装writerとなる。Agentの結果は人間承認の代替にしない。
