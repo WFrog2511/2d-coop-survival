@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { findPath, generateArenaMap, selectAmmoBoxTiles, type TilePosition } from '../src/arena-map';
+import { SURVIVAL_LIMIT_MS } from '../src/rules';
 
 type EnemyId = 'basic-1' | 'basic-2' | 'basic-3' | 'drone';
 type EnemyPresentation = 'normal' | 'boundary' | 'hidden';
@@ -7,6 +8,10 @@ type EnemyPresentation = 'normal' | 'boundary' | 'hidden';
 async function currentAmmo(page: import('@playwright/test').Page): Promise<number> {
   const text = await page.getByTestId('ammo').textContent();
   return Number(text?.split('/')[0]);
+}
+
+function tileKeysFromAttribute(value: string | null): string[] {
+  return value ? value.split('|').filter(key => key.length > 0) : [];
 }
 
 async function moveToTile(
@@ -80,6 +85,7 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expect(page.getByTestId('reload')).toHaveText('待機');
   await expect(reloadProgress).toBeHidden();
   await expect(page.getByTestId('hp')).toHaveText('100');
+  await expect(page.getByTestId('survival-time')).toHaveText(/^\d\d:\d\d$/);
   await expect(page.getByTestId('map-seed')).toHaveText('15');
   await expect(page.getByTestId('player-tile')).toHaveText(/\d+,\d+/);
   const playerTileHud = page.getByTestId('player-tile');
@@ -126,13 +132,21 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   const boxTiles = selectAmmoBoxTiles(map);
   expect(boxTiles).toHaveLength(4);
   const firstBox = boxTiles[0];
+  const firstBoxKey = firstBox.x + ',' + firstBox.y;
+  const initialBoxKeys = await page.getByTestId('ammo-box-count').getAttribute('data-active-tiles');
+  expect(tileKeysFromAttribute(initialBoxKeys)).toContain(firstBoxKey);
   await moveToTile(page, map, firstBox, playerTileHud);
   await expect(page.getByTestId('ammo-box-count')).toHaveText('3');
+  const waitingBoxKeys = await page.getByTestId('ammo-box-count').getAttribute('data-active-tiles');
+  expect(tileKeysFromAttribute(waitingBoxKeys)).not.toContain(firstBoxKey);
+  await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-respawn-tiles', firstBoxKey);
   await expect(page.getByTestId('ammo-reserve')).toHaveText('予備 60/60');
 
   await moveToTile(page, map, map.start, playerTileHud);
   await moveToTile(page, map, firstBox, playerTileHud);
   await expect(page.getByTestId('ammo-box-count')).toHaveText('3');
+  await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-active-tiles', waitingBoxKeys ?? '');
+  await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-respawn-tiles', firstBoxKey);
   await expect(page.getByTestId('ammo-reserve')).toHaveAttribute('data-reserve', '60');
 
   await page.keyboard.press('2');
@@ -172,8 +186,11 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expect.poll(async () => reloadProgress.evaluate(element => (element as HTMLProgressElement).value)).toBe(0);
 
   await expect(page.getByTestId('defeat')).toBeVisible({ timeout: 45_000 });
+  await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-respawn-tiles', '');
   await page.getByTestId('retry').click();
   await expect(page.getByTestId('defeat')).toBeHidden();
+  await expect(page.getByTestId('victory')).toBeHidden();
+  await expect(page.getByTestId('survival-time')).toHaveText('05:00');
   await expect(page.getByTestId('weapon')).toHaveText('アサルトライフル');
   await expect(page.getByTestId('ammo')).toHaveText('20/20');
   await expect(page.getByTestId('ammo-reserve')).toHaveText('予備 40/60');
@@ -197,4 +214,28 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expectEnemyPresentation(page, 'basic-3', 'hidden');
   await expectEnemyPresentation(page, 'drone', 'hidden');
   expect(errors).toEqual([]);
+});
+
+test('5分の境界で勝利し、戦闘停止後の再挑戦でタイマーと状態を初期化できる', async ({ page }) => {
+  await page.clock.install({ time: 15 });
+  await page.goto('/');
+  await expect(page.getByTestId('survival-time')).toHaveText(/^\d\d:\d\d$/);
+  const playerTile = page.getByTestId('player-tile');
+  const beforeTerminalTile = await playerTile.textContent();
+  await page.clock.fastForward(SURVIVAL_LIMIT_MS);
+  await expect(page.getByTestId('survival-time')).toHaveText('00:00');
+  await expect(page.getByTestId('victory')).toBeVisible();
+  await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-respawn-tiles', '');
+  await expect(page.getByTestId('defeat')).toBeHidden();
+  await page.keyboard.press('2');
+  await expect(page.getByTestId('weapon')).toHaveText('アサルトライフル');
+  await page.keyboard.down('d');
+  await page.clock.fastForward(500);
+  await page.keyboard.up('d');
+  await expect(playerTile).toHaveText(beforeTerminalTile ?? '');
+  await page.getByTestId('retry').click();
+  await expect(page.getByTestId('victory')).toBeHidden();
+  await expect(page.getByTestId('defeat')).toBeHidden();
+  await expect(page.getByTestId('survival-time')).toHaveText('05:00');
+  await expect(page.getByTestId('ammo')).toHaveText('20/20');
 });

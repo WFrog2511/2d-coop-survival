@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AMMO_BOX_RESPAWN_MS,
   ENEMY_INSTANCE_IDS,
   INITIAL_STATE,
+  SURVIVAL_LIMIT_MS,
   WEAPONS,
+  advanceSurvivalState,
   canFireAt,
   collectAmmoBox,
   completeReload,
@@ -10,7 +13,9 @@ import {
   damagePlayer,
   droneLateralSpeedAt,
   fireWeapon,
+  hasReachedSurvivalLimit,
   isEnemyDefeated,
+  remainingSurvivalMs,
   resolveDamage,
   respawnEnemy,
   retryCombat,
@@ -64,6 +69,34 @@ describe('戦闘ルール', () => {
   it('ドローン横速度は決定的で複数時刻に応じて変化する', () => {
     expect(droneLateralSpeedAt(100)).toBe(droneLateralSpeedAt(100));
     expect(new Set([droneLateralSpeedAt(0), droneLateralSpeedAt(100), droneLateralSpeedAt(200)])).toHaveLength(3);
+  });
+
+  it('5分の残り時間と勝利遷移は境界を含めて判定する', () => {
+    const startedAt = 1000;
+    expect(SURVIVAL_LIMIT_MS).toBe(300000);
+    expect(AMMO_BOX_RESPAWN_MS).toBe(300000);
+    expect(remainingSurvivalMs(startedAt, startedAt)).toBe(SURVIVAL_LIMIT_MS);
+    expect(remainingSurvivalMs(startedAt, startedAt + SURVIVAL_LIMIT_MS - 1)).toBe(1);
+    expect(remainingSurvivalMs(startedAt, startedAt + SURVIVAL_LIMIT_MS)).toBe(0);
+    expect(hasReachedSurvivalLimit(startedAt, startedAt + SURVIVAL_LIMIT_MS - 1)).toBe(false);
+    expect(hasReachedSurvivalLimit(startedAt, startedAt + SURVIVAL_LIMIT_MS)).toBe(true);
+    expect(advanceSurvivalState(INITIAL_STATE, startedAt, startedAt + SURVIVAL_LIMIT_MS - 1)).toBe(INITIAL_STATE);
+    const victory = advanceSurvivalState(INITIAL_STATE, startedAt, startedAt + SURVIVAL_LIMIT_MS);
+    expect(victory).toMatchObject({ victory: true, defeated: false, reloading: null });
+    expect(advanceSurvivalState(victory, startedAt, startedAt + SURVIVAL_LIMIT_MS)).toBe(victory);
+  });
+
+  it('勝利状態は射撃、リロード、被ダメージ、敵、箱取得を無副作用で拒否する', () => {
+    const victory = { ...INITIAL_STATE, victory: true, reloading: 'rifle' as const };
+    expect(canFireAt(victory, 0)).toBe(false);
+    expect(fireWeapon(victory, 0).state).toBe(victory);
+    expect(startReload(victory)).toBe(victory);
+    expect(completeReload(victory, 'rifle')).toBe(victory);
+    expect(selectWeapon(victory, 'shotgun')).toBe(victory);
+    expect(damagePlayer(victory, 100)).toBe(victory);
+    expect(damageEnemy(victory, 'basic-1', 100)).toBe(victory);
+    expect(respawnEnemy(victory, 'basic-1')).toBe(victory);
+    expect(collectAmmoBox(victory)).toEqual({ state: victory, collected: false });
   });
 
   it('ライフルは発射時に1発消費し、境界時だけ次弾を許可する', () => {
@@ -156,6 +189,7 @@ describe('戦闘ルール', () => {
     const retried = retryCombat();
     expect(changed).not.toEqual(retried);
     expect(retried).toEqual(INITIAL_STATE);
+    expect(retried.victory).toBe(false);
     expect(retried.ammo).not.toBe(INITIAL_STATE.ammo);
     expect(retried.nextFireAt).not.toBe(INITIAL_STATE.nextFireAt);
     expect(retried.enemies).not.toBe(INITIAL_STATE.enemies);

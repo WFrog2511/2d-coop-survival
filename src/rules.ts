@@ -4,6 +4,8 @@ export type DamageType = 'smallCaliber' | 'scatter';
 export type EnemyInstanceId = 'basic-1' | 'basic-2' | 'basic-3' | 'drone-1';
 
 export const ENEMY_INSTANCE_IDS: EnemyInstanceId[] = ['basic-1', 'basic-2', 'basic-3', 'drone-1'];
+export const SURVIVAL_LIMIT_MS = 300000;
+export const AMMO_BOX_RESPAWN_MS = 300000;
 
 export type WeaponDefinition = {
   label: string;
@@ -33,6 +35,7 @@ export type EnemyState = {
 export type CombatState = {
   playerHp: number;
   defeated: boolean;
+  victory: boolean;
   weapon: WeaponId;
   ammo: Record<WeaponId, number>;
   reserve: Record<WeaponId, number>;
@@ -116,6 +119,7 @@ const INITIAL_ENEMIES: Record<EnemyInstanceId, EnemyState> = {
 export const INITIAL_STATE: CombatState = {
   playerHp: 100,
   defeated: false,
+  victory: false,
   weapon: 'rifle',
   ammo: { rifle: WEAPONS.rifle.magazineSize, shotgun: WEAPONS.shotgun.magazineSize },
   reserve: { rifle: WEAPONS.rifle.reserveInitial, shotgun: WEAPONS.shotgun.reserveInitial },
@@ -133,17 +137,36 @@ function cloneEnemies(enemies: Record<EnemyInstanceId, EnemyState>): Record<Enem
   };
 }
 
+export function remainingSurvivalMs(startedAt: number, now: number): number {
+  return Math.min(SURVIVAL_LIMIT_MS, Math.max(0, startedAt + SURVIVAL_LIMIT_MS - now));
+}
+
+export function hasReachedSurvivalLimit(startedAt: number, now: number): boolean {
+  return now >= startedAt + SURVIVAL_LIMIT_MS;
+}
+
+export function advanceSurvivalState(state: CombatState, startedAt: number, now: number): CombatState {
+  if (state.defeated || state.victory || !hasReachedSurvivalLimit(startedAt, now))
+    return state;
+  return { ...state, victory: true, reloading: null };
+}
+
 export function damagePlayer(state: CombatState, amount: number): CombatState {
+  if (state.defeated || state.victory)
+    return state;
   const playerHp = Math.max(0, state.playerHp - amount);
   return { ...state, playerHp, defeated: playerHp === 0 };
 }
 
 export function selectWeapon(state: CombatState, weapon: WeaponId): CombatState {
+  if (state.defeated || state.victory)
+    return state;
   return { ...state, weapon, reloading: weapon === state.weapon ? state.reloading : null };
 }
 
 export function canFireAt(state: CombatState, now: number): boolean {
   return !state.defeated
+    && !state.victory
     && state.reloading === null
     && state.ammo[state.weapon] > 0
     && now >= state.nextFireAt[state.weapon];
@@ -166,6 +189,7 @@ export function startReload(state: CombatState): CombatState {
   const weapon = state.weapon;
   if (
     state.defeated
+    || state.victory
     || state.reloading !== null
     || state.ammo[weapon] >= WEAPONS[weapon].magazineSize
     || state.reserve[weapon] <= 0
@@ -178,7 +202,7 @@ export function cancelReload(state: CombatState): CombatState {
 }
 
 export function completeReload(state: CombatState, weapon: WeaponId): CombatState {
-  if (state.reloading !== weapon) return state;
+  if (state.defeated || state.victory || state.reloading !== weapon) return state;
   const magazine = state.ammo[weapon];
   const amount = Math.min(
     WEAPONS[weapon].magazineSize - magazine,
@@ -193,6 +217,8 @@ export function completeReload(state: CombatState, weapon: WeaponId): CombatStat
 }
 
 export function collectAmmoBox(state: CombatState): AmmoBoxResult {
+  if (state.defeated || state.victory)
+    return { state, collected: false };
   const reserve = { ...state.reserve };
   let collected = false;
   (Object.keys(WEAPONS) as WeaponId[]).forEach((weapon) => {
@@ -209,6 +235,8 @@ export function collectAmmoBox(state: CombatState): AmmoBoxResult {
 }
 
 export function damageEnemy(state: CombatState, enemyId: EnemyInstanceId, amount: number): CombatState {
+  if (state.defeated || state.victory)
+    return state;
   const enemy = state.enemies[enemyId];
   const hp = Math.max(0, enemy.hp - amount);
   return {
@@ -222,6 +250,8 @@ export function isEnemyDefeated(state: CombatState, enemyId: EnemyInstanceId): b
 }
 
 export function respawnEnemy(state: CombatState, enemyId: EnemyInstanceId): CombatState {
+  if (state.defeated || state.victory)
+    return state;
   const enemy = state.enemies[enemyId];
   return {
     ...state,
