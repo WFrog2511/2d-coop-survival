@@ -30,6 +30,15 @@ export type SpawnRequest = {
   occupied: readonly TilePosition[];
 };
 
+export function viewportTileRect(view: { left: number; top: number; right: number; bottom: number }): TileRect {
+  return {
+    left: Math.max(0, Math.floor(view.left / TILE_SIZE)),
+    top: Math.max(0, Math.floor(view.top / TILE_SIZE)),
+    right: Math.max(0, Math.min(ARENA_WIDTH_TILES - 1, Math.ceil(view.right / TILE_SIZE) - 1)),
+    bottom: Math.max(0, Math.min(ARENA_HEIGHT_TILES - 1, Math.ceil(view.bottom / TILE_SIZE) - 1)),
+  };
+}
+
 class SeededRandom {
   constructor(private state: number) {}
 
@@ -169,7 +178,9 @@ export function selectSpawnTile(
   seed: number,
 ): TilePosition | null {
   const occupied = new Set(request.occupied.map(positionKey));
-  const candidates = floorTiles(map).filter(position => !occupied.has(positionKey(position)));
+  const candidates = floorTiles(map).filter(position =>
+    !occupied.has(positionKey(position)) && findPath(map, request.player, position).length > 0,
+  );
   if (candidates.length === 0) return null;
   const outside = candidates.filter(position => !inside(position, request.viewport));
   if (outside.length > 0) {

@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, enemyVisibility, findPath, hasLineOfSight, type EnemyVisibility, generateArenaMap, generateNextArenaMap, nextSeed, respawnDelayFor, selectAmmoBoxTiles, selectSpawnTile, type ArenaMap, type TilePosition } from './arena-map';
+import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, enemyVisibility, findPath, hasLineOfSight, type EnemyVisibility, generateArenaMap, generateNextArenaMap, nextSeed, respawnDelayFor, selectAmmoBoxTiles, selectSpawnTile, type ArenaMap, type TilePosition, viewportTileRect } from './arena-map';
 import { AMMO_BOX_RESPAWN_MS, ENEMY_INSTANCE_IDS, SURVIVAL_LIMIT_MS, WEAPONS, advanceSurvivalState, cancelReload, collectAmmoBox as collectAmmoBoxState, completeReload, damageEnemy, damagePlayer, droneLateralSpeedAt, fireWeapon, isEnemyDefeated, remainingSurvivalMs, resolveDamage, respawnEnemy, retryCombat, selectWeapon, startReload, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type WeaponId } from './rules';
 const WIDTH = 800;
 const HEIGHT = 500;
@@ -29,6 +29,12 @@ type PathState = {
   nextAt: number;
   playerTile: TilePosition;
   enemyTile: TilePosition;
+};
+type AmmoBoxState = {
+  originTile: TilePosition;
+  currentTile: TilePosition | null;
+  respawnCount: number;
+  seedOffset: number;
 };
 type Controls = Phaser.Types.Input.Keyboard.CursorKeys & {
   w: Phaser.Input.Keyboard.Key;
@@ -100,7 +106,7 @@ class Arena extends Phaser.Scene {
   private bullets!: Phaser.Physics.Arcade.Group;
   private walls!: Phaser.Physics.Arcade.StaticGroup;
   private ammoBoxes!: Phaser.Physics.Arcade.StaticGroup;
-  private ammoBoxTiles: TilePosition[] = [];
+  private ammoBoxStates = new Map<string, AmmoBoxState>();
   private ammoBoxRespawns = new Map<string, Phaser.Time.TimerEvent>();
   private survivalTimer: Phaser.Time.TimerEvent | undefined;
   private survivalStartedAt = 0;
@@ -229,6 +235,8 @@ class Arena extends Phaser.Scene {
     });
     this.updateEnemyVisibility(true);
     this.startSurvivalTimer();
+    if ((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV)
+      (window as Window & { __arenaScene?: Arena }).__arenaScene = this;
     feedback.textContent = '-';
     resultPanel.hidden = true;
     resultPanel.dataset.state = 'playing';
@@ -242,7 +250,7 @@ class Arena extends Phaser.Scene {
     this.wallArt?.destroy();
     this.walls.clear(true, true);
     this.ammoBoxes.clear(true, true);
-    this.ammoBoxTiles = [];
+    this.ammoBoxStates.clear();
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     this.ground = this.add.graphics().setDepth(-2).lineStyle(1, 0x31516b, 0.55);
     for (let x = 0; x <= WORLD_WIDTH; x += TILE_SIZE)
@@ -264,27 +272,66 @@ class Arena extends Phaser.Scene {
   }
 
   private buildAmmoBoxes(): void {
-    this.ammoBoxTiles = selectAmmoBoxTiles(this.map);
-    this.ammoBoxTiles.forEach(tile => this.spawnAmmoBox(tile));
+    selectAmmoBoxTiles(this.map).forEach((tile, index) => {
+      const boxId = `ammo-box-${index + 1}`;
+      this.ammoBoxStates.set(boxId, {
+        originTile: { ...tile },
+        currentTile: null,
+        respawnCount: 0,
+        seedOffset: index,
+      });
+      this.spawnAmmoBox(boxId, tile);
+    });
   }
 
-  private spawnAmmoBox(tile: TilePosition): void {
-    if (this.hasAmmoBox(tile))
+  private spawnAmmoBox(boxId: string, tile: TilePosition): void {
+    const state = this.ammoBoxStates.get(boxId);
+    if (!state || state.currentTile !== null || this.hasAmmoBox(boxId) || this.activeAmmoBoxTiles().some(activeTile => sameTile(activeTile, tile)))
       return;
     const point = this.world(tile);
     const box = this.physics.add.staticImage(point.x, point.y, 'ammo-box').setDepth(1);
+    box.setData('boxId', boxId);
     box.setData('tile', { ...tile });
     box.setData('tileKey', tileKey(tile));
     this.ammoBoxes.add(box);
+    state.currentTile = { ...tile };
   }
 
-  private hasAmmoBox(tile: TilePosition): boolean {
-    const key = tileKey(tile);
-    return this.ammoBoxes.getChildren().some(child => child.active && child.getData('tileKey') === key);
+  private hasAmmoBox(boxId: string): boolean {
+    return this.ammoBoxes.getChildren().some(child => child.active && child.getData('boxId') === boxId);
+  }
+
+  private activeAmmoBoxTiles(): TilePosition[] {
+    const tiles: TilePosition[] = [];
+    this.ammoBoxStates.forEach((state) => {
+      if (state.currentTile)
+        tiles.push(state.currentTile);
+    });
+    return tiles;
   }
 
   private activeAmmoBoxKeys(): string[] {
-    return this.ammoBoxTiles.filter(tile => this.hasAmmoBox(tile)).map(tileKey);
+    return this.activeAmmoBoxTiles().map(tileKey);
+  }
+
+  private activeAmmoBoxEntries(): string[] {
+    const entries: string[] = [];
+    this.ammoBoxStates.forEach((state, boxId) => {
+      if (state.currentTile)
+        entries.push(`${boxId}:${tileKey(state.currentTile)}`);
+    });
+    return entries;
+  }
+
+  private offscreenAmmoBoxIds(): string[] {
+    const view = this.viewport();
+    const ids: string[] = [];
+    this.ammoBoxStates.forEach((state, boxId) => {
+      const tile = state.currentTile;
+      if (tile && (tile.x < view.left || tile.x > view.right || tile.y < view.top || tile.y > view.bottom))
+        ids.push(boxId);
+    });
+    return ids;
   }
 
   private startSurvivalTimer(): void {
@@ -378,7 +425,7 @@ class Arena extends Phaser.Scene {
   private spawnEnemy(id: EnemyInstanceId): boolean {
     const occupied = [
       this.tile(this.player),
-      ...this.ammoBoxTiles,
+      ...this.activeAmmoBoxTiles(),
       ...ENEMY_IDS
         .filter(other => other !== id && this.enemies[other].active)
         .map(other => this.tile(this.enemies[other])),
@@ -618,16 +665,41 @@ class Arena extends Phaser.Scene {
     this.refreshHud();
   }
 
-  private scheduleAmmoBoxRespawn(tile: TilePosition): void {
-    const key = tileKey(tile);
-    if (this.ammoBoxRespawns.has(key))
+  private scheduleAmmoBoxRespawn(boxId: string): void {
+    if (this.ammoBoxRespawns.has(boxId))
+      return;
+    const state = this.ammoBoxStates.get(boxId);
+    if (!state || state.currentTile !== null)
       return;
     const generation = this.generation;
-    this.ammoBoxRespawns.set(key, this.time.delayedCall(AMMO_BOX_RESPAWN_MS, () => {
-      this.ammoBoxRespawns.delete(key);
+    this.ammoBoxRespawns.set(boxId, this.time.delayedCall(AMMO_BOX_RESPAWN_MS, () => {
+      this.ammoBoxRespawns.delete(boxId);
       if (generation !== this.generation || this.state.defeated || this.state.victory)
         return;
-      this.spawnAmmoBox(tile);
+      const current = this.ammoBoxStates.get(boxId);
+      if (!current || current.currentTile !== null || this.hasAmmoBox(boxId))
+        return;
+      current.respawnCount += 1;
+      const playerTile = this.tile(this.player);
+      const occupied = [
+        playerTile,
+        current.originTile,
+        ...this.activeAmmoBoxTiles(),
+        ...ENEMY_IDS
+          .filter(id => this.enemies[id].active)
+          .map(id => this.tile(this.enemies[id])),
+      ];
+      const tile = selectSpawnTile(
+        this.map,
+        { player: playerTile, viewport: this.viewport(), occupied },
+        nextSeed(this.map.seed + current.respawnCount + current.seedOffset),
+      );
+      if (!tile) {
+        feedback.textContent = '弾薬箱の再配置先がありません';
+        this.refreshHud();
+        return;
+      }
+      this.spawnAmmoBox(boxId, tile);
       this.refreshHud();
     }));
   }
@@ -635,15 +707,17 @@ class Arena extends Phaser.Scene {
   private collectAmmoBox(box: Phaser.GameObjects.GameObject): void {
     if (this.state.defeated || this.state.victory || !box.active)
       return;
-    const tile = box.getData('tile') as TilePosition | undefined;
-    if (!tile || this.ammoBoxRespawns.has(tileKey(tile)))
+    const boxId = box.getData('boxId') as string | undefined;
+    const state = boxId ? this.ammoBoxStates.get(boxId) : undefined;
+    if (!boxId || !state || state.currentTile === null || this.ammoBoxRespawns.has(boxId))
       return;
     const result = collectAmmoBoxState(this.state);
     if (!result.collected)
       return;
     this.state = result.state;
     this.ammoBoxes.remove(box, true, true);
-    this.scheduleAmmoBoxRespawn(tile);
+    state.currentTile = null;
+    this.scheduleAmmoBoxRespawn(boxId);
     feedback.textContent = '弾薬箱から補給しました';
     this.refreshHud();
   }
@@ -672,13 +746,7 @@ class Arena extends Phaser.Scene {
   }
 
   private viewport(): { left: number; top: number; right: number; bottom: number } {
-    const view = this.cameras.main.worldView;
-    return {
-      left: Math.max(0, Math.floor(view.left / TILE_SIZE)),
-      top: Math.max(0, Math.floor(view.top / TILE_SIZE)),
-      right: Math.min(ARENA_WIDTH_TILES - 1, Math.floor(view.right / TILE_SIZE)),
-      bottom: Math.min(ARENA_HEIGHT_TILES - 1, Math.floor(view.bottom / TILE_SIZE)),
-    };
+    return viewportTileRect(this.cameras.main.worldView);
   }
 
   private updateTileHud(): void {
@@ -716,7 +784,14 @@ class Arena extends Phaser.Scene {
     reserveHud.dataset.reserveCapacity = String(weapon.reserveMax);
     ammoBoxCountHud.value = String(this.ammoBoxes.countActive(true));
     ammoBoxCountHud.dataset.activeTiles = this.activeAmmoBoxKeys().join('|');
-    ammoBoxCountHud.dataset.respawnTiles = [...this.ammoBoxRespawns.keys()].join('|');
+    ammoBoxCountHud.dataset.activeBoxes = this.activeAmmoBoxEntries().join('|');
+    ammoBoxCountHud.dataset.offscreenBoxes = this.offscreenAmmoBoxIds().join('|');
+    const pendingBoxIds = [...this.ammoBoxRespawns.keys()];
+    ammoBoxCountHud.dataset.respawnBoxes = pendingBoxIds.join('|');
+    ammoBoxCountHud.dataset.respawnTiles = pendingBoxIds.map((boxId) => {
+      const state = this.ammoBoxStates.get(boxId);
+      return state ? tileKey(state.originTile) : '';
+    }).filter(key => key.length > 0).join('|');
     reloadHud.value = this.state.reloading === null ? '待機' : `リロード中: ${WEAPONS[this.state.reloading].label}`;
     this.updateReloadProgressHud();
     this.updateSurvivalHud();

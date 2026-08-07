@@ -71,10 +71,10 @@ describe('戦闘ルール', () => {
     expect(new Set([droneLateralSpeedAt(0), droneLateralSpeedAt(100), droneLateralSpeedAt(200)])).toHaveLength(3);
   });
 
-  it('5分の残り時間と勝利遷移は境界を含めて判定する', () => {
+  it('3分の残り時間と勝利遷移は境界を含めて判定する', () => {
     const startedAt = 1000;
-    expect(SURVIVAL_LIMIT_MS).toBe(300000);
-    expect(AMMO_BOX_RESPAWN_MS).toBe(300000);
+    expect(SURVIVAL_LIMIT_MS).toBe(180000);
+    expect(AMMO_BOX_RESPAWN_MS).toBe(30000);
     expect(remainingSurvivalMs(startedAt, startedAt)).toBe(SURVIVAL_LIMIT_MS);
     expect(remainingSurvivalMs(startedAt, startedAt + SURVIVAL_LIMIT_MS - 1)).toBe(1);
     expect(remainingSurvivalMs(startedAt, startedAt + SURVIVAL_LIMIT_MS)).toBe(0);

@@ -4,8 +4,8 @@ export type DamageType = 'smallCaliber' | 'scatter';
 export type EnemyInstanceId = 'basic-1' | 'basic-2' | 'basic-3' | 'drone-1';
 
 export const ENEMY_INSTANCE_IDS: EnemyInstanceId[] = ['basic-1', 'basic-2', 'basic-3', 'drone-1'];
-export const SURVIVAL_LIMIT_MS = 300000;
-export const AMMO_BOX_RESPAWN_MS = 300000;
+export const SURVIVAL_LIMIT_MS = 180000;
+export const AMMO_BOX_RESPAWN_MS = 30000;
 
 export type WeaponDefinition = {
   label: string;
