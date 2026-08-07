@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
-import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, enemyVisibility, findPath, hasLineOfSight, type EnemyVisibility, generateArenaMap, generateNextArenaMap, nextSeed, respawnDelayFor, selectAmmoBoxTiles, selectSpawnTile, type ArenaMap, type TilePosition } from './arena-map';
-import { ENEMY_INSTANCE_IDS, WEAPONS, cancelReload, collectAmmoBox as collectAmmoBoxState, completeReload, damageEnemy, damagePlayer, droneLateralSpeedAt, fireWeapon, isEnemyDefeated, resolveDamage, respawnEnemy, retryCombat, selectWeapon, startReload, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type WeaponId } from './rules';
+import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, enemyVisibility, findPath, hasLineOfSight, type EnemyVisibility, generateArenaMap, generateNextArenaMap, nextSeed, respawnDelayFor, selectAmmoBoxTiles, selectSpawnTile, type ArenaMap, type TilePosition, viewportTileRect } from './arena-map';
+import { AMMO_BOX_RESPAWN_MS, ENEMY_INSTANCE_IDS, SURVIVAL_LIMIT_MS, WEAPONS, advanceSurvivalState, cancelReload, collectAmmoBox as collectAmmoBoxState, completeReload, damageEnemy, damagePlayer, droneLateralSpeedAt, fireWeapon, isEnemyDefeated, remainingSurvivalMs, resolveDamage, respawnEnemy, retryCombat, selectWeapon, startReload, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type WeaponId } from './rules';
 const WIDTH = 800;
 const HEIGHT = 500;
 const WORLD_WIDTH = ARENA_WIDTH_TILES * TILE_SIZE;
@@ -29,6 +29,12 @@ type PathState = {
   nextAt: number;
   playerTile: TilePosition;
   enemyTile: TilePosition;
+};
+type AmmoBoxState = {
+  originTile: TilePosition;
+  currentTile: TilePosition | null;
+  respawnCount: number;
+  seedOffset: number;
 };
 type Controls = Phaser.Types.Input.Keyboard.CursorKeys & {
   w: Phaser.Input.Keyboard.Key;
@@ -62,6 +68,17 @@ function enemyNumbers(): Record<EnemyInstanceId, number> {
 function sameTile(left: TilePosition, right: TilePosition): boolean {
   return left.x === right.x && left.y === right.y;
 }
+
+function tileKey(tile: TilePosition): string {
+  return `${tile.x},${tile.y}`;
+}
+
+function formatSurvivalTime(remainingMs: number): string {
+  const totalSeconds = Math.ceil(remainingMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
+}
 const playerHp = element<HTMLOutputElement>('[data-testid="hp"]');
 const weaponHud = element<HTMLOutputElement>('[data-testid="weapon"]');
 const ammoHud = element<HTMLOutputElement>('[data-testid="ammo"]');
@@ -74,8 +91,11 @@ const reloadHud = element<HTMLOutputElement>('[data-testid="reload"]');
 const mapSeedHud = element<HTMLOutputElement>('[data-testid="map-seed"]');
 const playerTileHud = element<HTMLOutputElement>('[data-testid="player-tile"]');
 const fps = element<HTMLOutputElement>('[data-testid="fps"]');
+const survivalTimeHud = element<HTMLOutputElement>('[data-testid="survival-time"]');
 const feedback = element<HTMLElement>('[data-testid="feedback"]');
+const resultPanel = element<HTMLElement>('[data-testid="result"]');
 const defeat = element<HTMLElement>('[data-testid="defeat"]');
+const victory = element<HTMLElement>('[data-testid="victory"]');
 const retry = element<HTMLButtonElement>('[data-testid="retry"]');
 const enemyHp: Record<EnemyInstanceId, HTMLOutputElement> = { 'basic-1': element('[data-testid="basic-1-hp"]'), 'basic-2': element('[data-testid="basic-2-hp"]'), 'basic-3': element('[data-testid="basic-3-hp"]'), 'drone-1': element('[data-testid="drone-hp"]') };
 let resetArena: (() => void) | undefined;
@@ -86,7 +106,10 @@ class Arena extends Phaser.Scene {
   private bullets!: Phaser.Physics.Arcade.Group;
   private walls!: Phaser.Physics.Arcade.StaticGroup;
   private ammoBoxes!: Phaser.Physics.Arcade.StaticGroup;
-  private ammoBoxTiles: TilePosition[] = [];
+  private ammoBoxStates = new Map<string, AmmoBoxState>();
+  private ammoBoxRespawns = new Map<string, Phaser.Time.TimerEvent>();
+  private survivalTimer: Phaser.Time.TimerEvent | undefined;
+  private survivalStartedAt = 0;
   private ground: Phaser.GameObjects.Graphics | undefined;
   private wallArt: Phaser.GameObjects.Graphics | undefined;
   private visibilityMask!: Phaser.GameObjects.Graphics;
@@ -153,8 +176,11 @@ class Arena extends Phaser.Scene {
   }
 
   update(): void {
+    if (this.state.defeated || this.state.victory)
+      return;
     fps.value = String(Math.round(this.game.loop.actualFps));
-    if (this.state.defeated)
+    this.updateSurvival();
+    if (this.state.defeated || this.state.victory)
       return;
     const x = Number(this.keys.d.isDown || this.keys.right.isDown) - Number(this.keys.a.isDown || this.keys.left.isDown);
     const y = Number(this.keys.s.isDown || this.keys.down.isDown) - Number(this.keys.w.isDown || this.keys.up.isDown);
@@ -178,14 +204,10 @@ class Arena extends Phaser.Scene {
 
   private reset(initial = false): void {
     this.generation += 1;
-    this.respawns.forEach(timer => timer.remove(false));
-    this.flashes.forEach(timer => timer.remove(false));
-    this.reloadTimer?.remove(false);
-    this.respawns.clear();
-    this.flashes.clear();
-    this.reloadTimer = undefined;
+    this.stopRunTimers();
     this.physics.resume();
     this.state = retryCombat();
+    this.survivalStartedAt = this.time.now;
     this.contactAt = enemyNumbers();
     this.knockbackUntil = enemyNumbers();
     this.respawnCount = enemyNumbers();
@@ -212,8 +234,14 @@ class Arena extends Phaser.Scene {
         throw new Error('マップ上に敵の出現位置を確保できません。');
     });
     this.updateEnemyVisibility(true);
+    this.startSurvivalTimer();
+    if ((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV)
+      (window as Window & { __arenaScene?: Arena }).__arenaScene = this;
     feedback.textContent = '-';
+    resultPanel.hidden = true;
+    resultPanel.dataset.state = 'playing';
     defeat.hidden = true;
+    victory.hidden = true;
     this.refreshHud();
   }
 
@@ -222,7 +250,7 @@ class Arena extends Phaser.Scene {
     this.wallArt?.destroy();
     this.walls.clear(true, true);
     this.ammoBoxes.clear(true, true);
-    this.ammoBoxTiles = [];
+    this.ammoBoxStates.clear();
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     this.ground = this.add.graphics().setDepth(-2).lineStyle(1, 0x31516b, 0.55);
     for (let x = 0; x <= WORLD_WIDTH; x += TILE_SIZE)
@@ -244,11 +272,102 @@ class Arena extends Phaser.Scene {
   }
 
   private buildAmmoBoxes(): void {
-    this.ammoBoxTiles = selectAmmoBoxTiles(this.map);
-    this.ammoBoxTiles.forEach((tile) => {
-      const point = this.world(tile);
-      this.ammoBoxes.add(this.physics.add.staticImage(point.x, point.y, 'ammo-box').setDepth(1));
+    selectAmmoBoxTiles(this.map).forEach((tile, index) => {
+      const boxId = `ammo-box-${index + 1}`;
+      this.ammoBoxStates.set(boxId, {
+        originTile: { ...tile },
+        currentTile: null,
+        respawnCount: 0,
+        seedOffset: index,
+      });
+      this.spawnAmmoBox(boxId, tile);
     });
+  }
+
+  private spawnAmmoBox(boxId: string, tile: TilePosition): void {
+    const state = this.ammoBoxStates.get(boxId);
+    if (!state || state.currentTile !== null || this.hasAmmoBox(boxId) || this.activeAmmoBoxTiles().some(activeTile => sameTile(activeTile, tile)))
+      return;
+    const point = this.world(tile);
+    const box = this.physics.add.staticImage(point.x, point.y, 'ammo-box').setDepth(1);
+    box.setData('boxId', boxId);
+    box.setData('tile', { ...tile });
+    box.setData('tileKey', tileKey(tile));
+    this.ammoBoxes.add(box);
+    state.currentTile = { ...tile };
+  }
+
+  private hasAmmoBox(boxId: string): boolean {
+    return this.ammoBoxes.getChildren().some(child => child.active && child.getData('boxId') === boxId);
+  }
+
+  private activeAmmoBoxTiles(): TilePosition[] {
+    const tiles: TilePosition[] = [];
+    this.ammoBoxStates.forEach((state) => {
+      if (state.currentTile)
+        tiles.push(state.currentTile);
+    });
+    return tiles;
+  }
+
+  private activeAmmoBoxKeys(): string[] {
+    return this.activeAmmoBoxTiles().map(tileKey);
+  }
+
+  private activeAmmoBoxEntries(): string[] {
+    const entries: string[] = [];
+    this.ammoBoxStates.forEach((state, boxId) => {
+      if (state.currentTile)
+        entries.push(`${boxId}:${tileKey(state.currentTile)}`);
+    });
+    return entries;
+  }
+
+  private offscreenAmmoBoxIds(): string[] {
+    const view = this.viewport();
+    const ids: string[] = [];
+    this.ammoBoxStates.forEach((state, boxId) => {
+      const tile = state.currentTile;
+      if (tile && (tile.x < view.left || tile.x > view.right || tile.y < view.top || tile.y > view.bottom))
+        ids.push(boxId);
+    });
+    return ids;
+  }
+
+  private startSurvivalTimer(): void {
+    const generation = this.generation;
+    this.survivalTimer = this.time.delayedCall(SURVIVAL_LIMIT_MS, () => {
+      this.survivalTimer = undefined;
+      if (generation !== this.generation)
+        return;
+      this.updateSurvival();
+    });
+  }
+
+  private updateSurvival(): void {
+    const next = advanceSurvivalState(this.state, this.survivalStartedAt, this.time.now);
+    this.updateSurvivalHud();
+    if (next === this.state)
+      return;
+    this.state = next;
+    this.enterTerminal('victory');
+  }
+
+  private updateSurvivalHud(): void {
+    survivalTimeHud.value = formatSurvivalTime(remainingSurvivalMs(this.survivalStartedAt, this.time.now));
+  }
+
+  private stopRunTimers(): void {
+    this.survivalTimer?.remove(false);
+    this.survivalTimer = undefined;
+    this.respawns.forEach(timer => timer.remove(false));
+    this.flashes.forEach(timer => timer.remove(false));
+    this.ammoBoxRespawns.forEach(timer => timer.remove(false));
+    this.respawns.clear();
+    this.flashes.clear();
+    this.ammoBoxRespawns.clear();
+    this.reloadTimer?.remove(false);
+    this.reloadTimer = undefined;
   }
 
   private updateVisibilityMask(force = false): void {
@@ -306,7 +425,7 @@ class Arena extends Phaser.Scene {
   private spawnEnemy(id: EnemyInstanceId): boolean {
     const occupied = [
       this.tile(this.player),
-      ...this.ammoBoxTiles,
+      ...this.activeAmmoBoxTiles(),
       ...ENEMY_IDS
         .filter(other => other !== id && this.enemies[other].active)
         .map(other => this.tile(this.enemies[other])),
@@ -396,7 +515,7 @@ class Arena extends Phaser.Scene {
   }
 
   private changeWeapon(weapon: WeaponId): void {
-    if (this.state.defeated || this.state.weapon === weapon)
+    if (this.state.defeated || this.state.victory || this.state.weapon === weapon)
       return;
     const interrupted = this.state.reloading !== null;
     if (interrupted)
@@ -407,7 +526,7 @@ class Arena extends Phaser.Scene {
   }
 
   private reload(): void {
-    if (this.state.defeated)
+    if (this.state.defeated || this.state.victory)
       return;
     const weapon = this.state.weapon;
     const next = startReload(this.state);
@@ -423,7 +542,7 @@ class Arena extends Phaser.Scene {
     const generation = this.generation;
     feedback.textContent = `リロード中: ${WEAPONS[weapon].label}`;
     this.reloadTimer = this.time.delayedCall(WEAPONS[weapon].reloadMs, () => {
-      if (generation !== this.generation || this.state.defeated)
+      if (generation !== this.generation || this.state.defeated || this.state.victory)
         return;
       this.state = completeReload(this.state, weapon);
       this.reloadTimer = undefined;
@@ -440,6 +559,8 @@ class Arena extends Phaser.Scene {
   }
 
   private tryFire(pointer: Phaser.Input.Pointer): void {
+    if (this.state.defeated || this.state.victory)
+      return;
     const weaponId = this.state.weapon;
     const weapon = WEAPONS[weaponId];
     if (this.state.ammo[weaponId] === 0) {
@@ -476,7 +597,7 @@ class Arena extends Phaser.Scene {
     const bullet = this.meta.has(first) ? first : second;
     const enemy = bullet === first ? second : first;
     const data = this.meta.get(bullet);
-    if (!data || enemy !== this.enemies[id] || !enemy.active || this.state.defeated)
+    if (!data || enemy !== this.enemies[id] || !enemy.active || this.state.defeated || this.state.victory)
       return;
     this.disableBullet(bullet);
     const result = resolveDamage(this.state.enemies[id].kind, data.damageType, data.damage);
@@ -503,7 +624,7 @@ class Arena extends Phaser.Scene {
     const delay = respawnDelayFor(ENEMIES[id].kind, id, this.respawnCount[id], this.map.seed);
     this.respawns.set(id, this.time.delayedCall(delay, () => {
       this.respawns.delete(id);
-      if (generation !== this.generation || this.state.defeated)
+      if (generation !== this.generation || this.state.defeated || this.state.victory)
         return;
       if (!this.spawnEnemy(id)) {
         feedback.textContent = `${ENEMY_LABELS[id]}の再出現位置がありません`;
@@ -515,7 +636,7 @@ class Arena extends Phaser.Scene {
   }
 
   private hitPlayer(id: EnemyInstanceId): void {
-    if (this.state.defeated || this.time.now - this.contactAt[id] < ENEMIES[id].cooldown)
+    if (this.state.defeated || this.state.victory || this.time.now - this.contactAt[id] < ENEMIES[id].cooldown)
       return;
     this.contactAt[id] = this.time.now;
     this.state = damagePlayer(this.state, ENEMIES[id].damage);
@@ -523,7 +644,12 @@ class Arena extends Phaser.Scene {
       this.refreshHud();
       return;
     }
-    this.stopReload();
+    this.enterTerminal('defeat');
+  }
+
+  private enterTerminal(result: 'defeat' | 'victory'): void {
+    this.stopRunTimers();
+    this.state = cancelReload(this.state);
     this.player.setVelocity(0, 0);
     ENEMY_IDS.forEach((enemyId) => {
       this.enemies[enemyId].setVelocity(0, 0);
@@ -531,19 +657,67 @@ class Arena extends Phaser.Scene {
     });
     this.disableAllBullets();
     this.physics.pause();
-    defeat.hidden = false;
+    resultPanel.hidden = false;
+    resultPanel.dataset.state = result;
+    defeat.hidden = result !== 'defeat';
+    victory.hidden = result !== 'victory';
     retry.focus();
     this.refreshHud();
   }
 
+  private scheduleAmmoBoxRespawn(boxId: string): void {
+    if (this.ammoBoxRespawns.has(boxId))
+      return;
+    const state = this.ammoBoxStates.get(boxId);
+    if (!state || state.currentTile !== null)
+      return;
+    const generation = this.generation;
+    this.ammoBoxRespawns.set(boxId, this.time.delayedCall(AMMO_BOX_RESPAWN_MS, () => {
+      this.ammoBoxRespawns.delete(boxId);
+      if (generation !== this.generation || this.state.defeated || this.state.victory)
+        return;
+      const current = this.ammoBoxStates.get(boxId);
+      if (!current || current.currentTile !== null || this.hasAmmoBox(boxId))
+        return;
+      current.respawnCount += 1;
+      const playerTile = this.tile(this.player);
+      const occupied = [
+        playerTile,
+        current.originTile,
+        ...this.activeAmmoBoxTiles(),
+        ...ENEMY_IDS
+          .filter(id => this.enemies[id].active)
+          .map(id => this.tile(this.enemies[id])),
+      ];
+      const tile = selectSpawnTile(
+        this.map,
+        { player: playerTile, viewport: this.viewport(), occupied },
+        nextSeed(this.map.seed + current.respawnCount + current.seedOffset),
+      );
+      if (!tile) {
+        feedback.textContent = '弾薬箱の再配置先がありません';
+        this.refreshHud();
+        return;
+      }
+      this.spawnAmmoBox(boxId, tile);
+      this.refreshHud();
+    }));
+  }
+
   private collectAmmoBox(box: Phaser.GameObjects.GameObject): void {
-    if (this.state.defeated || !box.active)
+    if (this.state.defeated || this.state.victory || !box.active)
+      return;
+    const boxId = box.getData('boxId') as string | undefined;
+    const state = boxId ? this.ammoBoxStates.get(boxId) : undefined;
+    if (!boxId || !state || state.currentTile === null || this.ammoBoxRespawns.has(boxId))
       return;
     const result = collectAmmoBoxState(this.state);
     if (!result.collected)
       return;
     this.state = result.state;
     this.ammoBoxes.remove(box, true, true);
+    state.currentTile = null;
+    this.scheduleAmmoBoxRespawn(boxId);
     feedback.textContent = '弾薬箱から補給しました';
     this.refreshHud();
   }
@@ -572,13 +746,7 @@ class Arena extends Phaser.Scene {
   }
 
   private viewport(): { left: number; top: number; right: number; bottom: number } {
-    const view = this.cameras.main.worldView;
-    return {
-      left: Math.max(0, Math.floor(view.left / TILE_SIZE)),
-      top: Math.max(0, Math.floor(view.top / TILE_SIZE)),
-      right: Math.min(ARENA_WIDTH_TILES - 1, Math.floor(view.right / TILE_SIZE)),
-      bottom: Math.min(ARENA_HEIGHT_TILES - 1, Math.floor(view.bottom / TILE_SIZE)),
-    };
+    return viewportTileRect(this.cameras.main.worldView);
   }
 
   private updateTileHud(): void {
@@ -615,8 +783,18 @@ class Arena extends Phaser.Scene {
     reserveHud.dataset.reserve = String(this.state.reserve[this.state.weapon]);
     reserveHud.dataset.reserveCapacity = String(weapon.reserveMax);
     ammoBoxCountHud.value = String(this.ammoBoxes.countActive(true));
+    ammoBoxCountHud.dataset.activeTiles = this.activeAmmoBoxKeys().join('|');
+    ammoBoxCountHud.dataset.activeBoxes = this.activeAmmoBoxEntries().join('|');
+    ammoBoxCountHud.dataset.offscreenBoxes = this.offscreenAmmoBoxIds().join('|');
+    const pendingBoxIds = [...this.ammoBoxRespawns.keys()];
+    ammoBoxCountHud.dataset.respawnBoxes = pendingBoxIds.join('|');
+    ammoBoxCountHud.dataset.respawnTiles = pendingBoxIds.map((boxId) => {
+      const state = this.ammoBoxStates.get(boxId);
+      return state ? tileKey(state.originTile) : '';
+    }).filter(key => key.length > 0).join('|');
     reloadHud.value = this.state.reloading === null ? '待機' : `リロード中: ${WEAPONS[this.state.reloading].label}`;
     this.updateReloadProgressHud();
+    this.updateSurvivalHud();
     mapSeedHud.value = String(this.map.seed);
     this.updateTileHud();
   }

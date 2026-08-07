@@ -74,17 +74,33 @@ h1 {
   accent-color: #7ee7ff;
 }
 
+.survival-time {
+  font-variant-numeric: tabular-nums;
+}
+
 [data-testid='feedback'] {
   min-height: 1.5em;
   color: #ffef76;
 }
 
-[data-testid='defeat'] {
+[data-testid='result'] {
   margin-top: 12px;
   padding: 16px;
+  border-radius: 12px;
+}
+
+[data-testid='defeat'] {
+  padding: 0;
   border: 2px solid #ff7b7b;
   border-radius: 12px;
   background: #341a28;
+}
+
+[data-testid='victory'] {
+  padding: 16px;
+  border: 2px solid #7dffb2;
+  border-radius: 12px;
+  background: #183a2b;
 }
 
 button {

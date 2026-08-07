@@ -17,6 +17,7 @@
           武器: <output data-testid="weapon">アサルトライフル</output>
           リロード: <output data-testid="reload">待機</output>
           プレイヤーHP: <output data-testid="hp">100</output>
+          残り時間: <output class="survival-time" data-testid="survival-time">03:00</output>
           マップseed: <output data-testid="map-seed">0</output>
           タイル座標: <output data-testid="player-tile">0,0</output>
           基本敵 #1 HP: <output data-testid="basic-1-hp">6</output>
@@ -40,9 +41,15 @@
           <output data-testid="ammo-box-count" hidden>4</output>
         </aside>
       </div>
-      <section data-testid="defeat" hidden aria-live="assertive">
-        <h2>敗北</h2>
-        <p>機械群との接触でHPが0になりました。</p>
+      <section data-testid="result" hidden aria-live="assertive" aria-atomic="true">
+        <div data-testid="defeat" hidden>
+          <h2>敗北</h2>
+          <p>機械群との接触でHPが0になりました。</p>
+        </div>
+        <div data-testid="victory" hidden>
+          <h2>勝利</h2>
+          <p>3分間、生き残りました。</p>
+        </div>
         <button data-testid="retry" type="button">再挑戦</button>
       </section>
     </main>

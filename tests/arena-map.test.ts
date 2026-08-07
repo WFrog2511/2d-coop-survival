@@ -5,6 +5,7 @@ import {
   hasLineOfSight,
   ARENA_HEIGHT_TILES,
   ARENA_WIDTH_TILES,
+  TILE_SIZE,
   findPath,
   generateArenaMap,
   generateNextArenaMap,
@@ -12,6 +13,7 @@ import {
   respawnDelayFor,
   selectSpawnTile,
   selectAmmoBoxTiles,
+  viewportTileRect,
   type ArenaMap,
   type TilePosition,
 } from '../src/arena-map';
@@ -122,6 +124,8 @@ describe('自動生成アリーナ', () => {
     expect(outside).not.toBeNull();
     if (!outside) throw new Error('画面外候補が必要です。');
     expect(outside.x < map.start.x - 1 || outside.x > map.start.x + 1 || outside.y < map.start.y - 1 || outside.y > map.start.y + 1).toBe(true);
+    expect(map.tiles[outside.y][outside.x]).toBe('floor');
+    expect(findPath(map, map.start, outside).length).toBeGreaterThan(0);
 
     const compact: ArenaMap = {
       ...map,
@@ -140,6 +144,39 @@ describe('自動生成アリーナ', () => {
       occupied: [{ x: 1, y: 1 }],
     }, seed);
     expect(fallback).toEqual({ x: 2, y: 2 });
+
+    const disconnected: ArenaMap = {
+      ...map,
+      width: 5,
+      height: 4,
+      start: { x: 1, y: 1 },
+      tiles: [
+        ['wall', 'wall', 'wall', 'wall', 'wall'],
+        ['wall', 'floor', 'wall', 'floor', 'wall'],
+        ['wall', 'floor', 'wall', 'floor', 'wall'],
+        ['wall', 'wall', 'wall', 'wall', 'wall'],
+      ],
+    };
+    expect(selectSpawnTile(disconnected, {
+      player: disconnected.start,
+      viewport: { left: 0, top: 0, right: 4, bottom: 3 },
+      occupied: [disconnected.start],
+    }, seed)).toEqual({ x: 1, y: 2 });
+  });
+
+  test('viewportの右端と下端は境界tileを含めず、部分的に見えるtileを含む', () => {
+    expect(viewportTileRect({
+      left: 0,
+      top: 0,
+      right: 20 * TILE_SIZE,
+      bottom: 12 * TILE_SIZE,
+    })).toEqual({ left: 0, top: 0, right: 19, bottom: 11 });
+    expect(viewportTileRect({
+      left: 0,
+      top: 0,
+      right: 20 * TILE_SIZE + 1,
+      bottom: 12 * TILE_SIZE + 1,
+    })).toEqual({ left: 0, top: 0, right: 20, bottom: 12 });
   });
 
   test('spawnは占有tileを重複選択せず、待ち時間は範囲内かつ決定的である', () => {
@@ -150,6 +187,11 @@ describe('自動生成アリーナ', () => {
       occupied: [map.start],
     }, seed);
     if (!first) throw new Error('最初のspawnが必要です。');
+    expect(selectSpawnTile(map, {
+      player: map.start,
+      viewport: { left: map.start.x, top: map.start.y, right: map.start.x, bottom: map.start.y },
+      occupied: [map.start],
+    }, seed)).toEqual(first);
     const second = selectSpawnTile(map, {
       player: map.start,
       viewport: { left: map.start.x, top: map.start.y, right: map.start.x, bottom: map.start.y },
