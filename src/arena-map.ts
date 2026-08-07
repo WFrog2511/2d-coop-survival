@@ -1,6 +1,7 @@
 export const TILE_SIZE = 40;
 export const ARENA_WIDTH_TILES = 40;
 export const ARENA_HEIGHT_TILES = 25;
+export const AMMO_BOX_COUNT = 4;
 
 export type Tile = 'wall' | 'floor';
 
@@ -144,6 +145,22 @@ export function allFloorsReachable(map: ArenaMap): boolean {
     });
   }
   return floorTiles(map).every(position => visited.has(positionKey(position)));
+}
+
+export function selectAmmoBoxTiles(
+  map: ArenaMap,
+  occupied: readonly TilePosition[] = [],
+  count = AMMO_BOX_COUNT,
+): TilePosition[] {
+  const occupiedKeys = new Set<string>([positionKey(map.start), ...occupied.map(positionKey)]);
+  return floorTiles(map)
+    .filter(position => !occupiedKeys.has(positionKey(position)))
+    .sort((left, right) => {
+      const leftRank = mixSeed(map.seed, 'ammo-box:' + positionKey(left));
+      const rightRank = mixSeed(map.seed, 'ammo-box:' + positionKey(right));
+      return leftRank - rightRank || left.y - right.y || left.x - right.x;
+    })
+    .slice(0, Math.max(0, count));
 }
 
 export function selectSpawnTile(

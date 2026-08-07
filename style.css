@@ -18,10 +18,60 @@ h1 {
   color: #7ee7ff;
 }
 
+#game-shell {
+  position: relative;
+  width: 800px;
+  max-width: 100%;
+}
+
 #game canvas {
   border-radius: 12px;
   max-width: 100%;
   height: auto;
+  display: block;
+}
+
+#ammo-panel {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: grid;
+  gap: 2px;
+  min-width: 156px;
+  padding: 10px 12px;
+  border: 1px solid #7ee7ff;
+  border-radius: 10px;
+  background: rgb(16 24 39 / 88%);
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.ammo-panel-caption,
+.ammo-panel-reserve {
+  font-size: 0.85rem;
+  color: #c7f7ff;
+}
+
+.ammo-panel-weapon {
+  font-size: 0.9rem;
+  color: #7ee7ff;
+}
+
+.ammo-panel-magazine {
+  font-size: 2rem;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.ammo-panel-reload-label {
+  font-size: 0.75rem;
+  color: #ffef76;
+}
+
+.ammo-panel-reload {
+  width: 100%;
+  height: 0.65rem;
+  accent-color: #7ee7ff;
 }
 
 [data-testid='feedback'] {

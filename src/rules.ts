@@ -11,6 +11,9 @@ export type WeaponDefinition = {
   automatic: boolean;
   fireIntervalMs: number;
   magazineSize: number;
+  reserveInitial: number;
+  reserveMax: number;
+  ammoBoxRecovery: number;
   reloadMs: number;
   pellets: number;
   damage: number;
@@ -32,9 +35,15 @@ export type CombatState = {
   defeated: boolean;
   weapon: WeaponId;
   ammo: Record<WeaponId, number>;
+  reserve: Record<WeaponId, number>;
   nextFireAt: Record<WeaponId, number>;
   reloading: WeaponId | null;
   enemies: Record<EnemyInstanceId, EnemyState>;
+};
+
+export type AmmoBoxResult = {
+  state: CombatState;
+  collected: boolean;
 };
 
 export type FireResult = {
@@ -49,6 +58,9 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     automatic: true,
     fireIntervalMs: 150,
     magazineSize: 20,
+    reserveInitial: 40,
+    reserveMax: 60,
+    ammoBoxRecovery: 20,
     reloadMs: 1200,
     pellets: 1,
     damage: 2,
@@ -63,6 +75,9 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     automatic: false,
     fireIntervalMs: 750,
     magazineSize: 4,
+    reserveInitial: 8,
+    reserveMax: 12,
+    ammoBoxRecovery: 4,
     reloadMs: 1600,
     pellets: 5,
     damage: 2,
@@ -103,6 +118,7 @@ export const INITIAL_STATE: CombatState = {
   defeated: false,
   weapon: 'rifle',
   ammo: { rifle: WEAPONS.rifle.magazineSize, shotgun: WEAPONS.shotgun.magazineSize },
+  reserve: { rifle: WEAPONS.rifle.reserveInitial, shotgun: WEAPONS.shotgun.reserveInitial },
   nextFireAt: { rifle: 0, shotgun: 0 },
   reloading: null,
   enemies: INITIAL_ENEMIES,
@@ -148,7 +164,12 @@ export function fireWeapon(state: CombatState, now: number): FireResult {
 
 export function startReload(state: CombatState): CombatState {
   const weapon = state.weapon;
-  if (state.defeated || state.reloading !== null || state.ammo[weapon] >= WEAPONS[weapon].magazineSize) return state;
+  if (
+    state.defeated
+    || state.reloading !== null
+    || state.ammo[weapon] >= WEAPONS[weapon].magazineSize
+    || state.reserve[weapon] <= 0
+  ) return state;
   return { ...state, reloading: weapon };
 }
 
@@ -158,11 +179,33 @@ export function cancelReload(state: CombatState): CombatState {
 
 export function completeReload(state: CombatState, weapon: WeaponId): CombatState {
   if (state.reloading !== weapon) return state;
+  const magazine = state.ammo[weapon];
+  const amount = Math.min(
+    WEAPONS[weapon].magazineSize - magazine,
+    state.reserve[weapon],
+  );
   return {
     ...state,
-    ammo: { ...state.ammo, [weapon]: WEAPONS[weapon].magazineSize },
+    ammo: { ...state.ammo, [weapon]: magazine + amount },
+    reserve: { ...state.reserve, [weapon]: state.reserve[weapon] - amount },
     reloading: null,
   };
+}
+
+export function collectAmmoBox(state: CombatState): AmmoBoxResult {
+  const reserve = { ...state.reserve };
+  let collected = false;
+  (Object.keys(WEAPONS) as WeaponId[]).forEach((weapon) => {
+    const amount = Math.min(
+      WEAPONS[weapon].ammoBoxRecovery,
+      WEAPONS[weapon].reserveMax - reserve[weapon],
+    );
+    if (amount > 0) {
+      reserve[weapon] += amount;
+      collected = true;
+    }
+  });
+  return collected ? { state: { ...state, reserve }, collected } : { state, collected };
 }
 
 export function damageEnemy(state: CombatState, enemyId: EnemyInstanceId, amount: number): CombatState {
@@ -190,6 +233,7 @@ export function retryCombat(): CombatState {
   return {
     ...INITIAL_STATE,
     ammo: { ...INITIAL_STATE.ammo },
+    reserve: { ...INITIAL_STATE.reserve },
     nextFireAt: { ...INITIAL_STATE.nextFireAt },
     enemies: cloneEnemies(INITIAL_STATE.enemies),
   };

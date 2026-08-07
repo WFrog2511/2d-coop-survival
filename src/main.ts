@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
-import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, enemyVisibility, findPath, hasLineOfSight, type EnemyVisibility, generateArenaMap, generateNextArenaMap, nextSeed, respawnDelayFor, selectSpawnTile, type ArenaMap, type TilePosition } from './arena-map';
-import { ENEMY_INSTANCE_IDS, WEAPONS, cancelReload, completeReload, damageEnemy, damagePlayer, droneLateralSpeedAt, fireWeapon, isEnemyDefeated, resolveDamage, respawnEnemy, retryCombat, selectWeapon, startReload, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type WeaponId } from './rules';
+import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, enemyVisibility, findPath, hasLineOfSight, type EnemyVisibility, generateArenaMap, generateNextArenaMap, nextSeed, respawnDelayFor, selectAmmoBoxTiles, selectSpawnTile, type ArenaMap, type TilePosition } from './arena-map';
+import { ENEMY_INSTANCE_IDS, WEAPONS, cancelReload, collectAmmoBox as collectAmmoBoxState, completeReload, damageEnemy, damagePlayer, droneLateralSpeedAt, fireWeapon, isEnemyDefeated, resolveDamage, respawnEnemy, retryCombat, selectWeapon, startReload, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type WeaponId } from './rules';
 const WIDTH = 800;
 const HEIGHT = 500;
 const WORLD_WIDTH = ARENA_WIDTH_TILES * TILE_SIZE;
@@ -65,6 +65,11 @@ function sameTile(left: TilePosition, right: TilePosition): boolean {
 const playerHp = element<HTMLOutputElement>('[data-testid="hp"]');
 const weaponHud = element<HTMLOutputElement>('[data-testid="weapon"]');
 const ammoHud = element<HTMLOutputElement>('[data-testid="ammo"]');
+const ammoPanelWeaponHud = element<HTMLOutputElement>('[data-testid="ammo-panel-weapon"]');
+const reserveHud = element<HTMLOutputElement>('[data-testid="ammo-reserve"]');
+const ammoBoxCountHud = element<HTMLOutputElement>('[data-testid="ammo-box-count"]');
+const reloadProgressLabel = element<HTMLElement>('[data-testid="reload-progress-label"]');
+const reloadProgressHud = element<HTMLProgressElement>('[data-testid="reload-progress"]');
 const reloadHud = element<HTMLOutputElement>('[data-testid="reload"]');
 const mapSeedHud = element<HTMLOutputElement>('[data-testid="map-seed"]');
 const playerTileHud = element<HTMLOutputElement>('[data-testid="player-tile"]');
@@ -80,6 +85,8 @@ class Arena extends Phaser.Scene {
   private silhouettes!: Record<EnemyInstanceId, Phaser.GameObjects.Image>;
   private bullets!: Phaser.Physics.Arcade.Group;
   private walls!: Phaser.Physics.Arcade.StaticGroup;
+  private ammoBoxes!: Phaser.Physics.Arcade.StaticGroup;
+  private ammoBoxTiles: TilePosition[] = [];
   private ground: Phaser.GameObjects.Graphics | undefined;
   private wallArt: Phaser.GameObjects.Graphics | undefined;
   private visibilityMask!: Phaser.GameObjects.Graphics;
@@ -106,11 +113,13 @@ class Arena extends Phaser.Scene {
     resetArena = () => this.reset();
     this.createTextures();
     this.walls = this.physics.add.staticGroup();
+    this.ammoBoxes = this.physics.add.staticGroup();
     this.player = this.physics.add
       .sprite(0, 0, 'player')
       .setCollideWorldBounds(true)
       .setBodySize(28, 28)
       .setDepth(3);
+    this.physics.add.overlap(this.player, this.ammoBoxes, (_player, box) => this.collectAmmoBox(box as Phaser.GameObjects.GameObject));
     this.visibilityMask = this.add.graphics().setDepth(2).setAlpha(0.25);
     this.enemies = {} as Record<EnemyInstanceId, Phaser.Physics.Arcade.Sprite>;
     this.silhouettes = {} as Record<EnemyInstanceId, Phaser.GameObjects.Image>;
@@ -153,6 +162,7 @@ class Arena extends Phaser.Scene {
     this.player.setVelocity((x / length) * 210, (y / length) * 210);
     this.updateTileHud();
     this.updateVisibilityMask();
+    this.updateReloadProgressHud();
     ENEMY_IDS.forEach(id => this.moveEnemy(id));
     this.updateEnemyVisibility();
     this.player.rotation = Phaser.Math.Angle.Between(this.player.x, this.player.y, this.input.activePointer.worldX, this.input.activePointer.worldY);
@@ -196,6 +206,7 @@ class Arena extends Phaser.Scene {
     camera.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     camera.centerOn(start.x, start.y);
     camera.startFollow(this.player);
+    this.buildAmmoBoxes();
     ENEMY_IDS.forEach((id) => {
       if (!this.spawnEnemy(id))
         throw new Error('マップ上に敵の出現位置を確保できません。');
@@ -210,6 +221,8 @@ class Arena extends Phaser.Scene {
     this.ground?.destroy();
     this.wallArt?.destroy();
     this.walls.clear(true, true);
+    this.ammoBoxes.clear(true, true);
+    this.ammoBoxTiles = [];
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     this.ground = this.add.graphics().setDepth(-2).lineStyle(1, 0x31516b, 0.55);
     for (let x = 0; x <= WORLD_WIDTH; x += TILE_SIZE)
@@ -228,6 +241,14 @@ class Arena extends Phaser.Scene {
           this.walls.add(wall);
         }
     this.walls.refresh();
+  }
+
+  private buildAmmoBoxes(): void {
+    this.ammoBoxTiles = selectAmmoBoxTiles(this.map);
+    this.ammoBoxTiles.forEach((tile) => {
+      const point = this.world(tile);
+      this.ammoBoxes.add(this.physics.add.staticImage(point.x, point.y, 'ammo-box').setDepth(1));
+    });
   }
 
   private updateVisibilityMask(force = false): void {
@@ -285,6 +306,7 @@ class Arena extends Phaser.Scene {
   private spawnEnemy(id: EnemyInstanceId): boolean {
     const occupied = [
       this.tile(this.player),
+      ...this.ammoBoxTiles,
       ...ENEMY_IDS
         .filter(other => other !== id && this.enemies[other].active)
         .map(other => this.tile(this.enemies[other])),
@@ -390,7 +412,11 @@ class Arena extends Phaser.Scene {
     const weapon = this.state.weapon;
     const next = startReload(this.state);
     if (next === this.state) {
-      feedback.textContent = this.state.reloading === null ? '弾倉は満タンです' : 'リロード中です';
+      feedback.textContent = this.state.reloading !== null
+        ? 'リロード中です'
+        : this.state.reserve[weapon] <= 0
+          ? '予備弾薬がありません。弾薬箱を探してください'
+          : '弾倉は満タンです';
       return;
     }
     this.state = next;
@@ -414,7 +440,12 @@ class Arena extends Phaser.Scene {
   }
 
   private tryFire(pointer: Phaser.Input.Pointer): void {
-    const weapon = WEAPONS[this.state.weapon];
+    const weaponId = this.state.weapon;
+    const weapon = WEAPONS[weaponId];
+    if (this.state.ammo[weaponId] === 0) {
+      this.reload();
+      return;
+    }
     if (BULLET_POOL_SIZE - this.bullets.countActive(true) < weapon.pellets)
       return;
     const result = fireWeapon(this.state, this.time.now);
@@ -505,6 +536,18 @@ class Arena extends Phaser.Scene {
     this.refreshHud();
   }
 
+  private collectAmmoBox(box: Phaser.GameObjects.GameObject): void {
+    if (this.state.defeated || !box.active)
+      return;
+    const result = collectAmmoBoxState(this.state);
+    if (!result.collected)
+      return;
+    this.state = result.state;
+    this.ammoBoxes.remove(box, true, true);
+    feedback.textContent = '弾薬箱から補給しました';
+    this.refreshHud();
+  }
+
   private disableBullet(bullet: Phaser.Physics.Arcade.Sprite): void {
     this.meta.delete(bullet);
     bullet.setVelocity(0, 0).disableBody(true, true);
@@ -543,14 +586,37 @@ class Arena extends Phaser.Scene {
     playerTileHud.value = `${tile.x},${tile.y}`;
   }
 
+  private updateReloadProgressHud(): void {
+    const isReloading = this.state.reloading !== null && this.reloadTimer !== undefined;
+    reloadProgressLabel.hidden = !isReloading;
+    reloadProgressHud.hidden = !isReloading;
+    if (!isReloading) {
+      reloadProgressHud.value = 0;
+      reloadProgressHud.removeAttribute('aria-valuetext');
+      return;
+    }
+    const progress = Phaser.Math.Clamp(this.reloadTimer!.getProgress(), 0, 1);
+    reloadProgressHud.value = progress;
+    reloadProgressHud.setAttribute('aria-valuetext', String(Math.round(progress * 100)) + '%');
+  }
+
   private refreshHud(): void {
     playerHp.value = String(this.state.playerHp);
     ENEMY_IDS.forEach((id) => {
       enemyHp[id].value = String(this.state.enemies[id].hp);
     });
     weaponHud.value = WEAPONS[this.state.weapon].label;
-    ammoHud.value = `${this.state.ammo[this.state.weapon]}/${WEAPONS[this.state.weapon].magazineSize}`;
+    const weapon = WEAPONS[this.state.weapon];
+    ammoPanelWeaponHud.value = weapon.label;
+    ammoHud.value = this.state.ammo[this.state.weapon] + '/' + weapon.magazineSize;
+    reserveHud.value = '予備 ' + this.state.reserve[this.state.weapon] + '/' + weapon.reserveMax;
+    ammoHud.dataset.magazine = String(this.state.ammo[this.state.weapon]);
+    ammoHud.dataset.magazineCapacity = String(weapon.magazineSize);
+    reserveHud.dataset.reserve = String(this.state.reserve[this.state.weapon]);
+    reserveHud.dataset.reserveCapacity = String(weapon.reserveMax);
+    ammoBoxCountHud.value = String(this.ammoBoxes.countActive(true));
     reloadHud.value = this.state.reloading === null ? '待機' : `リロード中: ${WEAPONS[this.state.reloading].label}`;
+    this.updateReloadProgressHud();
     mapSeedHud.value = String(this.map.seed);
     this.updateTileHud();
   }
@@ -609,6 +675,14 @@ class Arena extends Phaser.Scene {
     this.texture('wall', TILE_SIZE, TILE_SIZE, (context) => {
       context.fillStyle = '#26374a';
       context.fillRect(0, 0, TILE_SIZE, TILE_SIZE);
+    });
+    this.texture('ammo-box', 30, 30, (context) => {
+      context.fillStyle = '#d28b35';
+      context.fillRect(2, 4, 26, 22);
+      context.fillStyle = '#ffe1a3';
+      context.fillRect(5, 8, 20, 4);
+      context.fillStyle = '#7a461d';
+      context.fillRect(13, 4, 4, 22);
     });
     this.texture('bullet-rifle', 10, 10, (context) => {
       context.fillStyle = '#55d6ff';
