@@ -11,7 +11,9 @@ import {
   nextSeed,
   respawnDelayFor,
   selectSpawnTile,
+  selectAmmoBoxTiles,
   type ArenaMap,
+  type TilePosition,
 } from '../src/arena-map';
 
 const seed = 20_260_802;
@@ -65,6 +67,36 @@ describe('自動生成アリーナ', () => {
       expect(map.tiles[y][ARENA_WIDTH_TILES - 1]).toBe('wall');
     }
     expect(allFloorsReachable(map)).toBe(true);
+  });
+
+  test('弾薬箱はseedで決定的に4個を選び、start以外のfloorへ置く', () => {
+    const map = generateArenaMap(seed);
+    const boxes = selectAmmoBoxTiles(map);
+    expect(boxes).toHaveLength(4);
+    expect(new Set(boxes.map(tileKey))).toHaveLength(4);
+    expect(boxes).not.toContainEqual(map.start);
+    expect(boxes.every(position => map.tiles[position.y][position.x] === 'floor')).toBe(true);
+    expect(boxes.every(position => findPath(map, map.start, position).length > 0)).toBe(true);
+    expect(selectAmmoBoxTiles(map)).toEqual(boxes);
+    expect(selectAmmoBoxTiles(map, [boxes[0]])).not.toContainEqual(boxes[0]);
+  });
+
+  test('初期spawnは弾薬箱の占有tileを避ける', () => {
+    const map = generateArenaMap(seed);
+    const boxes = selectAmmoBoxTiles(map);
+    const spawned: TilePosition[] = [];
+    const occupied: TilePosition[] = [map.start, ...boxes];
+    for (let index = 0; index < 4; index += 1) {
+      const tile = selectSpawnTile(map, {
+        player: map.start,
+        viewport: { left: map.start.x - 1, top: map.start.y - 1, right: map.start.x + 1, bottom: map.start.y + 1 },
+        occupied: [...occupied, ...spawned],
+      }, nextSeed(map.seed + index));
+      if (!tile) throw new Error('初期spawn位置が必要です。');
+      expect(boxes).not.toContainEqual(tile);
+      expect(spawned).not.toContainEqual(tile);
+      spawned.push(tile);
+    }
   });
 
   test('BFSは4近傍の最短経路を返し、wallは通らない', () => {

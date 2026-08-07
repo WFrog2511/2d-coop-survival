@@ -15,7 +15,6 @@
         </p>
         <p data-testid="hud">
           武器: <output data-testid="weapon">アサルトライフル</output>
-          残弾: <output data-testid="ammo">20/20</output>
           リロード: <output data-testid="reload">待機</output>
           プレイヤーHP: <output data-testid="hp">100</output>
           マップseed: <output data-testid="map-seed">0</output>
@@ -29,7 +28,18 @@
         <p data-testid="affinity">高速ドローン耐性: 小口径弾 50% / 散弾 100%</p>
         <p data-testid="feedback" aria-live="polite">-</p>
       </header>
-      <div id="game" aria-label="戦闘アリーナ"></div>
+      <div id="game-shell">
+        <div id="game" aria-label="戦闘アリーナ"></div>
+        <aside id="ammo-panel" data-testid="ammo-panel" aria-label="弾数">
+          <span class="ammo-panel-caption">弾薬</span>
+          <output class="ammo-panel-weapon" data-testid="ammo-panel-weapon">アサルトライフル</output>
+          <output class="ammo-panel-magazine" data-testid="ammo">20/20</output>
+          <output class="ammo-panel-reserve" data-testid="ammo-reserve">予備 40/60</output>
+          <span class="ammo-panel-reload-label" data-testid="reload-progress-label" hidden>リロード中</span>
+          <progress class="ammo-panel-reload" data-testid="reload-progress" max="1" value="0" hidden aria-label="リロード進捗"></progress>
+          <output data-testid="ammo-box-count" hidden>4</output>
+        </aside>
+      </div>
       <section data-testid="defeat" hidden aria-live="assertive">
         <h2>敗北</h2>
         <p>機械群との接触でHPが0になりました。</p>

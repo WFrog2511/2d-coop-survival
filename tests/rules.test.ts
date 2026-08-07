@@ -4,6 +4,7 @@ import {
   INITIAL_STATE,
   WEAPONS,
   canFireAt,
+  collectAmmoBox,
   completeReload,
   damageEnemy,
   damagePlayer,
@@ -25,6 +26,9 @@ describe('戦闘ルール', () => {
       automatic: true,
       fireIntervalMs: 150,
       magazineSize: 20,
+      reserveInitial: 40,
+      reserveMax: 60,
+      ammoBoxRecovery: 20,
       reloadMs: 1200,
       pellets: 1,
       knockback: 0,
@@ -35,6 +39,9 @@ describe('戦闘ルール', () => {
       automatic: false,
       fireIntervalMs: 750,
       magazineSize: 4,
+      reserveInitial: 8,
+      reserveMax: 12,
+      ammoBoxRecovery: 4,
       reloadMs: 1600,
       pellets: 5,
       knockback: 240,
@@ -84,7 +91,36 @@ describe('戦闘ルール', () => {
     expect(fireWeapon(reloading, 0).fired).toBe(false);
     const completed = completeReload(reloading, 'rifle');
     expect(completed.ammo).toEqual({ rifle: 20, shotgun: 4 });
+    expect(completed.reserve).toEqual({ rifle: 20, shotgun: 8 });
     expect(completed.reloading).toBeNull();
+  });
+  it('予備弾薬が不足するリロードと共通箱の上限回復を扱う', () => {
+    const partial = {
+      ...INITIAL_STATE,
+      ammo: { ...INITIAL_STATE.ammo, rifle: 12 },
+      reserve: { ...INITIAL_STATE.reserve, rifle: 3 },
+    };
+    const reloading = startReload(partial);
+    const completed = completeReload(reloading, 'rifle');
+    expect(completed.ammo.rifle).toBe(15);
+    expect(completed.reserve.rifle).toBe(0);
+    const emptyReserve = {
+      ...INITIAL_STATE,
+      ammo: { ...INITIAL_STATE.ammo, rifle: 0 },
+      reserve: { ...INITIAL_STATE.reserve, rifle: 0 },
+    };
+    expect(startReload(emptyReserve)).toBe(emptyReserve);
+    expect(emptyReserve.reloading).toBeNull();
+    expect(completeReload(emptyReserve, 'rifle')).toBe(emptyReserve);
+    const box = collectAmmoBox({
+      ...INITIAL_STATE,
+      reserve: { rifle: 50, shotgun: 10 },
+    });
+    expect(box.collected).toBe(true);
+    expect(box.state.reserve).toEqual({ rifle: 60, shotgun: 12 });
+    const full = collectAmmoBox(box.state);
+    expect(full.collected).toBe(false);
+    expect(full.state).toBe(box.state);
   });
 
   it('武器切替はリロードを中断し、残弾を保持する', () => {
