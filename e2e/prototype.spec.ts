@@ -1,9 +1,20 @@
 import { expect, test } from '@playwright/test';
-import { findPath, generateArenaMap, selectAmmoBoxTiles, type TilePosition } from '../src/arena-map';
-import { AMMO_BOX_RESPAWN_MS, SURVIVAL_LIMIT_MS } from '../src/rules';
+import { SPAWN_PHASE_MS, enemyVisibility, findPath, generateArenaMap, primarySpawnDirection, selectAmmoBoxTiles, spawnDirectionForSlot, type SpawnDirection, type TilePosition } from '../src/arena-map';
+import { AMMO_BOX_RESPAWN_MS, ENEMY_INSTANCE_IDS, SURVIVAL_LIMIT_MS } from '../src/rules';
 
-type EnemyId = 'basic-1' | 'basic-2' | 'basic-3' | 'drone';
+type EnemyId = (typeof ENEMY_INSTANCE_IDS)[number];
 type EnemyPresentation = 'normal' | 'boundary' | 'hidden';
+type EnemySpawnMetadata = {
+  stableId: string;
+  spawnPhase: string;
+  primaryDirection: string;
+  assignedDirection: string;
+  spawnTile: string;
+};
+type ArenaDebugScene = {
+  physics: { pause: () => void; resume: () => void };
+  debugRespawnEnemy: (id: EnemyId) => void;
+};
 
 async function currentAmmo(page: import('@playwright/test').Page): Promise<number> {
   const text = await page.getByTestId('ammo').textContent();
@@ -31,7 +42,7 @@ async function moveToTile(
   const currentParts = currentText?.split(',').map(Number) ?? [];
   const current = { x: Number(currentParts[0]), y: Number(currentParts[1]) };
   const path = findPath(map, current, target);
-  if (path.length === 0) throw new Error('ammo box path is not available');
+  if (path.length === 0) throw new Error('弾薬箱までの経路がありません。');
   for (let index = 1; index < path.length; index += 1) {
     const previous = path[index - 1];
     const next = path[index];
@@ -61,7 +72,7 @@ async function collectAmmoBoxWithClock(
       return;
     }
     const path = findPath(map, current, target);
-    if (path.length < 2) throw new Error('ammo box path is not available');
+    if (path.length < 2) throw new Error('弾薬箱までの経路がありません。');
     const next = path[1];
     const dx = next.x - current.x;
     const dy = next.y - current.y;
@@ -78,10 +89,78 @@ async function setArenaPhysics(
   action: 'pause' | 'resume',
 ): Promise<void> {
   await page.evaluate((physicsAction) => {
-    const scene = (window as Window & { __arenaScene?: { physics: { pause: () => void; resume: () => void } } }).__arenaScene;
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
     if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
     scene.physics[physicsAction]();
   }, action);
+}
+
+async function enemySpawnMetadata(
+  page: import('@playwright/test').Page,
+  id: EnemyId,
+): Promise<EnemySpawnMetadata> {
+  return page.getByTestId(`${id}-hp`).evaluate((element) => {
+    const dataset = (element as HTMLOutputElement).dataset;
+    return {
+      stableId: dataset.stableId ?? '',
+      spawnPhase: dataset.spawnPhase ?? '',
+      primaryDirection: dataset.primaryDirection ?? '',
+      assignedDirection: dataset.assignedDirection ?? '',
+      spawnTile: dataset.spawnTile ?? '',
+    };
+  });
+}
+
+async function allEnemySpawnMetadata(
+  page: import('@playwright/test').Page,
+): Promise<EnemySpawnMetadata[]> {
+  return Promise.all(ENEMY_INSTANCE_IDS.map(id => enemySpawnMetadata(page, id)));
+}
+
+async function expectEnemyHitPointsAndIds(
+  page: import('@playwright/test').Page,
+  spawnPhase?: number,
+): Promise<void> {
+  for (const id of ENEMY_INSTANCE_IDS) {
+    const hud = page.getByTestId(`${id}-hp`);
+    await expect(hud).toHaveText(id.startsWith('basic-') ? '6' : '4');
+    await expect(hud).toHaveAttribute('data-stable-id', id);
+    if (spawnPhase !== undefined)
+      await expect(hud).toHaveAttribute('data-spawn-phase', String(spawnPhase));
+  }
+}
+
+function parseFloorTile(
+  map: ReturnType<typeof generateArenaMap>,
+  value: string | null,
+  label: string,
+): TilePosition {
+  const match = value?.match(/^(\d+),(\d+)$/);
+  if (!match) throw new Error(`${label}のtileが不正です: ${String(value)}`);
+  const tile = { x: Number(match[1]), y: Number(match[2]) };
+  if (map.tiles[tile.y]?.[tile.x] !== 'floor')
+    throw new Error(`${label}のtileがfloorではありません: ${value}`);
+  return tile;
+}
+
+function directionFromPlayer(player: TilePosition, spawn: TilePosition): SpawnDirection {
+  const dx = spawn.x - player.x;
+  const dy = spawn.y - player.y;
+  if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? 'right' : 'left';
+  return dy > 0 ? 'down' : 'up';
+}
+
+async function expectCurrentEnemyPresentations(
+  page: import('@playwright/test').Page,
+): Promise<void> {
+  const mapSeed = Number(await page.getByTestId('map-seed').textContent());
+  const map = generateArenaMap(mapSeed);
+  const player = parseFloorTile(map, await page.getByTestId('player-tile').textContent(), 'プレイヤー');
+  for (const id of ENEMY_INSTANCE_IDS) {
+    const hud = page.getByTestId(`${id}-hp`);
+    const spawnTile = parseFloorTile(map, await hud.getAttribute('data-spawn-tile'), `${id}の出現位置`);
+    await expectEnemyPresentation(page, id, enemyVisibility(map, player, spawnTile));
+  }
 }
 
 async function expectEnemyPresentation(
@@ -90,7 +169,7 @@ async function expectEnemyPresentation(
   presentation: EnemyPresentation,
 ): Promise<void> {
   const hud = page.getByTestId(`${id}-hp`);
-  const texture = id === 'drone' ? 'drone' : 'basic';
+  const texture = id.startsWith('drone-') ? 'drone' : 'basic';
   await expect(hud).toHaveAttribute('data-visibility', presentation);
   await expect(hud).toHaveAttribute('data-sprite-texture', texture);
   await expect(hud).toHaveAttribute('data-silhouette-texture', 'enemy-silhouette');
@@ -119,6 +198,7 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('/');
+  await setArenaPhysics(page, 'pause');
   await expect(page.getByTestId('weapon')).toHaveText('アサルトライフル');
   await expect(page.getByTestId('ammo')).toHaveText('20/20');
   const ammoPanel = page.getByTestId('ammo-panel');
@@ -141,23 +221,15 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   expect(initialObscuredTileCount).toBe(803);
   const initialVisibilityPlayerTile = await playerTileHud.getAttribute('data-visibility-player-tile');
   expect(initialVisibilityPlayerTile).toMatch(/^\d+,\d+$/);
-  await expect(page.getByTestId('basic-1-hp')).toHaveText('6');
-  await expect(page.getByTestId('basic-2-hp')).toHaveText('6');
-  await expect(page.getByTestId('basic-3-hp')).toHaveText('6');
-  await expect(page.getByTestId('drone-hp')).toHaveText('4');
-  await expectEnemyPresentation(page, 'basic-1', 'boundary');
-  await expectEnemyPresentation(page, 'basic-2', 'normal');
-  await expectEnemyPresentation(page, 'basic-3', 'hidden');
-  await expectEnemyPresentation(page, 'drone', 'hidden');
+  await expectEnemyHitPointsAndIds(page, 0);
+  await expectCurrentEnemyPresentations(page);
+  await setArenaPhysics(page, 'resume');
   await expect(page.getByTestId('affinity')).toContainText('小口径弾 50% / 散弾 100%');
   const bounds = await page.locator('#game canvas').boundingBox();
   if (!bounds) throw new Error('戦闘アリーナのcanvasが見つかりません。');
 
-  await expect(page.getByTestId('basic-1-hp')).toHaveAttribute('data-visibility', 'normal', { timeout: 3_000 });
-  await expectEnemyPresentation(page, 'basic-1', 'normal');
-
   const panelBounds = await ammoPanel.boundingBox();
-  if (!panelBounds) throw new Error('ammo panel bounds unavailable');
+  if (!panelBounds) throw new Error('弾薬パネルの表示範囲を取得できません。');
   expect(panelBounds.x + panelBounds.width).toBeGreaterThan(bounds.x + bounds.width - 32);
   expect(panelBounds.y + panelBounds.height).toBeGreaterThan(bounds.y + bounds.height - 32);
 
@@ -189,13 +261,12 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-respawn-tiles', firstBoxKey);
   await expect(page.getByTestId('ammo-reserve')).toHaveText('予備 60/60');
 
-  await moveToTile(page, map, map.start, playerTileHud);
-  await moveToTile(page, map, firstBox, playerTileHud);
   await expect(page.getByTestId('ammo-box-count')).toHaveText('3');
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-active-tiles', waitingBoxKeys ?? '');
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-respawn-tiles', firstBoxKey);
   await expect(page.getByTestId('ammo-reserve')).toHaveAttribute('data-reserve', '60');
 
+  await setArenaPhysics(page, 'pause');
   await page.keyboard.press('2');
   await expect(page.getByTestId('weapon')).toHaveText('ショットガン');
   await expect(page.getByTestId('ammo')).toHaveText('4/4');
@@ -231,10 +302,12 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await page.keyboard.press('1');
   await expect(reloadProgress).toBeHidden();
   await expect.poll(async () => reloadProgress.evaluate(element => (element as HTMLProgressElement).value)).toBe(0);
+  await setArenaPhysics(page, 'resume');
 
   await expect(page.getByTestId('defeat')).toBeVisible({ timeout: 45_000 });
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-respawn-tiles', '');
   await page.getByTestId('retry').click();
+  await setArenaPhysics(page, 'pause');
   await expect(page.getByTestId('defeat')).toBeHidden();
   await expect(page.getByTestId('victory')).toBeHidden();
   await expect(page.getByTestId('survival-time')).toHaveText('03:00');
@@ -245,10 +318,7 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expect(page.getByTestId('reload')).toHaveText('待機');
   await expect(reloadProgress).toBeHidden();
   await expect(page.getByTestId('hp')).toHaveText('100');
-  await expect(page.getByTestId('basic-1-hp')).toHaveText('6');
-  await expect(page.getByTestId('basic-2-hp')).toHaveText('6');
-  await expect(page.getByTestId('basic-3-hp')).toHaveText('6');
-  await expect(page.getByTestId('drone-hp')).toHaveText('4');
+  await expectEnemyHitPointsAndIds(page, 0);
   await expect(page.getByTestId('feedback')).toHaveText('-');
   const retryPlayerTile = '23,5';
   await expect(page.getByTestId('map-seed')).toHaveText('1038872098');
@@ -256,11 +326,74 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expect(playerTileHud).toHaveAttribute('data-visibility-mask-alpha', '0.25');
   expect(Number(await playerTileHud.getAttribute('data-obscured-tile-count'))).toBe(920);
   await expect(playerTileHud).toHaveAttribute('data-visibility-player-tile', retryPlayerTile);
-  await expectEnemyPresentation(page, 'basic-1', 'hidden');
-  await expectEnemyPresentation(page, 'basic-2', 'hidden');
-  await expectEnemyPresentation(page, 'basic-3', 'hidden');
-  await expectEnemyPresentation(page, 'drone', 'hidden');
+  await expectCurrentEnemyPresentations(page);
   expect(errors).toEqual([]);
+});
+
+test('phase境界では既存12体を維持し、1体のDEV再出現とretryだけを新phaseへ反映する', async ({ page }) => {
+  await page.clock.install({ time: 0 });
+  await page.clock.setFixedTime(15);
+  await page.goto('/');
+  await setArenaPhysics(page, 'pause');
+  const phaseHud = page.getByTestId('spawn-phase');
+  const primaryHud = page.getByTestId('primary-direction');
+  const mapSeed = Number(await page.getByTestId('map-seed').textContent());
+  const phaseZeroPrimary = primarySpawnDirection(mapSeed, 0);
+  await expect(phaseHud).toHaveText('1');
+  await expect(phaseHud).toHaveAttribute('data-phase', '0');
+  await expect(primaryHud).toHaveAttribute('data-direction', phaseZeroPrimary);
+  await expectEnemyHitPointsAndIds(page, 0);
+  const phaseZero = await allEnemySpawnMetadata(page);
+  const phaseZeroMap = generateArenaMap(mapSeed);
+  const phaseZeroPlayer = parseFloorTile(
+    phaseZeroMap,
+    await page.getByTestId('player-tile').textContent(),
+    'プレイヤー',
+  );
+  expect(new Set(phaseZero.map(metadata => metadata.stableId))).toEqual(new Set(ENEMY_INSTANCE_IDS));
+  expect(new Set(phaseZero.map(metadata => metadata.spawnTile)).size).toBe(12);
+  phaseZero.forEach((metadata, stableSlot) => {
+    expect(metadata.spawnPhase).toBe('0');
+    expect(metadata.primaryDirection).toBe(phaseZeroPrimary);
+    expect(metadata.assignedDirection).toBe(spawnDirectionForSlot(phaseZeroPrimary, stableSlot));
+    const spawnTile = parseFloorTile(phaseZeroMap, metadata.spawnTile, `${metadata.stableId}の出現位置`);
+    expect(directionFromPlayer(phaseZeroPlayer, spawnTile)).toBe(metadata.assignedDirection);
+  });
+
+  await page.clock.fastForward(SPAWN_PHASE_MS);
+  const phaseOnePrimary = primarySpawnDirection(mapSeed, 1);
+  await expect(phaseHud).toHaveText('2');
+  await expect(phaseHud).toHaveAttribute('data-phase', '1');
+  await expect(primaryHud).toHaveAttribute('data-direction', phaseOnePrimary);
+  expect(phaseOnePrimary).not.toBe(phaseZeroPrimary);
+  expect(await allEnemySpawnMetadata(page)).toEqual(phaseZero);
+
+  const target = ENEMY_INSTANCE_IDS[3];
+  await page.evaluate((enemyId) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugRespawnEnemy(enemyId);
+  }, target);
+  const phaseOne = await allEnemySpawnMetadata(page);
+  const targetSlot = ENEMY_INSTANCE_IDS.indexOf(target);
+  phaseOne.forEach((metadata, stableSlot) => {
+    if (stableSlot === targetSlot) return;
+    expect(metadata).toEqual(phaseZero[stableSlot]);
+  });
+  const respawned = phaseOne[targetSlot];
+  expect(respawned.stableId).toBe(target);
+  expect(respawned.spawnPhase).toBe('1');
+  expect(respawned.primaryDirection).toBe(phaseOnePrimary);
+  expect(respawned.assignedDirection).toBe(spawnDirectionForSlot(phaseOnePrimary, targetSlot));
+  const respawnedTile = parseFloorTile(phaseZeroMap, respawned.spawnTile, `${respawned.stableId}の再出現位置`);
+  expect(directionFromPlayer(phaseZeroPlayer, respawnedTile)).toBe(respawned.assignedDirection);
+  expect(respawned.spawnTile).not.toBe(phaseZero[targetSlot].spawnTile);
+  expect(new Set(phaseOne.map(metadata => metadata.spawnTile)).size).toBe(12);
+
+  await page.getByTestId('retry').dispatchEvent('click');
+  await expect(phaseHud).toHaveText('1');
+  await expect(phaseHud).toHaveAttribute('data-phase', '0');
+  await expectEnemyHitPointsAndIds(page, 0);
 });
 
 test('3分の境界で勝利し、戦闘停止後の再挑戦でタイマーと状態を初期化できる', async ({ page }) => {

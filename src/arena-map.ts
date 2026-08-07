@@ -2,8 +2,11 @@ export const TILE_SIZE = 40;
 export const ARENA_WIDTH_TILES = 40;
 export const ARENA_HEIGHT_TILES = 25;
 export const AMMO_BOX_COUNT = 4;
+export const SPAWN_PHASE_MS = 60_000;
+export const SPAWN_DIRECTIONS = ['up', 'right', 'down', 'left'] as const;
 
 export type Tile = 'wall' | 'floor';
+export type SpawnDirection = (typeof SPAWN_DIRECTIONS)[number];
 
 export type TilePosition = { x: number; y: number };
 export type TileRect = { left: number; top: number; right: number; bottom: number };
@@ -28,7 +31,21 @@ export type SpawnRequest = {
   player: TilePosition;
   viewport: TileRect;
   occupied: readonly TilePosition[];
+  direction?: SpawnDirection;
 };
+
+export function spawnPhaseAt(startedAt: number, now: number): number {
+  return Math.floor(Math.max(0, now - startedAt) / SPAWN_PHASE_MS);
+}
+
+export function primarySpawnDirection(seed: number, phase: number): SpawnDirection {
+  return SPAWN_DIRECTIONS[((seed >>> 0) + Math.max(0, Math.floor(phase))) % SPAWN_DIRECTIONS.length];
+}
+
+export function spawnDirectionForSlot(primary: SpawnDirection, stableSlot: number): SpawnDirection {
+  if (Math.max(0, Math.floor(stableSlot)) % 4 !== 3) return primary;
+  return SPAWN_DIRECTIONS[(SPAWN_DIRECTIONS.indexOf(primary) + 2) % SPAWN_DIRECTIONS.length];
+}
 
 export function viewportTileRect(view: { left: number; top: number; right: number; bottom: number }): TileRect {
   return {
@@ -184,8 +201,12 @@ export function selectSpawnTile(
   if (candidates.length === 0) return null;
   const outside = candidates.filter(position => !inside(position, request.viewport));
   if (outside.length > 0) {
-    const nearby = outside.filter(position => viewportGap(position, request.viewport) <= 6);
-    const pool = nearby.length > 0 ? nearby : outside;
+    const directed = request.direction
+      ? outside.filter(position => directionFrom(request.player, position) === request.direction)
+      : outside;
+    const directionalPool = directed.length > 0 ? directed : outside;
+    const nearby = directionalPool.filter(position => viewportGap(position, request.viewport) <= 6);
+    const pool = nearby.length > 0 ? nearby : directionalPool;
     return pool[(seed >>> 0) % pool.length];
   }
   return candidates.sort((left, right) => {
@@ -432,6 +453,13 @@ function viewportGap(position: TilePosition, viewport: TileRect): number {
 
 function manhattan(left: TilePosition, right: TilePosition): number {
   return Math.abs(left.x - right.x) + Math.abs(left.y - right.y);
+}
+
+function directionFrom(player: TilePosition, target: TilePosition): SpawnDirection {
+  const dx = target.x - player.x;
+  const dy = target.y - player.y;
+  if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? 'right' : 'left';
+  return dy > 0 ? 'down' : 'up';
 }
 
 function mixSeed(seed: number, value: string): number {

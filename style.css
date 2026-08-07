@@ -78,6 +78,14 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
+.enemy-hud {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px 12px;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+}
+
 [data-testid='feedback'] {
   min-height: 1.5em;
   color: #ffef76;

@@ -5,16 +5,22 @@ import {
   hasLineOfSight,
   ARENA_HEIGHT_TILES,
   ARENA_WIDTH_TILES,
+  SPAWN_DIRECTIONS,
+  SPAWN_PHASE_MS,
   TILE_SIZE,
   findPath,
   generateArenaMap,
   generateNextArenaMap,
   nextSeed,
+  primarySpawnDirection,
   respawnDelayFor,
   selectSpawnTile,
   selectAmmoBoxTiles,
+  spawnDirectionForSlot,
+  spawnPhaseAt,
   viewportTileRect,
   type ArenaMap,
+  type SpawnDirection,
   type TilePosition,
 } from '../src/arena-map';
 
@@ -22,6 +28,13 @@ const seed = 20_260_802;
 
 function tileKey(position: { x: number; y: number }): string {
   return `${position.x},${position.y}`;
+}
+
+function directionFromPlayer(player: TilePosition, target: TilePosition): SpawnDirection {
+  const dx = target.x - player.x;
+  const dy = target.y - player.y;
+  if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? 'right' : 'left';
+  return dy > 0 ? 'down' : 'up';
 }
 
 function mapFrom(rows: ArenaMap['tiles']): ArenaMap {
@@ -83,22 +96,89 @@ describe('自動生成アリーナ', () => {
     expect(selectAmmoBoxTiles(map, [boxes[0]])).not.toContainEqual(boxes[0]);
   });
 
-  test('初期spawnは弾薬箱の占有tileを避ける', () => {
+  test('12体の初期spawnは到達可能floorを使い、player、弾薬箱、他の敵と重複しない', () => {
     const map = generateArenaMap(seed);
     const boxes = selectAmmoBoxTiles(map);
     const spawned: TilePosition[] = [];
     const occupied: TilePosition[] = [map.start, ...boxes];
-    for (let index = 0; index < 4; index += 1) {
+    const primary = primarySpawnDirection(map.seed, 0);
+    for (let index = 0; index < 12; index += 1) {
       const tile = selectSpawnTile(map, {
         player: map.start,
         viewport: { left: map.start.x - 1, top: map.start.y - 1, right: map.start.x + 1, bottom: map.start.y + 1 },
         occupied: [...occupied, ...spawned],
+        direction: spawnDirectionForSlot(primary, index),
       }, nextSeed(map.seed + index));
       if (!tile) throw new Error('初期spawn位置が必要です。');
       expect(boxes).not.toContainEqual(tile);
       expect(spawned).not.toContainEqual(tile);
+      expect(findPath(map, map.start, tile).length).toBeGreaterThan(0);
       spawned.push(tile);
     }
+    expect(new Set(spawned.map(tileKey))).toHaveLength(12);
+  });
+
+  test('60秒境界でphaseを進め、seedとphaseから4方向を決定的に切り替える', () => {
+    const startedAt = 1_000;
+    expect(SPAWN_PHASE_MS).toBe(60_000);
+    expect(spawnPhaseAt(startedAt, startedAt - 1)).toBe(0);
+    expect(spawnPhaseAt(startedAt, startedAt)).toBe(0);
+    expect(spawnPhaseAt(startedAt, startedAt + SPAWN_PHASE_MS - 1)).toBe(0);
+    expect(spawnPhaseAt(startedAt, startedAt + SPAWN_PHASE_MS)).toBe(1);
+    expect(spawnPhaseAt(startedAt, startedAt + SPAWN_PHASE_MS * 4)).toBe(4);
+    const directions = Array.from({ length: 4 }, (_, phase) => primarySpawnDirection(seed, phase));
+    expect(new Set(directions)).toEqual(new Set(SPAWN_DIRECTIONS));
+    expect(primarySpawnDirection(seed, 2)).toBe(directions[2]);
+  });
+
+  test('stableな12 slotは主方向9体と反対方向3体へ割り当てる', () => {
+    SPAWN_DIRECTIONS.forEach((primary) => {
+      const directions = Array.from({ length: 12 }, (_, slot) => spawnDirectionForSlot(primary, slot));
+      const opposite = SPAWN_DIRECTIONS[(SPAWN_DIRECTIONS.indexOf(primary) + 2) % SPAWN_DIRECTIONS.length];
+      expect(directions.filter(direction => direction === primary)).toHaveLength(9);
+      expect(directions.filter(direction => direction === opposite)).toHaveLength(3);
+      expect(directions.every(direction => direction === primary || direction === opposite)).toBe(true);
+      expect(spawnDirectionForSlot(primary, 7)).toBe(directions[7]);
+    });
+  });
+
+  test('方向付きspawnはplayer基準の画面外tileを選び、方向候補不足時は既存poolへfallbackする', () => {
+    const directionalMap = mapFrom([
+      ['wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall'],
+    ]);
+    const player = { x: 3, y: 3 };
+    const viewport = { left: 2, top: 2, right: 4, bottom: 4 };
+    SPAWN_DIRECTIONS.forEach((direction, index) => {
+      const tile = selectSpawnTile(directionalMap, {
+        player,
+        viewport,
+        occupied: [player],
+        direction,
+      }, seed + index);
+      if (!tile) throw new Error('方向付きspawn位置が必要です。');
+      expect(directionFromPlayer(player, tile)).toBe(direction);
+      expect(tile.x < viewport.left || tile.x > viewport.right || tile.y < viewport.top || tile.y > viewport.bottom).toBe(true);
+      expect(findPath(directionalMap, player, tile).length).toBeGreaterThan(0);
+    });
+
+    const rightOnly = mapFrom([
+      ['wall', 'wall', 'wall', 'wall', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'wall', 'wall', 'wall', 'wall'],
+    ]);
+    const request = {
+      player: { x: 1, y: 1 },
+      viewport: { left: 1, top: 1, right: 1, bottom: 1 },
+      occupied: [{ x: 1, y: 1 }],
+    };
+    const existingPool = selectSpawnTile(rightOnly, request, seed);
+    expect(selectSpawnTile(rightOnly, { ...request, direction: 'up' }, seed)).toEqual(existingPool);
   });
 
   test('BFSは4近傍の最短経路を返し、wallは通らない', () => {

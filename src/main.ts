@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, enemyVisibility, findPath, hasLineOfSight, type EnemyVisibility, generateArenaMap, generateNextArenaMap, nextSeed, respawnDelayFor, selectAmmoBoxTiles, selectSpawnTile, type ArenaMap, type TilePosition, viewportTileRect } from './arena-map';
+import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, enemyVisibility, findPath, hasLineOfSight, type EnemyVisibility, generateArenaMap, generateNextArenaMap, nextSeed, primarySpawnDirection, respawnDelayFor, selectAmmoBoxTiles, selectSpawnTile, spawnDirectionForSlot, spawnPhaseAt, type ArenaMap, type SpawnDirection, type TilePosition, viewportTileRect } from './arena-map';
 import { AMMO_BOX_RESPAWN_MS, ENEMY_INSTANCE_IDS, SURVIVAL_LIMIT_MS, WEAPONS, advanceSurvivalState, cancelReload, collectAmmoBox as collectAmmoBoxState, completeReload, damageEnemy, damagePlayer, droneLateralSpeedAt, fireWeapon, isEnemyDefeated, remainingSurvivalMs, resolveDamage, respawnEnemy, retryCombat, selectWeapon, startReload, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type WeaponId } from './rules';
 const WIDTH = 800;
 const HEIGHT = 500;
@@ -7,6 +7,7 @@ const WORLD_WIDTH = ARENA_WIDTH_TILES * TILE_SIZE;
 const WORLD_HEIGHT = ARENA_HEIGHT_TILES * TILE_SIZE;
 const BULLET_POOL_SIZE = 48;
 const ENEMY_IDS = ENEMY_INSTANCE_IDS;
+const IS_DEV = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV);
 type EnemyConfig = {
   kind: EnemyKind;
   speed: number;
@@ -43,17 +44,23 @@ type Controls = Phaser.Types.Input.Keyboard.CursorKeys & {
   d: Phaser.Input.Keyboard.Key;
   r: Phaser.Input.Keyboard.Key;
 };
-const ENEMIES: Record<EnemyInstanceId, EnemyConfig> = {
-  'basic-1': { kind: 'basic', speed: 68, damage: 8, cooldown: 1500 },
-  'basic-2': { kind: 'basic', speed: 68, damage: 8, cooldown: 1500 },
-  'basic-3': { kind: 'basic', speed: 68, damage: 8, cooldown: 1500 },
-  'drone-1': { kind: 'drone', speed: 150, damage: 6, cooldown: 1200 },
-};
-const ENEMY_LABELS: Record<EnemyInstanceId, string> = {
-  'basic-1': '基本敵 #1',
-  'basic-2': '基本敵 #2',
-  'basic-3': '基本敵 #3',
-  'drone-1': '高速ドローン',
+
+function enemyRecord<T>(create: (id: EnemyInstanceId) => T): Record<EnemyInstanceId, T> {
+  return Object.fromEntries(ENEMY_IDS.map(id => [id, create(id)])) as Record<EnemyInstanceId, T>;
+}
+
+const ENEMIES = enemyRecord<EnemyConfig>(id => id.startsWith('basic-')
+  ? { kind: 'basic', speed: 68, damage: 8, cooldown: 1500 }
+  : { kind: 'drone', speed: 150, damage: 6, cooldown: 1200 });
+const ENEMY_LABELS = enemyRecord((id) => {
+  const number = id.split('-')[1];
+  return id.startsWith('basic-') ? `基本敵 #${number}` : `高速ドローン #${number}`;
+});
+const DIRECTION_LABELS: Record<SpawnDirection, string> = {
+  up: '上',
+  right: '右',
+  down: '下',
+  left: '左',
 };
 function element<T extends Element>(selector: string): T {
   const value = document.querySelector<T>(selector);
@@ -62,7 +69,7 @@ function element<T extends Element>(selector: string): T {
   return value;
 }
 function enemyNumbers(): Record<EnemyInstanceId, number> {
-  return { 'basic-1': 0, 'basic-2': 0, 'basic-3': 0, 'drone-1': 0 };
+  return enemyRecord(() => 0);
 }
 
 function sameTile(left: TilePosition, right: TilePosition): boolean {
@@ -92,12 +99,14 @@ const mapSeedHud = element<HTMLOutputElement>('[data-testid="map-seed"]');
 const playerTileHud = element<HTMLOutputElement>('[data-testid="player-tile"]');
 const fps = element<HTMLOutputElement>('[data-testid="fps"]');
 const survivalTimeHud = element<HTMLOutputElement>('[data-testid="survival-time"]');
+const spawnPhaseHud = element<HTMLOutputElement>('[data-testid="spawn-phase"]');
+const primaryDirectionHud = element<HTMLOutputElement>('[data-testid="primary-direction"]');
 const feedback = element<HTMLElement>('[data-testid="feedback"]');
 const resultPanel = element<HTMLElement>('[data-testid="result"]');
 const defeat = element<HTMLElement>('[data-testid="defeat"]');
 const victory = element<HTMLElement>('[data-testid="victory"]');
 const retry = element<HTMLButtonElement>('[data-testid="retry"]');
-const enemyHp: Record<EnemyInstanceId, HTMLOutputElement> = { 'basic-1': element('[data-testid="basic-1-hp"]'), 'basic-2': element('[data-testid="basic-2-hp"]'), 'basic-3': element('[data-testid="basic-3-hp"]'), 'drone-1': element('[data-testid="drone-hp"]') };
+const enemyHp = enemyRecord(id => element<HTMLOutputElement>(`[data-testid="${id}-hp"]`));
 let resetArena: (() => void) | undefined;
 class Arena extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Sprite;
@@ -179,6 +188,7 @@ class Arena extends Phaser.Scene {
     if (this.state.defeated || this.state.victory)
       return;
     fps.value = String(Math.round(this.game.loop.actualFps));
+    this.updateSpawnPhaseHud();
     this.updateSurvival();
     if (this.state.defeated || this.state.victory)
       return;
@@ -200,6 +210,42 @@ class Arena extends Phaser.Scene {
       if (bullet.active && data && Phaser.Math.Distance.Between(data.startX, data.startY, bullet.x, bullet.y) > data.range)
         this.disableBullet(bullet);
     });
+  }
+
+  public debugRespawnEnemy(id: EnemyInstanceId): void {
+    if (!IS_DEV)
+      throw new Error('debugRespawnEnemyはDEV環境だけで使用できます。');
+    if (!ENEMY_IDS.includes(id))
+      throw new Error(`未知の敵IDです: ${id}`);
+    if (this.state.defeated || this.state.victory || !this.enemies[id].active)
+      throw new Error(`再出現できない敵です: ${id}`);
+    const enemy = this.enemies[id];
+    const hud = enemyHp[id];
+    const previous = {
+      x: enemy.x,
+      y: enemy.y,
+      spawnPhase: hud.dataset.spawnPhase ?? '',
+      primaryDirection: hud.dataset.primaryDirection ?? '',
+      assignedDirection: hud.dataset.assignedDirection ?? '',
+      spawnTile: hud.dataset.spawnTile ?? '',
+    };
+    const previousRespawnCount = this.respawnCount[id];
+    enemy.disableBody(true, true);
+    this.hideEnemyVisuals(id);
+    delete this.paths[id];
+    this.respawnCount[id] += 1;
+    if (!this.spawnEnemy(id)) {
+      this.respawnCount[id] = previousRespawnCount;
+      enemy.enableBody(true, previous.x, previous.y, true, true).setVelocity(0, 0);
+      enemy.setData('spawnPhase', previous.spawnPhase);
+      enemy.setData('primaryDirection', previous.primaryDirection);
+      enemy.setData('assignedDirection', previous.assignedDirection);
+      enemy.setData('spawnTile', previous.spawnTile);
+      this.updateEnemyVisibility(true);
+      throw new Error(`${ENEMY_LABELS[id]}の再出現位置がありません。`);
+    }
+    this.state = respawnEnemy(this.state, id);
+    this.refreshHud();
   }
 
   private reset(initial = false): void {
@@ -235,7 +281,7 @@ class Arena extends Phaser.Scene {
     });
     this.updateEnemyVisibility(true);
     this.startSurvivalTimer();
-    if ((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV)
+    if (IS_DEV)
       (window as Window & { __arenaScene?: Arena }).__arenaScene = this;
     feedback.textContent = '-';
     resultPanel.hidden = true;
@@ -357,6 +403,15 @@ class Arena extends Phaser.Scene {
     survivalTimeHud.value = formatSurvivalTime(remainingSurvivalMs(this.survivalStartedAt, this.time.now));
   }
 
+  private updateSpawnPhaseHud(): void {
+    const phase = spawnPhaseAt(this.survivalStartedAt, this.time.now);
+    const primaryDirection = primarySpawnDirection(this.map.seed, phase);
+    spawnPhaseHud.value = String(phase + 1);
+    spawnPhaseHud.dataset.phase = String(phase);
+    primaryDirectionHud.value = DIRECTION_LABELS[primaryDirection];
+    primaryDirectionHud.dataset.direction = primaryDirection;
+  }
+
   private stopRunTimers(): void {
     this.survivalTimer?.remove(false);
     this.survivalTimer = undefined;
@@ -423,8 +478,13 @@ class Arena extends Phaser.Scene {
   }
 
   private spawnEnemy(id: EnemyInstanceId): boolean {
+    const playerTile = this.tile(this.player);
+    const phase = spawnPhaseAt(this.survivalStartedAt, this.time.now);
+    const primaryDirection = primarySpawnDirection(this.map.seed, phase);
+    const stableSlot = ENEMY_IDS.indexOf(id);
+    const direction = spawnDirectionForSlot(primaryDirection, stableSlot);
     const occupied = [
-      this.tile(this.player),
+      playerTile,
       ...this.activeAmmoBoxTiles(),
       ...ENEMY_IDS
         .filter(other => other !== id && this.enemies[other].active)
@@ -432,7 +492,7 @@ class Arena extends Phaser.Scene {
     ];
     const tile = selectSpawnTile(
       this.map,
-      { player: this.tile(this.player), viewport: this.viewport(), occupied },
+      { player: playerTile, viewport: this.viewport(), occupied, direction },
       nextSeed(this.map.seed + this.respawnCount[id] + ENEMY_IDS.indexOf(id)),
     );
     if (!tile) {
@@ -445,10 +505,15 @@ class Arena extends Phaser.Scene {
       .enableBody(true, point.x, point.y, true, true)
       .setVelocity(0, 0)
       .clearTint();
+    this.enemies[id].setData('stableId', id);
+    this.enemies[id].setData('spawnPhase', phase);
+    this.enemies[id].setData('primaryDirection', primaryDirection);
+    this.enemies[id].setData('assignedDirection', direction);
+    this.enemies[id].setData('spawnTile', tileKey(tile));
     this.paths[id] = {
       path: [],
       nextAt: 0,
-      playerTile: this.tile(this.player),
+      playerTile,
       enemyTile: tile,
     };
     this.updateVisibilityMask(true);
@@ -505,6 +570,11 @@ class Arena extends Phaser.Scene {
     const enemy = this.enemies[id];
     const silhouette = this.silhouettes[id];
     const hud = enemyHp[id];
+    hud.dataset.stableId = String(enemy.getData('stableId') ?? id);
+    hud.dataset.spawnPhase = String(enemy.getData('spawnPhase') ?? '');
+    hud.dataset.primaryDirection = String(enemy.getData('primaryDirection') ?? '');
+    hud.dataset.assignedDirection = String(enemy.getData('assignedDirection') ?? '');
+    hud.dataset.spawnTile = String(enemy.getData('spawnTile') ?? '');
     hud.dataset.visibility = visibility;
     hud.dataset.spriteTexture = enemy.texture.key;
     hud.dataset.spriteAlpha = String(enemy.alpha);
@@ -795,6 +865,7 @@ class Arena extends Phaser.Scene {
     reloadHud.value = this.state.reloading === null ? '待機' : `リロード中: ${WEAPONS[this.state.reloading].label}`;
     this.updateReloadProgressHud();
     this.updateSurvivalHud();
+    this.updateSpawnPhaseHud();
     mapSeedHud.value = String(this.map.seed);
     this.updateTileHud();
   }

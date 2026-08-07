@@ -165,13 +165,17 @@ describe('戦闘ルール', () => {
     expect(completeReload(switched, 'shotgun')).toEqual(switched);
   });
 
-  it('4個体のダメージと再出現は対象だけを変更する', () => {
+  it('基本敵9体とドローン3体を初期化し、対象だけへダメージと再出現を適用する', () => {
     const damaged = damageEnemy(INITIAL_STATE, 'basic-2', 9);
-    expect(ENEMY_INSTANCE_IDS).toHaveLength(4);
+    expect(ENEMY_INSTANCE_IDS).toHaveLength(12);
+    expect(ENEMY_INSTANCE_IDS.filter(id => id.startsWith('basic-'))).toHaveLength(9);
+    expect(ENEMY_INSTANCE_IDS.filter(id => id.startsWith('drone-'))).toHaveLength(3);
+    expect(Object.keys(INITIAL_STATE.enemies)).toEqual([...ENEMY_INSTANCE_IDS]);
     expect(damaged.enemies['basic-2']).toMatchObject({ hp: 0, defeated: true });
     expect(damaged.enemies['basic-1']).toMatchObject({ hp: 6, defeated: false });
-    expect(damaged.enemies['basic-3']).toMatchObject({ hp: 6, defeated: false });
+    expect(damaged.enemies['basic-9']).toMatchObject({ kind: 'basic', hp: 6, defeated: false });
     expect(damaged.enemies['drone-1']).toMatchObject({ hp: 4, defeated: false });
+    expect(damaged.enemies['drone-3']).toMatchObject({ kind: 'drone', hp: 4, defeated: false });
     expect(isEnemyDefeated(damaged, 'basic-2')).toBe(true);
     expect(respawnEnemy(damaged, 'basic-2').enemies['basic-2']).toMatchObject({ hp: 6, defeated: false });
   });
@@ -181,7 +185,7 @@ describe('戦闘ルール', () => {
     expect(damagePlayer(INITIAL_STATE, 120)).toMatchObject({ playerHp: 0, defeated: true });
   });
 
-  it('再挑戦は武器別残弾、発射待ち、リロード、敵4個体を初期化する', () => {
+  it('再挑戦は武器別残弾、発射待ち、リロード、敵12個体を初期化する', () => {
     const changed = {
       ...fireWeapon(selectWeapon(INITIAL_STATE, 'shotgun'), 100).state,
       reloading: 'shotgun' as const,
@@ -193,5 +197,8 @@ describe('戦闘ルール', () => {
     expect(retried.ammo).not.toBe(INITIAL_STATE.ammo);
     expect(retried.nextFireAt).not.toBe(INITIAL_STATE.nextFireAt);
     expect(retried.enemies).not.toBe(INITIAL_STATE.enemies);
+    ENEMY_INSTANCE_IDS.forEach((id) => {
+      expect(retried.enemies[id]).not.toBe(INITIAL_STATE.enemies[id]);
+    });
   });
 });
