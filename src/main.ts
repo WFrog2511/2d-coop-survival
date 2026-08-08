@@ -1,6 +1,10 @@
 import Phaser from 'phaser';
 import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, basicApproachRoleFor, enemyVisibility, findPath, hasLineOfSight, type EnemyVisibility, generateArenaMap, generateNextArenaMap, hiddenRecycleThresholdFor, nextSeed, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, selectEnemySpawnTile, selectSpawnTile, spawnDirectionForSlot, spawnPhaseAt, type ArenaMap, type SpawnDirection, type TilePosition, viewportTileRect } from './arena-map';
 import { AMMO_BOX_RESPAWN_MS, ENEMY_INSTANCE_IDS, SURVIVAL_LIMIT_MS, WEAPONS, advanceSurvivalState, cancelReload, collectAmmoBox as collectAmmoBoxState, completeReload, damageEnemy, damagePlayer, droneLateralSpeedAt, fireWeapon, isEnemyDefeated, remainingSurvivalMs, resolveDamage, respawnEnemy, retryCombat, selectWeapon, startReload, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type WeaponId } from './rules';
+
+type CameraShakeProfile = { duration: number; intensity: number };
+type PlayerHitVignetteProfile = { duration: number; opacity: number };
+
 const WIDTH = 800;
 const HEIGHT = 500;
 const WORLD_WIDTH = ARENA_WIDTH_TILES * TILE_SIZE;
@@ -11,11 +15,29 @@ const ENEMY_DEFEAT_HIT_STOP_MS: Record<WeaponId, number> = { rifle: 24, shotgun:
 const PLAYER_HIT_STOP_MS: Record<EnemyKind, number> = { basic: 30, drone: 45 };
 const CAMERA_SHAKE_COOLDOWN_MS = 70;
 const SHOTGUN_SHAKE = { duration: 70, intensity: 0.0016 };
-const FIRE_SHAKE = { duration: 95, intensity: 0.0024 };
-const DEFEAT_SHAKE = { duration: 190, intensity: 0.0048 };
-const PLAYER_HIT_SHAKE: Record<EnemyKind, { duration: number; intensity: number }> = {
+const WEAPON_FIRE_SHAKE: Record<WeaponId, CameraShakeProfile> = {
+  rifle: { duration: 95, intensity: 0.0024 },
+  shotgun: { duration: 95, intensity: 0.0050 },
+};
+const MUZZLE_FLASH: Record<WeaponId, { duration: number; length: number; width: number; color: number }> = {
+  rifle: { duration: 55, length: 28, width: 10, color: 0x9de9ff },
+  shotgun: { duration: 85, length: 44, width: 20, color: 0xffdd76 },
+};
+const ENEMY_HIT_EFFECT: Record<WeaponId, { duration: number; radius: number; color: number; scale: number }> = {
+  rifle: { duration: 85, radius: 12, color: 0x65d9ff, scale: 1.8 },
+  shotgun: { duration: 110, radius: 18, color: 0xffdc6b, scale: 2.1 },
+};
+const ENEMY_DEFEAT_SHAKE: Record<EnemyKind, CameraShakeProfile> = {
+  basic: { duration: 190, intensity: 0.0064 },
+  drone: { duration: 190, intensity: 0.0096 },
+};
+const PLAYER_HIT_SHAKE: Record<EnemyKind, CameraShakeProfile> = {
   basic: { duration: 55, intensity: 0.0008 },
   drone: { duration: 120, intensity: 0.0032 },
+};
+const PLAYER_HIT_VIGNETTE: Record<EnemyKind, PlayerHitVignetteProfile> = {
+  basic: { duration: 180, opacity: 0.42 },
+  drone: { duration: 240, opacity: 0.58 },
 };
 const ENEMY_IDS = ENEMY_INSTANCE_IDS;
 const INITIAL_ENEMY_IDS: readonly EnemyInstanceId[] = ['basic-1', 'basic-2', 'basic-3', 'basic-4', 'basic-5', 'basic-6', 'drone-1', 'drone-2'];
@@ -118,6 +140,7 @@ const reloadHud = element<HTMLOutputElement>('[data-testid="reload"]');
 const mapSeedHud = element<HTMLOutputElement>('[data-testid="map-seed"]');
 const playerTileHud = element<HTMLOutputElement>('[data-testid="player-tile"]');
 const fps = element<HTMLOutputElement>('[data-testid="fps"]');
+const playerHitVignette = element<HTMLElement>('#player-hit-vignette');
 const survivalTimeHud = element<HTMLOutputElement>('[data-testid="survival-time"]');
 const spawnPhaseHud = element<HTMLOutputElement>('[data-testid="spawn-phase"]');
 const primaryDirectionHud = element<HTMLOutputElement>('[data-testid="primary-direction"]');
@@ -323,6 +346,7 @@ class Arena extends Phaser.Scene {
     this.shakeCooldownUntil = 0;
     this.shakeIntensity = 0;
     this.cameras.main.resetFX();
+    playerHitVignette.classList.remove('is-active');
     this.respawnCount = enemyNumbers();
     this.recycleCount = enemyNumbers();
     this.lastHitAt = enemyNumbers(Number.NEGATIVE_INFINITY);
@@ -870,8 +894,9 @@ class Arena extends Phaser.Scene {
         feedback.textContent = '弾切れ: Rでリロード';
       return;
     }
-    this.shakeCamera(FIRE_SHAKE);
+    this.shakeCamera(WEAPON_FIRE_SHAKE[weaponId]);
     const base = Phaser.Math.Angle.Between(this.player.x, this.player.y, pointer.worldX, pointer.worldY);
+    this.playMuzzleFlash(weaponId, base);
     for (let index = 0; index < weapon.pellets; index += 1) {
       const bullet = this.bullets.get(this.player.x, this.player.y, `bullet-${this.state.weapon}`) as Phaser.Physics.Arcade.Sprite | null;
       if (!bullet)
@@ -953,19 +978,69 @@ class Arena extends Phaser.Scene {
     const duration = defeated ? ENEMY_DEFEAT_HIT_STOP_MS[weapon] : ENEMY_HIT_STOP_MS[weapon];
     this.enemyHitStopUntil[id] = Math.max(this.enemyHitStopUntil[id], this.time.now + duration);
     this.enemies[id].setVelocity(0, 0);
+    this.playEnemyHitEffect(id, weapon);
     if (defeated)
-      this.shakeCamera(DEFEAT_SHAKE);
+      this.shakeCamera(ENEMY_DEFEAT_SHAKE[ENEMIES[id].kind]);
     else if (weapon === 'shotgun')
       this.shakeCamera(SHOTGUN_SHAKE);
+  }
+
+  private playMuzzleFlash(weapon: WeaponId, angle: number): void {
+    const flash = MUZZLE_FLASH[weapon];
+    const distance = this.player.displayWidth / 2 + flash.length / 2;
+    const muzzle = this.add.rectangle(
+      this.player.x + Math.cos(angle) * distance,
+      this.player.y + Math.sin(angle) * distance,
+      flash.length,
+      flash.width,
+      flash.color,
+      0.9,
+    ).setRotation(angle).setDepth(4);
+    this.tweens.add({
+      targets: muzzle,
+      scaleX: 1.35,
+      scaleY: 1.6,
+      alpha: 0,
+      duration: flash.duration,
+      ease: 'Quad.Out',
+      onComplete: () => muzzle.destroy(),
+    });
+  }
+
+  private playEnemyHitEffect(id: EnemyInstanceId, weapon: WeaponId): void {
+    const effect = ENEMY_HIT_EFFECT[weapon];
+    const enemy = this.enemies[id];
+    const hit = this.add.circle(enemy.x, enemy.y, effect.radius, effect.color, 0.25)
+      .setStrokeStyle(2, effect.color, 0.9)
+      .setDepth(4);
+    this.tweens.add({
+      targets: hit,
+      scaleX: effect.scale,
+      scaleY: effect.scale,
+      alpha: 0,
+      duration: effect.duration,
+      ease: 'Quad.Out',
+      onComplete: () => hit.destroy(),
+    });
   }
 
   private startPlayerImpact(kind: EnemyKind): void {
     this.playerHitStopUntil = Math.max(this.playerHitStopUntil, this.time.now + PLAYER_HIT_STOP_MS[kind]);
     this.player.setVelocity(0, 0);
     this.shakeCamera(PLAYER_HIT_SHAKE[kind]);
+    this.playPlayerHitVignette(kind);
   }
 
-  private shakeCamera(effect: { duration: number; intensity: number }): void {
+  private playPlayerHitVignette(kind: EnemyKind): void {
+    const vignette = PLAYER_HIT_VIGNETTE[kind];
+    playerHitVignette.style.setProperty('--player-hit-vignette-duration', `${vignette.duration}ms`);
+    playerHitVignette.style.setProperty('--player-hit-vignette-opacity', String(vignette.opacity));
+    playerHitVignette.classList.remove('is-active');
+    playerHitVignette.getBoundingClientRect();
+    playerHitVignette.classList.add('is-active');
+  }
+
+  private shakeCamera(effect: CameraShakeProfile): void {
     const force = effect.intensity > this.shakeIntensity || this.time.now < this.shakeCooldownUntil;
     if (force && effect.intensity <= this.shakeIntensity)
       return;
