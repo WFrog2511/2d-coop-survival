@@ -6,6 +6,17 @@ const HEIGHT = 500;
 const WORLD_WIDTH = ARENA_WIDTH_TILES * TILE_SIZE;
 const WORLD_HEIGHT = ARENA_HEIGHT_TILES * TILE_SIZE;
 const BULLET_POOL_SIZE = 48;
+const ENEMY_HIT_STOP_MS: Record<WeaponId, number> = { rifle: 12, shotgun: 35 };
+const ENEMY_DEFEAT_HIT_STOP_MS: Record<WeaponId, number> = { rifle: 24, shotgun: 42 };
+const PLAYER_HIT_STOP_MS: Record<EnemyKind, number> = { basic: 30, drone: 45 };
+const CAMERA_SHAKE_COOLDOWN_MS = 70;
+const SHOTGUN_SHAKE = { duration: 70, intensity: 0.0016 };
+const FIRE_SHAKE = { duration: 95, intensity: 0.0024 };
+const DEFEAT_SHAKE = { duration: 190, intensity: 0.0048 };
+const PLAYER_HIT_SHAKE: Record<EnemyKind, { duration: number; intensity: number }> = {
+  basic: { duration: 55, intensity: 0.0008 },
+  drone: { duration: 120, intensity: 0.0032 },
+};
 const ENEMY_IDS = ENEMY_INSTANCE_IDS;
 const INITIAL_ENEMY_IDS: readonly EnemyInstanceId[] = ['basic-1', 'basic-2', 'basic-3', 'basic-4', 'basic-5', 'basic-6', 'drone-1', 'drone-2'];
 const STAGGERED_ENEMIES: readonly { id: EnemyInstanceId; delay: number }[] = [
@@ -139,7 +150,12 @@ class Arena extends Phaser.Scene {
   private state: CombatState = retryCombat();
   private meta = new Map<Phaser.Physics.Arcade.Sprite, BulletMeta>();
   private contactAt = enemyNumbers();
+  private playerHitStopUntil = 0;
+  private enemyHitStopUntil = enemyNumbers();
   private knockbackUntil = enemyNumbers();
+  private knockbackVelocity = enemyRecord(() => ({ x: 0, y: 0 }));
+  private shakeCooldownUntil = 0;
+  private shakeIntensity = 0;
   private respawnCount = enemyNumbers();
   private recycleCount = enemyNumbers();
   private lastHitAt = enemyNumbers(Number.NEGATIVE_INFINITY);
@@ -206,10 +222,14 @@ class Arena extends Phaser.Scene {
     this.updateSurvival();
     if (this.state.defeated || this.state.victory)
       return;
-    const x = Number(this.keys.d.isDown || this.keys.right.isDown) - Number(this.keys.a.isDown || this.keys.left.isDown);
-    const y = Number(this.keys.s.isDown || this.keys.down.isDown) - Number(this.keys.w.isDown || this.keys.up.isDown);
-    const length = Math.hypot(x, y) || 1;
-    this.player.setVelocity((x / length) * 210, (y / length) * 210);
+    if (this.time.now < this.playerHitStopUntil) {
+      this.player.setVelocity(0, 0);
+    } else {
+      const x = Number(this.keys.d.isDown || this.keys.right.isDown) - Number(this.keys.a.isDown || this.keys.left.isDown);
+      const y = Number(this.keys.s.isDown || this.keys.down.isDown) - Number(this.keys.w.isDown || this.keys.up.isDown);
+      const length = Math.hypot(x, y) || 1;
+      this.player.setVelocity((x / length) * 210, (y / length) * 210);
+    }
     this.updateTileHud();
     this.updateVisibilityMask();
     this.updateReloadProgressHud();
@@ -283,8 +303,10 @@ class Arena extends Phaser.Scene {
       throw new Error('debugDamageEnemyのamountは正の有限値が必要です。');
     this.lastHitAt[id] = this.time.now;
     this.state = damageEnemy(this.state, id, amount);
+    const defeated = isEnemyDefeated(this.state, id);
+    this.startEnemyImpact(id, this.state.weapon, defeated);
     this.refreshHud();
-    if (isEnemyDefeated(this.state, id)) this.scheduleDefeatedEnemy(id);
+    if (defeated) this.scheduleDefeatedEnemy(id);
   }
 
   private reset(initial = false): void {
@@ -294,7 +316,13 @@ class Arena extends Phaser.Scene {
     this.state = retryCombat();
     this.survivalStartedAt = this.time.now;
     this.contactAt = enemyNumbers();
+    this.playerHitStopUntil = 0;
+    this.enemyHitStopUntil = enemyNumbers();
     this.knockbackUntil = enemyNumbers();
+    this.knockbackVelocity = enemyRecord(() => ({ x: 0, y: 0 }));
+    this.shakeCooldownUntil = 0;
+    this.shakeIntensity = 0;
+    this.cameras.main.resetFX();
     this.respawnCount = enemyNumbers();
     this.recycleCount = enemyNumbers();
     this.lastHitAt = enemyNumbers(Number.NEGATIVE_INFINITY);
@@ -499,8 +527,17 @@ class Arena extends Phaser.Scene {
 
   private moveEnemy(id: EnemyInstanceId): void {
     const enemy = this.enemies[id];
-    if (!enemy.active || this.time.now < this.knockbackUntil[id])
+    if (!enemy.active)
       return;
+    if (this.time.now < this.enemyHitStopUntil[id]) {
+      enemy.setVelocity(0, 0);
+      return;
+    }
+    if (this.time.now < this.knockbackUntil[id]) {
+      const velocity = this.knockbackVelocity[id];
+      enemy.setVelocity(velocity.x, velocity.y);
+      return;
+    }
     const config = ENEMIES[id];
     const playerTile = this.tile(this.player);
     const enemyTile = this.tile(enemy);
@@ -659,6 +696,12 @@ class Arena extends Phaser.Scene {
       const enemy = this.enemies[id];
       const silhouette = this.silhouettes[id];
       if (!enemy.active) {
+        if (isEnemyDefeated(this.state, id) && this.time.now < this.enemyHitStopUntil[id]) {
+          enemy.setVisible(true);
+          silhouette.setVisible(false);
+          this.syncEnemyHud(id, 'normal');
+          return;
+        }
         this.hideEnemyVisuals(id);
         delete this.visibilityTiles[id];
         return;
@@ -827,6 +870,7 @@ class Arena extends Phaser.Scene {
         feedback.textContent = '弾切れ: Rでリロード';
       return;
     }
+    this.shakeCamera(FIRE_SHAKE);
     const base = Phaser.Math.Angle.Between(this.player.x, this.player.y, pointer.worldX, pointer.worldY);
     for (let index = 0; index < weapon.pellets; index += 1) {
       const bullet = this.bullets.get(this.player.x, this.player.y, `bullet-${this.state.weapon}`) as Phaser.Physics.Arcade.Sprite | null;
@@ -852,6 +896,8 @@ class Arena extends Phaser.Scene {
     this.lastHitAt[id] = this.time.now;
     const result = resolveDamage(this.state.enemies[id].kind, data.damageType, data.damage);
     this.state = damageEnemy(this.state, id, result.amount);
+    const defeated = isEnemyDefeated(this.state, id);
+    this.startEnemyImpact(id, data.weapon, defeated);
     feedback.textContent = `${result.resisted ? '耐性' : '命中'}: ${WEAPONS[data.weapon].label} → ${ENEMY_LABELS[id]}`;
     enemy.setTint(16777215);
     const generation = this.generation;
@@ -862,18 +908,21 @@ class Arena extends Phaser.Scene {
       this.flashes.delete(id);
     }));
     if (data.knockback > 0) {
-      enemy.setVelocity(data.directionX * data.knockback, data.directionY * data.knockback);
-      this.knockbackUntil[id] = this.time.now + 180;
+      this.knockbackVelocity[id] = {
+        x: data.directionX * data.knockback,
+        y: data.directionY * data.knockback,
+      };
+      this.knockbackUntil[id] = this.enemyHitStopUntil[id] + 180;
     }
     this.refreshHud();
-    if (!isEnemyDefeated(this.state, id))
+    if (!defeated)
       return;
     this.scheduleDefeatedEnemy(id);
   }
 
   private scheduleDefeatedEnemy(id: EnemyInstanceId): void {
     const enemy = this.enemies[id];
-    enemy.disableBody(true, true);
+    enemy.disableBody(true, false);
     this.hideEnemyVisuals(id);
     this.hiddenSince.delete(id);
     delete this.paths[id];
@@ -881,18 +930,50 @@ class Arena extends Phaser.Scene {
     this.respawnCount[id] += 1;
     const delay = respawnDelayFor(ENEMIES[id].kind, id, this.respawnCount[id], this.map.seed);
     this.scheduleEnemySpawn(id, 'death', delay);
+    if (this.time.now < this.enemyHitStopUntil[id]) {
+      enemy.setVisible(true);
+      this.syncEnemyHud(id, 'normal');
+    }
   }
 
   private hitPlayer(id: EnemyInstanceId): void {
     if (this.state.defeated || this.state.victory || this.time.now - this.contactAt[id] < ENEMIES[id].cooldown)
       return;
     this.contactAt[id] = this.time.now;
+    this.startPlayerImpact(ENEMIES[id].kind);
     this.state = damagePlayer(this.state, ENEMIES[id].damage);
     if (!this.state.defeated) {
       this.refreshHud();
       return;
     }
     this.enterTerminal('defeat');
+  }
+
+  private startEnemyImpact(id: EnemyInstanceId, weapon: WeaponId, defeated: boolean): void {
+    const duration = defeated ? ENEMY_DEFEAT_HIT_STOP_MS[weapon] : ENEMY_HIT_STOP_MS[weapon];
+    this.enemyHitStopUntil[id] = Math.max(this.enemyHitStopUntil[id], this.time.now + duration);
+    this.enemies[id].setVelocity(0, 0);
+    if (defeated)
+      this.shakeCamera(DEFEAT_SHAKE);
+    else if (weapon === 'shotgun')
+      this.shakeCamera(SHOTGUN_SHAKE);
+  }
+
+  private startPlayerImpact(kind: EnemyKind): void {
+    this.playerHitStopUntil = Math.max(this.playerHitStopUntil, this.time.now + PLAYER_HIT_STOP_MS[kind]);
+    this.player.setVelocity(0, 0);
+    this.shakeCamera(PLAYER_HIT_SHAKE[kind]);
+  }
+
+  private shakeCamera(effect: { duration: number; intensity: number }): void {
+    const force = effect.intensity > this.shakeIntensity || this.time.now < this.shakeCooldownUntil;
+    if (force && effect.intensity <= this.shakeIntensity)
+      return;
+    if (!force)
+      this.shakeIntensity = 0;
+    this.shakeCooldownUntil = this.time.now + CAMERA_SHAKE_COOLDOWN_MS;
+    this.shakeIntensity = effect.intensity;
+    this.cameras.main.shake(effect.duration, effect.intensity, force);
   }
 
   private enterTerminal(result: 'defeat' | 'victory'): void {
