@@ -259,6 +259,7 @@ class Arena extends Phaser.Scene {
   private hiddenSince = new Map<EnemyInstanceId, number>();
   private recyclingEnemyId: EnemyInstanceId | undefined;
   private hiddenRecycleEnabled = true;
+  private debugPlayerInvulnerable = false;
   private paths = {} as Record<EnemyInstanceId, PathState>;
   private enemySpawnTimers = new Map<EnemyInstanceId, Phaser.Time.TimerEvent>();
   private flashes = new Map<EnemyInstanceId, Phaser.Time.TimerEvent>();
@@ -389,6 +390,25 @@ class Arena extends Phaser.Scene {
     if (!enabled) this.hiddenSince.clear();
   }
 
+  public debugSetPlayerInvulnerable(enabled: boolean): void {
+    if (!IS_DEV)
+      throw new Error('debugSetPlayerInvulnerableはDEV環境だけで使用できます。');
+    this.debugPlayerInvulnerable = enabled;
+  }
+
+  public debugMovePlayerTo(tile: TilePosition): void {
+    if (!IS_DEV)
+      throw new Error('debugMovePlayerToはDEV環境だけで使用できます。');
+    if (!Number.isInteger(tile.x) || !Number.isInteger(tile.y) || this.map.tiles[tile.y]?.[tile.x] !== 'floor')
+      throw new Error('debugMovePlayerToの移動先はfloor tileである必要があります。');
+    const point = this.world(tile);
+    this.player.setPosition(point.x, point.y).setVelocity(0, 0);
+    this.player.body?.reset(point.x, point.y);
+    this.updateTileHud();
+    this.updateVisibilityMask(true);
+    this.updateEnemyVisibility(true);
+  }
+
   public debugDamageEnemy(id: EnemyInstanceId, amount: number): void {
     if (!IS_DEV)
       throw new Error('debugDamageEnemyはDEV環境だけで使用できます。');
@@ -426,6 +446,7 @@ class Arena extends Phaser.Scene {
     this.lastHitAt = enemyNumbers(Number.NEGATIVE_INFINITY);
     this.hiddenSince.clear();
     this.recyclingEnemyId = undefined;
+    this.debugPlayerInvulnerable = false;
     this.paths = {} as Record<EnemyInstanceId, PathState>;
     this.visibilityTiles = {};
     this.visibilityMaskPlayerTile = undefined;
@@ -626,7 +647,7 @@ class Arena extends Phaser.Scene {
 
   private moveEnemy(id: EnemyInstanceId): void {
     const enemy = this.enemies[id];
-    if (!enemy.active)
+    if (this.physics.world.isPaused || !enemy.active)
       return;
     if (this.time.now < this.enemyHitStopUntil[id]) {
       enemy.setVelocity(0, 0);
@@ -1039,6 +1060,8 @@ class Arena extends Phaser.Scene {
   }
 
   private hitPlayer(id: EnemyInstanceId): void {
+    if (IS_DEV && this.debugPlayerInvulnerable)
+      return;
     if (this.state.defeated || this.state.victory || this.time.now - this.contactAt[id] < ENEMIES[id].cooldown)
       return;
     this.contactAt[id] = this.time.now;

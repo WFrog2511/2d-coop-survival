@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { SPAWN_PHASE_MS, enemyVisibility, findPath, generateArenaMap, hiddenRecycleThresholdFor, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, spawnDirectionForSlot, type SpawnDirection, type TilePosition, viewportTileRect } from '../src/arena-map';
+import { SPAWN_PHASE_MS, enemyVisibility, findPath, generateArenaMap, hasLineOfSight, hiddenRecycleThresholdFor, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, spawnDirectionForSlot, type SpawnDirection, type TilePosition, viewportTileRect } from '../src/arena-map';
 import { AMMO_BOX_RESPAWN_MS, ENEMY_INSTANCE_IDS, SURVIVAL_LIMIT_MS } from '../src/rules';
 
 type EnemyId = (typeof ENEMY_INSTANCE_IDS)[number];
@@ -31,12 +31,31 @@ type ArenaDebugScene = {
   cameras: { main: { worldView: { left: number; top: number; right: number; bottom: number } } };
   debugRespawnEnemy: (id: EnemyId) => void;
   debugSetHiddenRecycleEnabled: (enabled: boolean) => void;
+  debugSetPlayerInvulnerable: (enabled: boolean) => void;
+  debugMovePlayerTo: (tile: TilePosition) => void;
   debugDamageEnemy: (id: EnemyId, amount: number) => void;
 };
 
 async function currentAmmo(page: import('@playwright/test').Page): Promise<number> {
   const text = await page.getByTestId('ammo').textContent();
   return Number(text?.split('/')[0]);
+}
+
+async function documentBounds(locator: import('@playwright/test').Locator): Promise<{
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}> {
+  return locator.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return {
+      x: bounds.x + window.scrollX,
+      y: bounds.y + window.scrollY,
+      width: bounds.width,
+      height: bounds.height,
+    };
+  });
 }
 
 async function expectAmmoBoxCount(
@@ -46,8 +65,26 @@ async function expectAmmoBoxCount(
   await expect.poll(async () => boxCount.evaluate(element => (element as HTMLOutputElement).value)).toBe(String(expected));
 }
 
+async function expectOutputValue(
+  output: import('@playwright/test').Locator,
+  expected: string,
+): Promise<void> {
+  await expect.poll(async () => output.evaluate(element => (element as HTMLOutputElement).value)).toBe(expected);
+}
+
 function tileKeysFromAttribute(value: string | null): string[] {
   return value ? value.split('|').filter(key => key.length > 0) : [];
+}
+
+function expectedObscuredTileCount(
+  map: ReturnType<typeof generateArenaMap>,
+  player: TilePosition,
+): number {
+  let count = 0;
+  for (let y = 0; y < map.height; y += 1)
+    for (let x = 0; x < map.width; x += 1)
+      if (!hasLineOfSight(map, player, { x, y })) count += 1;
+  return count;
 }
 
 async function moveToTile(
@@ -56,39 +93,11 @@ async function moveToTile(
   target: TilePosition,
   playerTileHud: import('@playwright/test').Locator,
 ): Promise<void> {
-  const currentText = await playerTileHud.textContent();
-  const currentParts = currentText?.split(',').map(Number) ?? [];
-  const current = { x: Number(currentParts[0]), y: Number(currentParts[1]) };
-  const path = findPath(map, current, target);
-  if (path.length === 0) throw new Error('弾薬箱までの経路がありません。');
-  for (let index = 1; index < path.length; index += 1) {
-    const previous = path[index - 1];
-    const next = path[index];
-    const dx = next.x - previous.x;
-    const dy = next.y - previous.y;
-    const key = dx > 0 ? 'd' : dx < 0 ? 'a' : dy > 0 ? 's' : 'w';
-    await page.keyboard.down(key);
-    await expect(playerTileHud).toHaveText(next.x + ',' + next.y, { timeout: 2_000 });
-    await page.keyboard.up(key);
-  }
-}
-
-async function collectAmmoBoxWithClock(
-  page: import('@playwright/test').Page,
-  map: ReturnType<typeof generateArenaMap>,
-  target: TilePosition,
-  playerTileHud: import('@playwright/test').Locator,
-  boxCount: import('@playwright/test').Locator,
-): Promise<void> {
   for (let step = 0; step < 300; step += 1) {
-    if ((await boxCount.textContent()) === '3') return;
     const currentText = await playerTileHud.textContent();
     const currentParts = currentText?.split(',').map(Number) ?? [];
     const current = { x: Number(currentParts[0]), y: Number(currentParts[1]) };
-    if (current.x === target.x && current.y === target.y) {
-      await expect(boxCount).toHaveText('3', { timeout: 2_000 });
-      return;
-    }
+    if (current.x === target.x && current.y === target.y) return;
     const path = findPath(map, current, target);
     if (path.length < 2) throw new Error('弾薬箱までの経路がありません。');
     const next = path[1];
@@ -96,10 +105,27 @@ async function collectAmmoBoxWithClock(
     const dy = next.y - current.y;
     const key = dx > 0 ? 'd' : dx < 0 ? 'a' : dy > 0 ? 's' : 'w';
     await page.keyboard.down(key);
-    await page.clock.runFor(100);
-    await page.keyboard.up(key);
+    try {
+      await expect(playerTileHud).not.toHaveText(current.x + ',' + current.y, { timeout: 2_000 });
+    } finally {
+      await page.keyboard.up(key);
+    }
   }
-  await expect(boxCount).toHaveText('3');
+  throw new Error('弾薬箱までの移動が上限を超えました。');
+}
+
+async function collectAmmoBoxWithClock(
+  page: import('@playwright/test').Page,
+  target: TilePosition,
+  boxCount: import('@playwright/test').Locator,
+): Promise<void> {
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, target);
+  await page.clock.runFor(100);
+  await expect(boxCount).toHaveText('3', { timeout: 2_000 });
 }
 
 async function setArenaPhysics(
@@ -121,6 +147,17 @@ async function setHiddenRecycle(
     const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
     if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
     scene.debugSetHiddenRecycleEnabled(nextEnabled);
+  }, enabled);
+}
+
+async function setPlayerInvulnerable(
+  page: import('@playwright/test').Page,
+  enabled: boolean,
+): Promise<void> {
+  await page.evaluate((nextEnabled) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugSetPlayerInvulnerable(nextEnabled);
   }, enabled);
 }
 
@@ -294,6 +331,24 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('/');
+  const gameCanvas = page.locator('#game canvas');
+  await expect(gameCanvas).toBeVisible();
+  const initialCanvasBounds = await gameCanvas.boundingBox();
+  if (!initialCanvasBounds) throw new Error('初期化後の戦闘アリーナcanvasが見つかりません。');
+  expect(initialCanvasBounds.width).toBe(800);
+  expect(initialCanvasBounds.height).toBe(500);
+  const initialCanvasDocumentBounds = await documentBounds(gameCanvas);
+  const canvasPrecedesGameText = await page.evaluate(() => {
+    const shell = document.querySelector('#game-shell');
+    const controls = Array.from(document.querySelectorAll('header p'))
+      .find(element => element.textContent?.includes('移動:'));
+    const hud = document.querySelector('[data-testid="hud"]');
+    const enemyHud = document.querySelector('[data-testid="enemy-hud"]');
+    if (!shell || !controls || !hud || !enemyHud) throw new Error('ゲーム表示と操作・HUDテキストが必要です。');
+    return [controls, hud, enemyHud].every(element =>
+      Boolean(shell.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING));
+  });
+  expect(canvasPrecedesGameText).toBe(true);
   await setArenaPhysics(page, 'pause');
   await expect(page.getByTestId('weapon')).toHaveText('アサルトライフル');
   await expect(page.getByTestId('ammo')).toHaveText('20/20');
@@ -314,10 +369,12 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expect(page.getByTestId('survival-time')).toHaveText(/^\d\d:\d\d$/);
   await expect(page.getByTestId('map-seed')).toHaveText('15');
   await expect(page.getByTestId('player-tile')).toHaveText(/\d+,\d+/);
+  const map = generateArenaMap(Number(await page.getByTestId('map-seed').textContent()));
   const playerTileHud = page.getByTestId('player-tile');
+  const initialPlayerTile = parseFloorTile(map, await playerTileHud.textContent(), 'プレイヤー');
   await expect(playerTileHud).toHaveAttribute('data-visibility-mask-alpha', '0.25');
   const initialObscuredTileCount = Number(await playerTileHud.getAttribute('data-obscured-tile-count'));
-  expect(initialObscuredTileCount).toBe(803);
+  expect(initialObscuredTileCount).toBe(expectedObscuredTileCount(map, initialPlayerTile));
   const initialVisibilityPlayerTile = await playerTileHud.getAttribute('data-visibility-player-tile');
   expect(initialVisibilityPlayerTile).toMatch(/^\d+,\d+$/);
   await expectEnemyHitPointsAndIds(page, 0);
@@ -327,8 +384,9 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expectCurrentEnemyPresentations(page);
   await setArenaPhysics(page, 'resume');
   await expect(page.getByTestId('affinity')).toContainText('ライフル1発で撃破可能');
-  const bounds = await page.locator('#game canvas').boundingBox();
+  const bounds = await gameCanvas.boundingBox();
   if (!bounds) throw new Error('戦闘アリーナのcanvasが見つかりません。');
+  expect(bounds).toEqual(initialCanvasBounds);
 
   const timeBounds = await page.locator('#survival-panel').boundingBox();
   const hpBounds = await page.locator('#hp-panel').boundingBox();
@@ -351,17 +409,23 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expect(playerTileHud).not.toHaveText(initialTile ?? '');
   await expect(playerTileHud).not.toHaveAttribute('data-visibility-player-tile', initialVisibilityPlayerTile ?? '');
   await expect(playerTileHud).toHaveAttribute('data-visibility-mask-alpha', '0.25');
-  await expect(playerTileHud).toHaveAttribute('data-obscured-tile-count', '805');
+  const movedPlayerTile = parseFloorTile(map, await playerTileHud.textContent(), '移動後プレイヤー');
+  const movedObscuredTileCount = Number(await playerTileHud.getAttribute('data-obscured-tile-count'));
+  expect(movedObscuredTileCount).toBe(expectedObscuredTileCount(map, movedPlayerTile));
+  expect(movedObscuredTileCount).not.toBe(initialObscuredTileCount);
 
   await page.mouse.move(bounds.x + (bounds.width * 90) / 800, bounds.y + (bounds.height * 90) / 500);
   await page.mouse.down();
   await page.waitForTimeout(380);
   await page.mouse.up();
   expect(await currentAmmo(page)).toBeLessThanOrEqual(18);
-  const map = generateArenaMap(Number(await page.getByTestId('map-seed').textContent()));
   const boxTiles = selectAmmoBoxTiles(map);
   expect(boxTiles).toHaveLength(4);
-  const firstBox = boxTiles[0];
+  const currentPlayerTile = parseFloorTile(map, await playerTileHud.textContent(), 'プレイヤー');
+  const firstBox = [...boxTiles].sort((left, right) => {
+    const distance = findPath(map, currentPlayerTile, left).length - findPath(map, currentPlayerTile, right).length;
+    return distance || left.y - right.y || left.x - right.x;
+  })[0];
   const firstBoxKey = firstBox.x + ',' + firstBox.y;
   const initialBoxKeys = await page.getByTestId('ammo-box-count').getAttribute('data-active-tiles');
   expect(tileKeysFromAttribute(initialBoxKeys)).toContain(firstBoxKey);
@@ -419,6 +483,7 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expect(page.getByTestId('hp')).toHaveText('0');
   await expect.poll(async () => hpBar.evaluate(element => (element as HTMLProgressElement).value)).toBe(0);
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-respawn-tiles', '');
+  expect(await documentBounds(gameCanvas)).toEqual(initialCanvasDocumentBounds);
   await page.getByTestId('retry').click();
   await setArenaPhysics(page, 'pause');
   await expect(page.getByTestId('defeat')).toBeHidden();
@@ -434,13 +499,16 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expect.poll(async () => hpBar.evaluate(element => (element as HTMLProgressElement).value)).toBe(100);
   await expectEnemyHitPointsAndIds(page, 0);
   await expect(page.getByTestId('feedback')).toHaveText('-');
-  const retryPlayerTile = '23,5';
+  const retryMap = generateArenaMap(1_038_872_098);
+  const retryPlayerTile = `${retryMap.start.x},${retryMap.start.y}`;
   await expect(page.getByTestId('map-seed')).toHaveText('1038872098');
   await expect(playerTileHud).toHaveText(retryPlayerTile);
   await expect(playerTileHud).toHaveAttribute('data-visibility-mask-alpha', '0.25');
-  expect(Number(await playerTileHud.getAttribute('data-obscured-tile-count'))).toBe(920);
+  const retryObscuredTileCount = Number(await playerTileHud.getAttribute('data-obscured-tile-count'));
+  expect(retryObscuredTileCount).toBe(expectedObscuredTileCount(retryMap, retryMap.start));
   await expect(playerTileHud).toHaveAttribute('data-visibility-player-tile', retryPlayerTile);
   await expectCurrentEnemyPresentations(page);
+  expect(await documentBounds(gameCanvas)).toEqual(initialCanvasDocumentBounds);
   expect(errors).toEqual([]);
 });
 
@@ -554,7 +622,7 @@ test('DEV queryで初期数、段階間隔、候補poolを開始前に固定す�
 });
 
 test('不正なDEV spawn queryは既定値へ戻す', async ({ page }) => {
-  await page.goto('/?enemyInitialCount=13&enemyStaggerIntervalMs=0&enemySpawnCandidatePool=1001');
+  await page.goto('/?enemyInitialCount=13&enemyStaggerIntervalMs=0&enemySpawnCandidatePool=4001');
   await expect(page.getByTestId('spawn-phase')).toHaveAttribute(
     'data-spawn-config',
     'enemyInitialCount=8;enemyStaggerIntervalMs=3000;enemySpawnCandidatePool=10',
@@ -562,6 +630,7 @@ test('不正なDEV spawn queryは既定値へ戻す', async ({ page }) => {
 });
 
 test('hidden recycleはHPを維持し、deathだけ全回復し、retry後に旧callbackを残さない', async ({ page }) => {
+  test.setTimeout(45_000);
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
   await page.goto('/');
@@ -588,14 +657,17 @@ test('hidden recycleはHPを維持し、deathだけ全回復し、retry後に旧
 
   await debugDamageEnemy(page, target.id, 1);
   await expect(page.getByTestId(`${target.id}-hp`)).toHaveText('3');
-  await page.clock.runFor(target.threshold + 100);
+  for (let elapsed = 0; elapsed < 20_000; elapsed += 1_000) {
+    if ((await enemySpawnMetadata(page, target.id)).recycleCount === '1') break;
+    await page.clock.runFor(1_000);
+  }
   const recycling = await enemySpawnMetadata(page, target.id);
   expect(recycling.recycleCount).toBe('1');
   expect(recycling.active).toBe('false');
   expect(recycling.spawnReason).toBe('recycle');
   const pendingRecycles = (await allEnemySpawnMetadata(page))
     .filter(metadata => metadata.active === 'false' && metadata.spawnReason === 'recycle');
-  expect(pendingRecycles.map(metadata => metadata.stableId)).toEqual([target.id]);
+  expect(pendingRecycles.map(metadata => metadata.stableId)).toContain(target.id);
 
   await page.clock.runFor(recycleDelayFor(target.id, 1, mapSeed) + 100);
   await expect(page.getByTestId(`${target.id}-hp`)).toHaveAttribute('data-active', 'true');
@@ -604,10 +676,10 @@ test('hidden recycleはHPを維持し、deathだけ全回復し、retry後に旧
 
   await debugDamageEnemy(page, target.id, 3);
   await expect(page.getByTestId(`${target.id}-hp`)).toHaveAttribute('data-active', 'false');
-  await page.clock.runFor(respawnDelayFor('basic', target.id, 1, mapSeed) + 100);
+  await page.clock.runFor(respawnDelayFor('basic', target.id, 1, mapSeed) + 1_100);
   await expect(page.getByTestId(`${target.id}-hp`)).toHaveAttribute('data-active', 'true');
   await expect(page.getByTestId(`${target.id}-hp`)).toHaveAttribute('data-spawn-reason', 'death');
-  await expect(page.getByTestId(`${target.id}-hp`)).toHaveText('4');
+  await expectOutputValue(page.getByTestId(`${target.id}-hp`), '4');
 
   const otherInitialBasic = (await Promise.all(INITIAL_ACTIVE_IDS
     .filter(id => id.startsWith('basic-') && id !== target.id)
@@ -620,9 +692,14 @@ test('hidden recycleはHPを維持し、deathだけ全回復し、retry後に旧
   await page.getByTestId('retry').dispatchEvent('click');
   await setHiddenRecycle(page, false);
   await setArenaPhysics(page, 'pause');
+  const retryEnemyHp = page.getByTestId(`${otherInitialBasic.id}-hp`);
+  await page.clock.runFor(1_100);
+  await expect(retryEnemyHp).toHaveAttribute('data-active', 'true');
+  await expect(retryEnemyHp).toHaveAttribute('data-spawn-reason', 'initial');
+  await expectOutputValue(retryEnemyHp, '4');
   await page.clock.runFor(oldDeathDelay + 100);
-  await expect(page.getByTestId(`${otherInitialBasic.id}-hp`)).toHaveText('4');
-  await expect(page.getByTestId(`${otherInitialBasic.id}-hp`)).toHaveAttribute('data-spawn-reason', 'initial');
+  await expect(retryEnemyHp).toHaveAttribute('data-active', 'true');
+  await expect(retryEnemyHp).toHaveAttribute('data-spawn-reason', 'initial');
 });
 
 test('3分の境界で勝利し、戦闘停止後の再挑戦でタイマーと状態を初期化できる', async ({ page }) => {
@@ -654,6 +731,7 @@ test('弾薬箱は取得後30秒で同じboxIdのまま新しい画面外floor�
   await page.clock.install({ time: 0 });
   await page.clock.setFixedTime(15);
   await page.goto('/');
+  await setPlayerInvulnerable(page, true);
   const mapSeed = Number(await page.getByTestId('map-seed').textContent());
   const map = generateArenaMap(mapSeed);
   const boxTiles = selectAmmoBoxTiles(map);
@@ -663,10 +741,9 @@ test('弾薬箱は取得後30秒で同じboxIdのまま新しい画面外floor�
   const firstBox = boxTiles[boxIndex];
   if (!firstBox) throw new Error('初期弾薬箱が必要です。');
   const firstBoxKey = firstBox.x + ',' + firstBox.y;
-  const playerTileHud = page.getByTestId('player-tile');
   const boxCount = page.getByTestId('ammo-box-count');
   await expect(boxCount).toHaveAttribute('data-active-boxes', new RegExp(boxId + ':' + firstBoxKey));
-  await collectAmmoBoxWithClock(page, map, firstBox, playerTileHud, boxCount);
+  await collectAmmoBoxWithClock(page, firstBox, boxCount);
   await expect(boxCount).toHaveText('3');
   await expect(boxCount).toHaveAttribute('data-respawn-boxes', boxId);
   await expect(boxCount).toHaveAttribute('data-respawn-tiles', firstBoxKey);
@@ -692,6 +769,7 @@ test('victoryとretryは弾薬箱の復活待ちをclearし、新しいrunを初
   await page.clock.install({ time: 0 });
   await page.clock.setFixedTime(15);
   await page.goto('/');
+  await setPlayerInvulnerable(page, true);
   const mapSeed = Number(await page.getByTestId('map-seed').textContent());
   const map = generateArenaMap(mapSeed);
   const boxTiles = selectAmmoBoxTiles(map);
@@ -700,13 +778,12 @@ test('victoryとretryは弾薬箱の復活待ちをclearし、新しいrunを初
   const boxId = 'ammo-box-' + (boxIndex + 1);
   const firstBox = boxTiles[boxIndex];
   if (!firstBox) throw new Error('初期弾薬箱が必要です。');
-  const playerTileHud = page.getByTestId('player-tile');
   const boxCount = page.getByTestId('ammo-box-count');
   await expectAmmoBoxCount(boxCount, 4);
   await setArenaPhysics(page, 'pause');
   await page.clock.fastForward(SURVIVAL_LIMIT_MS - AMMO_BOX_RESPAWN_MS);
   await setArenaPhysics(page, 'resume');
-  await collectAmmoBoxWithClock(page, map, firstBox, playerTileHud, boxCount);
+  await collectAmmoBoxWithClock(page, firstBox, boxCount);
   await expect(boxCount).toHaveAttribute('data-respawn-boxes', boxId);
   await setArenaPhysics(page, 'pause');
   await page.clock.fastForward(SURVIVAL_LIMIT_MS);

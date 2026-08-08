@@ -1,9 +1,29 @@
 export const TILE_SIZE = 40;
-export const ARENA_WIDTH_TILES = 40;
-export const ARENA_HEIGHT_TILES = 25;
+export const ARENA_WIDTH_TILES = 80;
+export const ARENA_HEIGHT_TILES = 50;
 export const AMMO_BOX_COUNT = 4;
 export const SPAWN_PHASE_MS = 60_000;
 export const SPAWN_DIRECTIONS = ['up', 'right', 'down', 'left'] as const;
+
+const NORMAL_ROOM_COUNT = 14;
+const NORMAL_ROOM_WIDTH = { minimum: 8, maximum: 12 };
+const NORMAL_ROOM_HEIGHT = { minimum: 6, maximum: 10 };
+const NORMAL_ROOM_PLACEMENT_ATTEMPTS = 80;
+const FALLBACK_ROOM_COLUMNS = 3;
+const FALLBACK_ROOM_ROWS = 3;
+const FALLBACK_ROOM_COUNT = 8;
+const FALLBACK_ROOM_WIDTH = 12;
+const FALLBACK_ROOM_HEIGHT = 10;
+const FALLBACK_ROOM_SLOTS = [
+  { column: 1, row: 1 },
+  { column: 1, row: 0 },
+  { column: 0, row: 1 },
+  { column: 1, row: 2 },
+  { column: 2, row: 1 },
+  { column: 0, row: 0 },
+  { column: 2, row: 0 },
+  { column: 0, row: 2 },
+] as const;
 
 export type Tile = 'wall' | 'floor';
 export type SpawnDirection = (typeof SPAWN_DIRECTIONS)[number];
@@ -86,7 +106,14 @@ export function generateArenaMap(seed: number): ArenaMap {
     if (map && allFloorsReachable(map)) return map;
     candidateSeed = nextSeed(candidateSeed);
   }
-  return generateCandidate(seed >>> 0, candidateSeed, true) as ArenaMap;
+  return generateFallbackArenaMap(seed);
+}
+
+/** 通常生成の再試行上限に達したときの連結済み地形を返す。 */
+export function generateFallbackArenaMap(seed: number): ArenaMap {
+  const map = generateCandidate(seed >>> 0, seed >>> 0, true);
+  if (!map || !allFloorsReachable(map)) throw new Error('fallbackアリーナを生成できません。');
+  return map;
 }
 
 export function generateNextArenaMap(current: ArenaMap): ArenaMap {
@@ -164,20 +191,8 @@ export function findPath(
 }
 
 export function allFloorsReachable(map: ArenaMap): boolean {
-  const reachable = findPath(map, map.start, map.start);
-  if (reachable.length === 0) return false;
-  const visited = new Set<string>([positionKey(map.start)]);
-  const queue = [map.start];
-  for (let index = 0; index < queue.length; index += 1) {
-    neighbours(queue[index]).forEach((next) => {
-      const key = positionKey(next);
-      if (!visited.has(key) && isFloor(map, next)) {
-        visited.add(key);
-        queue.push(next);
-      }
-    });
-  }
-  return floorTiles(map).every(position => visited.has(positionKey(position)));
+  const distances = pathDistances(map, map.start);
+  return distances.size > 0 && floorTiles(map).every(position => distances.has(positionKey(position)));
 }
 
 export function selectAmmoBoxTiles(
@@ -202,8 +217,9 @@ export function selectSpawnTile(
   seed: number,
 ): TilePosition | null {
   const occupied = new Set(request.occupied.map(positionKey));
+  const distances = pathDistances(map, request.player);
   const candidates = floorTiles(map).filter(position =>
-    !occupied.has(positionKey(position)) && findPath(map, request.player, position).length > 0,
+    !occupied.has(positionKey(position)) && distances.has(positionKey(position)),
   );
   if (candidates.length === 0) return null;
   const outside = candidates.filter(position => !inside(position, request.viewport));
@@ -230,18 +246,28 @@ export function selectEnemySpawnTile(
   candidatePoolSize = 10,
 ): TilePosition | null {
   const occupied = new Set(request.occupied.map(positionKey));
+  const distances = pathDistances(map, request.player);
+  const lineOfSightByTile = new Map<string, boolean>();
+  const hasCachedLineOfSight = (position: TilePosition): boolean => {
+    const key = positionKey(position);
+    const cached = lineOfSightByTile.get(key);
+    if (cached !== undefined) return cached;
+    const visible = hasLineOfSight(map, request.player, position);
+    lineOfSightByTile.set(key, visible);
+    return visible;
+  };
   const candidates = floorTiles(map)
     .filter(position =>
       !occupied.has(positionKey(position))
       && !inside(position, request.viewport)
       && directionFrom(request.player, position) === request.direction
-      && enemyVisibility(map, request.player, position) === 'hidden',
+      && !hasCachedLineOfSight(position)
+      && !neighbours(position).some(hasCachedLineOfSight),
     )
-    .map((position) => {
-      const path = findPath(map, request.player, position);
-      return { position, distance: path.length - 1 };
+    .flatMap((position) => {
+      const distance = distances.get(positionKey(position));
+      return distance === undefined ? [] : [{ position, distance }];
     })
-    .filter(candidate => candidate.distance >= 0)
     .sort((left, right) => left.distance - right.distance || left.position.y - right.position.y || left.position.x - right.position.x);
   if (candidates.length === 0) return null;
   const poolSize = Number.isFinite(candidatePoolSize)
@@ -279,7 +305,7 @@ export function basicApproachRoleFor(enemyId: string): BasicApproachRole | null 
 
 function generateCandidate(seed: number, generationSeed: number, fallback: boolean): ArenaMap | null {
   const random = new SeededRandom(generationSeed);
-  const roomCount = fallback ? 4 : 7;
+  const roomCount = fallback ? FALLBACK_ROOM_COUNT : NORMAL_ROOM_COUNT;
   const rooms: Room[] = [];
   for (let roomIndex = 0; roomIndex < roomCount; roomIndex += 1) {
     const room = placeRoom(random, rooms, fallback, roomIndex);
@@ -290,17 +316,15 @@ function generateCandidate(seed: number, generationSeed: number, fallback: boole
     Array<Tile>(ARENA_WIDTH_TILES).fill('wall'),
   );
   rooms.forEach(room => carveRoom(tiles, room));
-  const corridors: Corridor[] = [];
-  for (let index = 1; index < rooms.length; index += 1) {
-    const corridor: Corridor = {
-      from: roomCenter(rooms[index - 1]),
-      to: roomCenter(rooms[index]),
-      width: fallback ? 2 : random.integer(1, 3),
-      horizontalFirst: random.integer(0, 1) === 0,
-    };
-    corridors.push(corridor);
-    carveCorridor(tiles, corridor);
-  }
+  const corridors = fallback
+    ? fallbackCorridors(rooms)
+    : rooms.slice(1).map((room, index) => ({
+        from: roomCenter(rooms[index]),
+        to: roomCenter(room),
+        width: random.integer(1, 3),
+        horizontalFirst: random.integer(0, 1) === 0,
+      }));
+  corridors.forEach(corridor => carveCorridor(tiles, corridor));
   const start = roomCenter(rooms[0]);
   const protectedTiles = new Set<string>([positionKey(start), ...corridors.flatMap(corridor => corridorTiles(corridor).map(positionKey))]);
   const obstacles = fallback ? [] : placeObstacles(tiles, rooms, protectedTiles, random);
@@ -321,23 +345,62 @@ function generateCandidate(seed: number, generationSeed: number, fallback: boole
 }
 
 function placeRoom(random: SeededRandom, rooms: readonly Room[], fallback: boolean, index: number): Room | null {
-  if (fallback) {
-    const columns = [2, 20];
-    const rows = [3, 14];
-    return { x: columns[index % 2], y: rows[Math.floor(index / 2)], width: 8, height: 6 };
-  }
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    const width = random.integer(5, 9);
-    const height = random.integer(4, 7);
+  if (fallback) return fallbackRoomAt(index);
+  for (let attempt = 0; attempt < NORMAL_ROOM_PLACEMENT_ATTEMPTS; attempt += 1) {
+    const width = random.integer(NORMAL_ROOM_WIDTH.minimum, NORMAL_ROOM_WIDTH.maximum);
+    const height = random.integer(NORMAL_ROOM_HEIGHT.minimum, NORMAL_ROOM_HEIGHT.maximum);
+    const startingRoom = index === 0;
     const room = {
-      x: random.integer(1, ARENA_WIDTH_TILES - width - 2),
-      y: random.integer(1, ARENA_HEIGHT_TILES - height - 2),
+      x: random.integer(
+        startingRoom ? Math.floor(ARENA_WIDTH_TILES * 0.3) : 1,
+        startingRoom ? Math.floor(ARENA_WIDTH_TILES * 0.7) - width : ARENA_WIDTH_TILES - width - 2,
+      ),
+      y: random.integer(
+        startingRoom ? Math.floor(ARENA_HEIGHT_TILES * 0.3) : 1,
+        startingRoom ? Math.floor(ARENA_HEIGHT_TILES * 0.7) - height : ARENA_HEIGHT_TILES - height - 2,
+      ),
       width,
       height,
     };
     if (rooms.every(existing => !roomsTouchWithMargin(room, existing))) return room;
   }
   return null;
+}
+
+function fallbackRoomAt(index: number): Room {
+  const slot = FALLBACK_ROOM_SLOTS[index];
+  if (!slot) throw new Error('fallback部屋の配置が不正です。');
+  const interiorWidth = ARENA_WIDTH_TILES - 2;
+  const centerColumn = Math.floor(FALLBACK_ROOM_COLUMNS / 2);
+  const centerRow = Math.floor(FALLBACK_ROOM_ROWS / 2);
+  const centerX = Math.floor((ARENA_WIDTH_TILES - FALLBACK_ROOM_WIDTH) / 2);
+  const centerY = Math.floor((ARENA_HEIGHT_TILES - FALLBACK_ROOM_HEIGHT) / 2);
+  const horizontalOffset = Math.floor((interiorWidth - FALLBACK_ROOM_WIDTH * 2) / 2);
+  const verticalOffset = Math.floor((ARENA_HEIGHT_TILES - FALLBACK_ROOM_HEIGHT * 2) / 2);
+  return {
+    x: centerX + (slot.column - centerColumn) * horizontalOffset,
+    y: centerY + (slot.row - centerRow) * verticalOffset,
+    width: FALLBACK_ROOM_WIDTH,
+    height: FALLBACK_ROOM_HEIGHT,
+  };
+}
+
+function fallbackCorridors(rooms: readonly Room[]): Corridor[] {
+  const connections = [
+    [0, 1],
+    [0, 2],
+    [0, 3],
+    [0, 4],
+    [1, 5],
+    [1, 6],
+    [2, 7],
+  ] as const;
+  return connections.map(([fromIndex, toIndex]) => ({
+    from: roomCenter(rooms[fromIndex]),
+    to: roomCenter(rooms[toIndex]),
+    width: 2,
+    horizontalFirst: true,
+  }));
 }
 
 function roomsTouchWithMargin(left: Room, right: Room): boolean {
@@ -433,6 +496,25 @@ function inBounds(map: ArenaMap, position: TilePosition): boolean {
     && position.y >= 0
     && position.x < map.width
     && position.y < map.height;
+}
+
+function pathDistances(map: ArenaMap, start: TilePosition): Map<string, number> {
+  if (!isFloor(map, start)) return new Map();
+  const distances = new Map<string, number>([[positionKey(start), 0]]);
+  const queue = [start];
+  for (let index = 0; index < queue.length; index += 1) {
+    const current = queue[index];
+    const distance = distances.get(positionKey(current));
+    if (distance === undefined) continue;
+    neighbours(current).forEach((next) => {
+      const key = positionKey(next);
+      if (!distances.has(key) && isFloor(map, next)) {
+        distances.set(key, distance + 1);
+        queue.push(next);
+      }
+    });
+  }
+  return distances;
 }
 
 function supercoverLine(start: TilePosition, target: TilePosition): TilePosition[] {
