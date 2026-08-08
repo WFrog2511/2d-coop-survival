@@ -29,9 +29,11 @@
     "@eslint/js": "10.0.1",
     "@playwright/test": "1.62.1",
     "@stylistic/eslint-plugin": "5.10.0",
+    "codex-lsp-bridge": "0.3.3",
     "eslint": "10.8.0",
     "typescript": "6.0.3",
     "typescript-eslint": "8.65.0",
+    "typescript-language-server": "5.3.0",
     "vite": "8.2.0",
     "vitest": "4.1.10"
   }

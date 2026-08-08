@@ -75,13 +75,21 @@ Prototype standardでmatrix、release-readiness、evidenceを作成・更新す�
 
 ### Codex Agent checkpoint
 
-`.codex/config.toml`と`.codex/agents/`はtrusted projectだけで有効になる。変更後は新しいtrusted taskを開始し、`luna_max_planner_reviewer`と`luna_max_writer`が使えることを確認してから依存する。最大sub-agent数は3とし、将来のproject sub-agentは`gpt-5.6-luna` / `max`を使う。別モデルへのfallbackはユーザー確認後だけ行う。
+`.codex/config.toml`と`.codex/agents/`はtrusted projectだけで有効になる。変更後は新しいtrusted taskを開始し、`terra_max_planner_reviewer`と`terra_max_writer`が使えることを確認してから依存する。最大sub-agent数は3とし、将来のproject sub-agentは`gpt-5.6-terra` / `max`を使う。SOL root orchestrator（`gpt-5.6-sol`）はtask / Issue / Git / GitHub / agent orchestrationを担当し、Terra Max planner/reviewerとsole writerはplan / write / review / unitを担当する。`gpt-5.6-terra`が使えない場合の別モデルへのfallbackはユーザー確認後だけ行う。
 
-- `luna_max_planner_reviewer`はread-onlyで、実装前のplanと最終diff reviewを一つのcheckpointとして担当する。workspace、GitHub、Gitの書換えはしない。
-- `luna_max_writer`はworkspace-writeの唯一のwriterである。同じtaskで他のwriterを並行起動せず、stage、commit、push、merge、顧客承認は親の明示権限なしに行わない。
-- Prototype standardの標準コード変更は、plan → sole writer → final diff reviewを原則とする。軽微なfinding修正後は変更箇所だけを再reviewし、厳格変更、重大finding、Definition of Delivery変更後は独立reviewを広げる。Publish-onlyではsub-agentを使わない。
+- `terra_max_planner_reviewer`はread-onlyで、実装前のplanと最終diff reviewを一つのcheckpointとして担当する。workspace、GitHub、Gitの書換えはしない。
+- `terra_max_writer`はworkspace-writeの唯一のwriterであり、writeと対象unitを担当する。同じtaskで他のwriterを並行起動せず、stage、commit、push、merge、顧客承認は親の明示権限なしに行わない。
+- Prototype standardの標準コード変更は、Terra Max planner/reviewerのplan → Terra Max sole writerのwriteと対象unit → Terra Max planner/reviewerのfinal diff reviewを原則とする。軽微なfinding修正後は変更箇所だけを再reviewし、厳格変更、重大finding、Definition of Delivery変更後は独立reviewを広げる。Publish-onlyではsub-agentを使わない。
 - handoffにはIssue / Definition of Delivery、対象ファイル、現在diff、直近gate結果、停止条件だけを渡す。長い履歴やraw logを複製しない。
 - 通常の`apply_patch`が一度実際に書込み失敗したと確認した場合だけ、対象パスを検証したcandidate、SHA-256、backup、原子的置換を使う。helperを先回りして追加せず、backupは検証とreviewが終わるまで保持する。
+
+### Versioned harness adoption
+
+- `.agents/harness.toml`、`.agents/harness.lock`、`.agents/overrides/`はconsumer側の正本とする。中央ハーネス更新は固定revisionを確認したreviewable adoptionで取り込み、live referenceや自動更新は行わない。
+- `$grill-me`はユーザーが明示的に要求した決定インタビューだけで使い、通常の実装や調査には起動しない。
+- `$report-harness-feedback`は再利用候補を秘密情報なしで中央review用に下書きするとき、`$retrospect-harness`は完了taskまたはpilotの根拠付き振り返りでlocal overrideと中央候補を分けるときに使う。外部Issue作成には別途人間承認が必要である。
+- `codex-lsp-bridge` MCPはread-onlyなsemantic feedbackであり、Windowsではproject-local `.codex/lsp-client.json` からpackageのJavaScript entryをNodeで直接起動する。bridge 0.3.3では`lsp_diagnostics`をallowlistせず、診断は`corepack pnpm check`またはtypecheckを正本とする。bridge更新後にerror fixtureで成功応答を確認できた場合だけ再有効化する。
+- `.codex/config.toml`のMCP変更は新しいtrusted taskでCodexをrestartしてから確認する。依存install前またはMCP不調時は通常のrepo-native validationへ戻す。
 
 Issue #28はpilot slice 1である。次の二つのsliceを含む合計3 sliceまで、IssueまたはPRに集計値だけを残す: discovery / DOD、implementation、independent reviewとfinding修正、automated validation、customer review待ち、commit / push / PRのphase時間、full gate回数と再実行理由、Agent数とhandoff数、要求変更とハーネス起因の再作業。利用量が取得できる場合だけクレジット量を記録し、raw logや推測値は残さない。3 slice後に採用・修正・撤回を人間が判断する。
 
@@ -216,4 +224,4 @@ PR前に最終treeへ必要なgateを一度だけ実行する。修正でtreeが
 - 人間向けのTypeScriptコメントとJSDocには日本語を1文字以上含める。ESLint、TypeScript、triple-slash、coverage、formatter、shebang、generatedのdirectiveは検査対象外とする。
 - 最終treeのTypeScript full gateは`pnpm check`だけである。`pnpm check`に含まれる`pnpm lint`、`pnpm typecheck`、`pnpm test:quality`、`pnpm test`を同じtreeへ別途実行しない。`pnpm lint:fix`は安全なlint修正、`pnpm format`はESLintのlayout修正だけを行う。
 - bundle検証が必要な場合は、`pnpm check`後に`pnpm build:bundle`を実行する。`pnpm build`は後方互換であり、PR gateの重複回避には使わない。
-- Luna Max planner/reviewerが計画・reviewし、Luna Max writerが唯一の実装writerとなる。Agentの結果は人間承認の代替にしない。
+- Terra Max planner/reviewerがplanとreviewを、Terra Max writerが唯一の実装writerとしてwriteと対象unitを担当する。Agentの結果は人間承認の代替にしない。

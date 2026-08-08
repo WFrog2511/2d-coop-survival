@@ -1,0 +1,12 @@
+{
+  "defaultLanguage": "typescript",
+  "languageServers": {
+    "typescript": {
+      "command": "node",
+      "args": [
+        "node_modules/typescript-language-server/lib/cli.mjs",
+        "--stdio"
+      ]
+    }
+  }
+}

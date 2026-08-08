@@ -25,6 +25,18 @@
     {
       "name": "sync-detail-design-docgen",
       "path": ".agents/skills/sync-detail-design-docgen"
+    },
+    {
+      "name": "grill-me",
+      "path": ".agents/skills/grill-me"
+    },
+    {
+      "name": "report-harness-feedback",
+      "path": ".agents/skills/report-harness-feedback"
+    },
+    {
+      "name": "retrospect-harness",
+      "path": ".agents/skills/retrospect-harness"
     }
   ]
 }
