@@ -1,0 +1,5 @@
+argv: ["python", "-X", "utf8", "scripts/check_markdown_links.py", "docs"]
+exit_code: 0
+--- stdout ---
+Markdown link check passed: 68 file(s).
+--- stderr ---

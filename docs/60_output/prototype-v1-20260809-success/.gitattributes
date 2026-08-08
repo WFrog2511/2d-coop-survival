@@ -1,0 +1,2 @@
+# Viteの生成ログは警告行の末尾空白をそのまま保持する機械証跡。
+02-pnpm-build-bundle.log -diff

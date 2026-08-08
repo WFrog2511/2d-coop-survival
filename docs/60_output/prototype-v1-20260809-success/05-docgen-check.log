@@ -1,0 +1,4 @@
+argv: ["python", "-X", "utf8", "scripts/docgen.py", "--check", "docs/40_design/detail/**/*.md"]
+exit_code: 0
+--- stdout ---
+--- stderr ---
