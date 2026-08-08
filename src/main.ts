@@ -4,6 +4,9 @@ import { AMMO_BOX_RESPAWN_MS, ENEMY_INSTANCE_IDS, SURVIVAL_LIMIT_MS, WEAPONS, ad
 
 type CameraShakeProfile = { duration: number; intensity: number };
 type PlayerHitVignetteProfile = { duration: number; opacity: number };
+type EnemyHitEffectProfile
+  = { shape: 'circle'; duration: number; radius: number; color: number; scale: number }
+    | { shape: 'star'; duration: number; points: number; innerRadius: number; outerRadius: number; color: number; scale: number };
 
 const WIDTH = 800;
 const HEIGHT = 500;
@@ -19,13 +22,13 @@ const WEAPON_FIRE_SHAKE: Record<WeaponId, CameraShakeProfile> = {
   rifle: { duration: 95, intensity: 0.0024 },
   shotgun: { duration: 95, intensity: 0.0050 },
 };
-const MUZZLE_FLASH: Record<WeaponId, { duration: number; length: number; width: number; color: number }> = {
-  rifle: { duration: 55, length: 28, width: 10, color: 0x9de9ff },
-  shotgun: { duration: 85, length: 44, width: 20, color: 0xffdd76 },
+const MUZZLE_FLASH: Record<WeaponId, { duration: number; points: number; innerRadius: number; outerRadius: number; scale: number; color: number }> = {
+  rifle: { duration: 55, points: 8, innerRadius: 5, outerRadius: 16, scale: 1.35, color: 0x9de9ff },
+  shotgun: { duration: 85, points: 10, innerRadius: 7, outerRadius: 25, scale: 1.6, color: 0xffdd76 },
 };
-const ENEMY_HIT_EFFECT: Record<WeaponId, { duration: number; radius: number; color: number; scale: number }> = {
-  rifle: { duration: 85, radius: 12, color: 0x65d9ff, scale: 1.8 },
-  shotgun: { duration: 110, radius: 18, color: 0xffdc6b, scale: 2.1 },
+const ENEMY_HIT_EFFECT: Record<EnemyKind, EnemyHitEffectProfile> = {
+  basic: { shape: 'circle', duration: 85, radius: 12, color: 0xff7b7b, scale: 1.8 },
+  drone: { shape: 'star', duration: 110, points: 6, innerRadius: 8, outerRadius: 17, color: 0x6d4cff, scale: 2.1 },
 };
 const ENEMY_DEFEAT_SHAKE: Record<EnemyKind, CameraShakeProfile> = {
   basic: { duration: 190, intensity: 0.0064 },
@@ -978,7 +981,7 @@ class Arena extends Phaser.Scene {
     const duration = defeated ? ENEMY_DEFEAT_HIT_STOP_MS[weapon] : ENEMY_HIT_STOP_MS[weapon];
     this.enemyHitStopUntil[id] = Math.max(this.enemyHitStopUntil[id], this.time.now + duration);
     this.enemies[id].setVelocity(0, 0);
-    this.playEnemyHitEffect(id, weapon);
+    this.playEnemyHitEffect(id);
     if (defeated)
       this.shakeCamera(ENEMY_DEFEAT_SHAKE[ENEMIES[id].kind]);
     else if (weapon === 'shotgun')
@@ -987,19 +990,19 @@ class Arena extends Phaser.Scene {
 
   private playMuzzleFlash(weapon: WeaponId, angle: number): void {
     const flash = MUZZLE_FLASH[weapon];
-    const distance = this.player.displayWidth / 2 + flash.length / 2;
-    const muzzle = this.add.rectangle(
+    const distance = this.player.displayWidth / 2 + flash.outerRadius;
+    const muzzle = this.add.star(
       this.player.x + Math.cos(angle) * distance,
       this.player.y + Math.sin(angle) * distance,
-      flash.length,
-      flash.width,
+      flash.points,
+      flash.innerRadius,
+      flash.outerRadius,
       flash.color,
       0.9,
-    ).setRotation(angle).setDepth(4);
+    ).setRotation(angle + Math.PI / 2).setDepth(4);
     this.tweens.add({
       targets: muzzle,
-      scaleX: 1.35,
-      scaleY: 1.6,
+      scale: flash.scale,
       alpha: 0,
       duration: flash.duration,
       ease: 'Quad.Out',
@@ -1007,10 +1010,13 @@ class Arena extends Phaser.Scene {
     });
   }
 
-  private playEnemyHitEffect(id: EnemyInstanceId, weapon: WeaponId): void {
-    const effect = ENEMY_HIT_EFFECT[weapon];
+  private playEnemyHitEffect(id: EnemyInstanceId): void {
+    const effect = ENEMY_HIT_EFFECT[ENEMIES[id].kind];
     const enemy = this.enemies[id];
-    const hit = this.add.circle(enemy.x, enemy.y, effect.radius, effect.color, 0.25)
+    const hit = effect.shape === 'circle'
+      ? this.add.circle(enemy.x, enemy.y, effect.radius, effect.color, 0.25)
+      : this.add.star(enemy.x, enemy.y, effect.points, effect.innerRadius, effect.outerRadius, effect.color, 0.25);
+    hit
       .setStrokeStyle(2, effect.color, 0.9)
       .setDepth(4);
     this.tweens.add({
