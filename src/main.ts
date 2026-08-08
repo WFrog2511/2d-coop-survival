@@ -4,6 +4,15 @@ import { AMMO_BOX_RESPAWN_MS, ENEMY_INSTANCE_IDS, SURVIVAL_LIMIT_MS, WEAPONS, ad
 
 type CameraShakeProfile = { duration: number; intensity: number };
 type PlayerHitVignetteProfile = { duration: number; opacity: number };
+type SoundEffectProfile = {
+  duration: number;
+  startFrequency: number;
+  endFrequency: number;
+  volume: number;
+  waveform: OscillatorType;
+  noiseVolume: number;
+  noiseFrequency: number;
+};
 type EnemyHitEffectProfile
   = { shape: 'circle'; duration: number; radius: number; color: number; scale: number }
     | { shape: 'star'; duration: number; points: number; innerRadius: number; outerRadius: number; color: number; scale: number };
@@ -21,6 +30,14 @@ const SHOTGUN_SHAKE = { duration: 70, intensity: 0.0016 };
 const WEAPON_FIRE_SHAKE: Record<WeaponId, CameraShakeProfile> = {
   rifle: { duration: 95, intensity: 0.0024 },
   shotgun: { duration: 95, intensity: 0.0050 },
+};
+const FIRE_SOUND: Record<WeaponId, SoundEffectProfile> = {
+  rifle: { duration: 65, startFrequency: 360, endFrequency: 120, volume: 0.08, waveform: 'sawtooth', noiseVolume: 0.035, noiseFrequency: 3000 },
+  shotgun: { duration: 95, startFrequency: 190, endFrequency: 70, volume: 0.13, waveform: 'square', noiseVolume: 0.08, noiseFrequency: 1800 },
+};
+const ENEMY_DEFEAT_SOUND: Record<EnemyKind, SoundEffectProfile> = {
+  basic: { duration: 180, startFrequency: 300, endFrequency: 90, volume: 0.1, waveform: 'triangle', noiseVolume: 0, noiseFrequency: 1600 },
+  drone: { duration: 220, startFrequency: 500, endFrequency: 110, volume: 0.12, waveform: 'sawtooth', noiseVolume: 0.015, noiseFrequency: 2400 },
 };
 const MUZZLE_FLASH: Record<WeaponId, { duration: number; points: number; innerRadius: number; outerRadius: number; scale: number; color: number }> = {
   rifle: { duration: 55, points: 8, innerRadius: 5, outerRadius: 16, scale: 1.35, color: 0x9de9ff },
@@ -898,6 +915,7 @@ class Arena extends Phaser.Scene {
       return;
     }
     this.shakeCamera(WEAPON_FIRE_SHAKE[weaponId]);
+    this.playSoundEffect(FIRE_SOUND[weaponId]);
     const base = Phaser.Math.Angle.Between(this.player.x, this.player.y, pointer.worldX, pointer.worldY);
     this.playMuzzleFlash(weaponId, base);
     for (let index = 0; index < weapon.pellets; index += 1) {
@@ -982,10 +1000,54 @@ class Arena extends Phaser.Scene {
     this.enemyHitStopUntil[id] = Math.max(this.enemyHitStopUntil[id], this.time.now + duration);
     this.enemies[id].setVelocity(0, 0);
     this.playEnemyHitEffect(id);
-    if (defeated)
+    if (defeated) {
       this.shakeCamera(ENEMY_DEFEAT_SHAKE[ENEMIES[id].kind]);
-    else if (weapon === 'shotgun')
+      this.playSoundEffect(ENEMY_DEFEAT_SOUND[ENEMIES[id].kind]);
+    } else if (weapon === 'shotgun')
       this.shakeCamera(SHOTGUN_SHAKE);
+  }
+
+  private playSoundEffect(effect: SoundEffectProfile): void {
+    if (!(this.sound instanceof Phaser.Sound.WebAudioSoundManager))
+      return;
+    try {
+      const manager = this.sound;
+      const context = manager.context;
+      if (context.state === 'suspended')
+        context.resume().catch(() => undefined);
+      const now = context.currentTime;
+      const endAt = now + effect.duration / 1000;
+      const gain = context.createGain();
+      gain.gain.setValueAtTime(effect.volume, now);
+      gain.gain.exponentialRampToValueAtTime(0.0001, endAt);
+      gain.connect(manager.destination);
+      const oscillator = context.createOscillator();
+      oscillator.type = effect.waveform;
+      oscillator.frequency.setValueAtTime(effect.startFrequency, now);
+      oscillator.frequency.exponentialRampToValueAtTime(effect.endFrequency, endAt);
+      oscillator.connect(gain);
+      oscillator.start(now);
+      oscillator.stop(endAt);
+      if (effect.noiseVolume === 0)
+        return;
+      const noise = context.createBufferSource();
+      const noiseBuffer = context.createBuffer(1, Math.ceil(context.sampleRate * effect.duration / 1000), context.sampleRate);
+      const samples = noiseBuffer.getChannelData(0);
+      for (let index = 0; index < samples.length; index += 1)
+        samples[index] = Math.random() * 2 - 1;
+      const noiseFilter = context.createBiquadFilter();
+      noiseFilter.type = 'lowpass';
+      noiseFilter.frequency.setValueAtTime(effect.noiseFrequency, now);
+      const noiseGain = context.createGain();
+      noiseGain.gain.setValueAtTime(effect.noiseVolume, now);
+      noiseGain.gain.exponentialRampToValueAtTime(0.0001, endAt);
+      noise.buffer = noiseBuffer;
+      noise.connect(noiseFilter).connect(noiseGain).connect(manager.destination);
+      noise.start(now);
+      noise.stop(endAt);
+    } catch {
+      return;
+    }
   }
 
   private playMuzzleFlash(weapon: WeaponId, angle: number): void {
