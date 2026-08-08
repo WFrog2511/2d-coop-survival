@@ -3,15 +3,15 @@
   "commands": [
     {
       "name": "pnpm-check",
-      "argv": ["corepack", "pnpm", "check"]
+      "argv": ["corepack.cmd", "pnpm", "check"]
     },
     {
       "name": "pnpm-build-bundle",
-      "argv": ["corepack", "pnpm", "build:bundle"]
+      "argv": ["corepack.cmd", "pnpm", "build:bundle"]
     },
     {
       "name": "pnpm-test-e2e",
-      "argv": ["corepack", "pnpm", "test:e2e"]
+      "argv": ["corepack.cmd", "pnpm", "test:e2e"]
     },
     {
       "name": "markdown-links",

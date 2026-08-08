@@ -632,7 +632,8 @@ test('不正なDEV spawn queryは既定値へ戻す', async ({ page }) => {
 });
 
 test('hidden recycleはHPを維持し、deathだけ全回復し、retry後に旧callbackを残さない', async ({ page }) => {
-  test.setTimeout(45_000);
+  // 80×50マップの再出現・retry仮想時計処理に、実時間の余裕を持たせる。
+  test.setTimeout(90_000);
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
   await page.goto('/');
