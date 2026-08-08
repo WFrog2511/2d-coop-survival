@@ -227,16 +227,28 @@ export function selectEnemySpawnTile(
   map: ArenaMap,
   request: EnemySpawnRequest,
   seed: number,
+  candidatePoolSize = 10,
 ): TilePosition | null {
   const occupied = new Set(request.occupied.map(positionKey));
-  const candidates = floorTiles(map).filter(position =>
-    !occupied.has(positionKey(position))
-    && !inside(position, request.viewport)
-    && directionFrom(request.player, position) === request.direction
-    && findPath(map, request.player, position).length > 0
-    && enemyVisibility(map, request.player, position) === 'hidden',
-  );
-  return candidates.length > 0 ? candidates[(seed >>> 0) % candidates.length] : null;
+  const candidates = floorTiles(map)
+    .filter(position =>
+      !occupied.has(positionKey(position))
+      && !inside(position, request.viewport)
+      && directionFrom(request.player, position) === request.direction
+      && enemyVisibility(map, request.player, position) === 'hidden',
+    )
+    .map((position) => {
+      const path = findPath(map, request.player, position);
+      return { position, distance: path.length - 1 };
+    })
+    .filter(candidate => candidate.distance >= 0)
+    .sort((left, right) => left.distance - right.distance || left.position.y - right.position.y || left.position.x - right.position.x);
+  if (candidates.length === 0) return null;
+  const poolSize = Number.isFinite(candidatePoolSize)
+    ? Math.max(1, Math.floor(candidatePoolSize))
+    : 10;
+  const pool = candidates.slice(0, Math.min(poolSize, candidates.length));
+  return pool[(seed >>> 0) % pool.length].position;
 }
 
 export function respawnDelayFor(

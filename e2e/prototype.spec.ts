@@ -11,6 +11,10 @@ const STAGGERED_ENEMIES: readonly { id: EnemyId; delay: number }[] = [
   { id: 'basic-9', delay: 9000 },
   { id: 'drone-3', delay: 12000 },
 ];
+const ENEMY_SPAWN_ORDER: readonly EnemyId[] = [
+  ...INITIAL_ACTIVE_IDS,
+  ...STAGGERED_ENEMIES.map(({ id }) => id),
+];
 type EnemySpawnMetadata = {
   stableId: string;
   spawnPhase: string;
@@ -524,6 +528,37 @@ test('初期8体を段階的に12体へ増やし、phase境界後のDEV再出現
     await expect(page.getByTestId(`${id}-hp`)).toHaveAttribute('data-active', 'true');
   for (const { id } of STAGGERED_ENEMIES)
     await expect(page.getByTestId(`${id}-hp`)).toHaveAttribute('data-active', 'false');
+});
+
+test('DEV queryで初期数、段階間隔、候補poolを開始前に固定する', async ({ page }) => {
+  await page.clock.install({ time: 1 });
+  await page.clock.pauseAt(1);
+  await page.goto('/?enemyInitialCount=1&enemyStaggerIntervalMs=500&enemySpawnCandidatePool=1');
+  await setHiddenRecycle(page, false);
+  await setArenaPhysics(page, 'pause');
+  const phaseHud = page.getByTestId('spawn-phase');
+  await expect(phaseHud).toHaveAttribute(
+    'data-spawn-config',
+    'enemyInitialCount=1;enemyStaggerIntervalMs=500;enemySpawnCandidatePool=1',
+  );
+  await expect(page.getByTestId(`${ENEMY_SPAWN_ORDER[0]}-hp`)).toHaveAttribute('data-active', 'true');
+  await expect(page.getByTestId(`${ENEMY_SPAWN_ORDER[0]}-hp`)).toHaveAttribute('data-spawn-reason', 'initial');
+  for (const id of ENEMY_SPAWN_ORDER.slice(1)) {
+    await expect(page.getByTestId(`${id}-hp`)).toHaveAttribute('data-active', 'false');
+    await expect(page.getByTestId(`${id}-hp`)).toHaveAttribute('data-spawn-reason', 'stagger');
+  }
+
+  await page.clock.runFor(600);
+  await expect(page.getByTestId(`${ENEMY_SPAWN_ORDER[1]}-hp`)).toHaveAttribute('data-active', 'true');
+  await expect(page.getByTestId(`${ENEMY_SPAWN_ORDER[1]}-hp`)).toHaveAttribute('data-spawn-reason', 'stagger');
+});
+
+test('不正なDEV spawn queryは既定値へ戻す', async ({ page }) => {
+  await page.goto('/?enemyInitialCount=13&enemyStaggerIntervalMs=0&enemySpawnCandidatePool=1001');
+  await expect(page.getByTestId('spawn-phase')).toHaveAttribute(
+    'data-spawn-config',
+    'enemyInitialCount=8;enemyStaggerIntervalMs=3000;enemySpawnCandidatePool=10',
+  );
 });
 
 test('hidden recycleはHPを維持し、deathだけ全回復し、retry後に旧callbackを残さない', async ({ page }) => {

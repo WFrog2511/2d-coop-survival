@@ -337,6 +337,49 @@ describe('自動生成アリーナ', () => {
     }, seed)).toBeNull();
   });
 
+  test('敵spawnは近いBFS候補の上位poolからseedで選び、候補不足時も条件を緩めない', () => {
+    const map = generateArenaMap(seed);
+    const player = map.start;
+    const viewport = { left: player.x, top: player.y, right: player.x, bottom: player.y };
+    const candidatesByDirection = SPAWN_DIRECTIONS.map(direction => ({
+      direction,
+      candidates: map.tiles.flatMap((row, y) => row.flatMap((tile, x) => {
+        const position = { x, y };
+        return tile === 'floor'
+          && (x < viewport.left || x > viewport.right || y < viewport.top || y > viewport.bottom)
+          && directionFromPlayer(player, position) === direction
+          && findPath(map, player, position).length > 0
+          && enemyVisibility(map, player, position) === 'hidden'
+          ? [position]
+          : [];
+      })),
+    }));
+    const selectedDirection = candidatesByDirection.find(({ candidates }) => candidates.length > 10);
+    if (!selectedDirection) throw new Error('上位10候補を確認できる厳格なspawn方角が必要です。');
+    const ranked = selectedDirection.candidates
+      .map(position => ({ position, distance: findPath(map, player, position).length - 1 }))
+      .sort((left, right) => left.distance - right.distance || left.position.y - right.position.y || left.position.x - right.position.x);
+    const request = {
+      player,
+      viewport,
+      occupied: [player],
+      direction: selectedDirection.direction,
+    };
+
+    expect(selectEnemySpawnTile(map, request, 71, 1)).toEqual(ranked[0].position);
+    const seeded = selectEnemySpawnTile(map, request, 7, 10);
+    expect(seeded).toEqual(ranked[7].position);
+    expect(selectEnemySpawnTile(map, request, 7, 10)).toEqual(seeded);
+
+    const available = ranked.slice(0, 3);
+    const availableKeys = new Set(available.map(candidate => tileKey(candidate.position)));
+    const limited = selectEnemySpawnTile(map, {
+      ...request,
+      occupied: [player, ...selectedDirection.candidates.filter(position => !availableKeys.has(tileKey(position)))],
+    }, 4);
+    expect(limited).toEqual(available[1].position);
+  });
+
   test('viewportの右端と下端は境界tileを含めず、部分的に見えるtileを含む', () => {
     expect(viewportTileRect({
       left: 0,
