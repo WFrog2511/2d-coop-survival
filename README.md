@@ -1,8 +1,8 @@
 # 2D協力メカサバイバル
 
-ブラウザから1〜4人で参加し、視界と情報を共有しながら暴走機械群に対処して全員生還を目指す、見下ろし型2D協力サバイバルゲームです。現在は、二武器、3体の基本敵、1体の高速ドローン、簡易自動生成マップと追従カメラを対象にしたcombat-choice-v1を実装しています。
+ブラウザから1〜4人で参加し、視界と情報を共有しながら暴走機械群に対処して全員生還を目指す、見下ろし型2D協力サバイバルゲームです。現在のローカル1人用prototypeは、3分survival、finite ammo、壁visibility、60秒directional spawnに加え、初期8体から12体への段階投入、死角recycle、基本敵の分散経路を実装しています。
 
-合意済みの範囲は[Definition of Delivery Issue #12](https://github.com/WFrog2511/2d-coop-survival/issues/12)と[combat-choice-v1要件](docs/20_requirements/combat-choice-v1.md)を参照してください。[docs/企画書.md](docs/企画書.md)は企画入力であり、完了判断の正本ではありません。
+合意済みの範囲は[Definition of Delivery Issue #12](https://github.com/WFrog2511/2d-coop-survival/issues/12)、[combat-choice-v1要件](docs/20_requirements/combat-choice-v1.md)、[Issue #22 DOD comment](https://github.com/WFrog2511/2d-coop-survival/issues/22#issuecomment-5222574276)、[directional-spawn-v1要件](docs/20_requirements/directional-spawn-v1.md)を参照してください。[docs/企画書.md](docs/企画書.md)は企画入力であり、完了判断の正本ではありません。
 
 ## 正本と入口
 
@@ -19,9 +19,9 @@ task、decision、question、customer-review、承認、PRの正本は[GitHub Is
 
 ## 技術構成
 
-combat-choice-v1で使用中の構成は、クライアントのTypeScript、Phaser、Vite、HTML、CSSと、Vitest・Playwrightによるテストです。Node.js 22系とpnpm 10.33.2を使用します。
+現在のブラウザprototypeで使用中の構成は、クライアントのTypeScript、Phaser、Vite、HTML、CSSと、Vitest・Playwrightによるテストです。Node.js 22系とpnpm 10.33.2を使用します。
 
-サーバーのTypeScript/Node.js/Colyseus、pnpm workspace、Zod、共有型・ゲームデータ、Colyseus統合テストは将来候補であり、combat-choice-v1には含めません。導入時期と対応バージョンは、対象範囲を拡張するDefinition of Deliveryで決めます。
+サーバーのTypeScript/Node.js/Colyseus、pnpm workspace、Zod、共有型・ゲームデータ、Colyseus統合テストは将来候補であり、現在のブラウザprototypeには含めません。導入時期と対応バージョンは、対象範囲を拡張するDefinition of Deliveryで決めます。
 
 ## 起動
 
@@ -46,7 +46,8 @@ Viteが表示するローカルURL（通常は`http://127.0.0.1:5173/`）をPC�
 - 武器: 1 アサルトライフル（左ボタン長押しで自動射撃） / 2 ショットガン（1クリック1射）
 - 照準: マウス移動
 - リロード: R（選択武器の残弾を補充。リロード中の射撃不可）
-- 高速ドローン耐性: 小口径弾は50%、散弾は100%のダメージ
+- 敵balance: 基本敵HP4。高速ドローンは高速だがHP2で、ライフル1発で撃破可能
+- Canvas HUD: 残り時間は上中央、player HPは左下、ammoは右下
 - 再挑戦: 敗北表示の「再挑戦」ボタン
 
 ## TypeScript品質ゲート
@@ -80,7 +81,7 @@ pnpm exec playwright install chromium
 pnpm test:e2e
 ```
 
-実際のブラウザ操作を表示する場合はheadedモードを使います。現在の代表E2Eは、移動、ライフル自動射撃、ショットガンの連射制限、リロード、敗北、再挑戦、マップseed変更を順番に操作します。
+実際のブラウザ操作を表示する場合はheadedモードを使います。代表E2Eは、初期8体と3/6/9/12秒の段階投入、strict hidden spawn、60秒phaseとcurrent phase respawn、時間/HP/ammo overlayを観測しながら、visibility、移動、射撃、有限弾薬、リロード、弾薬箱respawn、3分勝利、敗北、retryを確認します。
 
 ```powershell
 pnpm test:e2e --headed --workers=1

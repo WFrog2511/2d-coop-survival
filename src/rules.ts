@@ -1,9 +1,21 @@
 export type WeaponId = 'rifle' | 'shotgun';
 export type EnemyKind = 'basic' | 'drone';
 export type DamageType = 'smallCaliber' | 'scatter';
-export type EnemyInstanceId = 'basic-1' | 'basic-2' | 'basic-3' | 'drone-1';
-
-export const ENEMY_INSTANCE_IDS: EnemyInstanceId[] = ['basic-1', 'basic-2', 'basic-3', 'drone-1'];
+export const ENEMY_INSTANCE_IDS = [
+  'basic-1',
+  'basic-2',
+  'basic-3',
+  'basic-4',
+  'basic-5',
+  'basic-6',
+  'basic-7',
+  'basic-8',
+  'basic-9',
+  'drone-1',
+  'drone-2',
+  'drone-3',
+] as const;
+export type EnemyInstanceId = (typeof ENEMY_INSTANCE_IDS)[number];
 export const SURVIVAL_LIMIT_MS = 180000;
 export const AMMO_BOX_RESPAWN_MS = 30000;
 
@@ -93,7 +105,7 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
 
 const DAMAGE_MULTIPLIERS: Record<EnemyKind, Record<DamageType, number>> = {
   basic: { smallCaliber: 1, scatter: 1 },
-  drone: { smallCaliber: 0.5, scatter: 1 },
+  drone: { smallCaliber: 1, scatter: 1 },
 };
 
 export function resolveDamage(
@@ -109,12 +121,15 @@ export function droneLateralSpeedAt(now: number): number {
   return Math.sin(now / 95) * 85 + Math.sin(now / 37) * 35;
 }
 
-const INITIAL_ENEMIES: Record<EnemyInstanceId, EnemyState> = {
-  'basic-1': { kind: 'basic', hp: 6, maxHp: 6, defeated: false },
-  'basic-2': { kind: 'basic', hp: 6, maxHp: 6, defeated: false },
-  'basic-3': { kind: 'basic', hp: 6, maxHp: 6, defeated: false },
-  'drone-1': { kind: 'drone', hp: 4, maxHp: 4, defeated: false },
-};
+function createInitialEnemies(): Record<EnemyInstanceId, EnemyState> {
+  return Object.fromEntries(ENEMY_INSTANCE_IDS.map((id) => {
+    const kind = id.startsWith('basic-') ? 'basic' : 'drone';
+    const hp = kind === 'basic' ? 4 : 2;
+    return [id, { kind, hp, maxHp: hp, defeated: false }];
+  })) as Record<EnemyInstanceId, EnemyState>;
+}
+
+const INITIAL_ENEMIES = createInitialEnemies();
 
 export const INITIAL_STATE: CombatState = {
   playerHp: 100,
@@ -129,12 +144,7 @@ export const INITIAL_STATE: CombatState = {
 };
 
 function cloneEnemies(enemies: Record<EnemyInstanceId, EnemyState>): Record<EnemyInstanceId, EnemyState> {
-  return {
-    'basic-1': { ...enemies['basic-1'] },
-    'basic-2': { ...enemies['basic-2'] },
-    'basic-3': { ...enemies['basic-3'] },
-    'drone-1': { ...enemies['drone-1'] },
-  };
+  return Object.fromEntries(ENEMY_INSTANCE_IDS.map(id => [id, { ...enemies[id] }])) as Record<EnemyInstanceId, EnemyState>;
 }
 
 export function remainingSurvivalMs(startedAt: number, now: number): number {

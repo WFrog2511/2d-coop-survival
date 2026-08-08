@@ -15,7 +15,7 @@ remaining = min(180000, max(0, startedAt + 180000 - now))
 
 now が startedAt + 180000 以上となる境界を含めてvictoryへ遷移する。CombatStateはdefeatedとは別にvictoryを持ち、victoryまたはdefeatをterminalとする。terminalでは既存の射撃、リロード完了、被ダメージ、敵ダメージ、敵再出現、ammo box取得を状態変更なしで拒否する。
 
-retryCombatはvictory=false、defeated=false、HP100、武器別ammo/reserve、発射待ち、リロード、敵4個体を初期値として返す。
+retryCombatはvictory=false、defeated=false、HP100、武器別ammo/reserve、発射待ち、リロード、敵12個体を初期値として返す。敵の個体数と方向契約は[SPEC-DIRECTIONAL-SPAWN](directional-spawn-v1.md)が旧4個体の契約をsupersedeする。
 
 ## #21/#35既存契約との境界
 
