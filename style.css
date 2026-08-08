@@ -31,6 +31,32 @@ h1 {
   display: block;
 }
 
+#player-hit-vignette {
+  --player-hit-vignette-duration: 180ms;
+  --player-hit-vignette-opacity: 0.42;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: 12px;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(circle at center, transparent 42%, rgb(255 48 48 / var(--player-hit-vignette-opacity)) 100%);
+}
+
+#player-hit-vignette.is-active {
+  animation: player-hit-vignette var(--player-hit-vignette-duration) ease-out;
+}
+
+@keyframes player-hit-vignette {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
 .game-overlay,
 #ammo-panel {
   z-index: 1;
