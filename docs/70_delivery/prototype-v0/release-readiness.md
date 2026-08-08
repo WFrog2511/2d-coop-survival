@@ -1,6 +1,6 @@
 ---
 release: "prototype-v0"
-definition_of_delivery: "../../01_project-journal/local-issues/2026-08-02_definition-of-delivery.md"
+definition_of_delivery: "https://github.com/WFrog2511/2d-coop-survival/issues/4"
 acceptance_matrix: "acceptance-matrix.md"
 ---
 
@@ -8,8 +8,8 @@ acceptance_matrix: "acceptance-matrix.md"
 
 | 層 | 状態 | 根拠 | 制約・残件 |
 | --- | --- | --- | --- |
-| 文書整合 | WAITING | 要件と実装仕様の作成待ち | GitHub Issue移行前 |
-| 製品品質 | WAITING | 実装・自動検査・手動計測待ち | Chromeのみを対象 |
-| 納品受け入れ | WAITING | LOCAL-004のプレイ確認待ち | Evidence package、tag、公開配信は対象外 |
+| 文書整合 | PASS | 要件、仕様、基本設計、受け入れマトリクスを検査し、Markdownリンク・受け入れマトリクス・readiness検査がPASS | prototype-v0の記録であり、将来範囲の設計・運用判断は含まない |
+| 製品品質 | PASS | [PR #10](https://github.com/WFrog2511/2d-coop-survival/pull/10)でunit 4、build、Playwright Chromium 1がPASS。[GitHub Issue #3](https://github.com/WFrog2511/2d-coop-survival/issues/3)でChrome手動プレイとFPSおおむね60〜61、目立つ低下なしを確認 | FPSの合否閾値は[GitHub Issue #11](https://github.com/WFrog2511/2d-coop-survival/issues/11)で後続段階の判断前に決定する |
+| 納品受け入れ | PASS | [GitHub Issue #3](https://github.com/WFrog2511/2d-coop-survival/issues/3)でプロジェクトオーナーがprototype-v0を承認 | Evidence package、tag、公開配信はDefinition of Deliveryの対象外。production readyを意味しない |
 
 状態は`PASS`、`FAIL`、`WAITING`、`対象外`のいずれかとする。一つの層の成功から、別の層の成功や顧客承認を推測しない。

@@ -1,8 +1,13 @@
 name: 顧客レビュー
-description: 顧客またはプロジェクトオーナーの確認・回答・承認が必要な事項を起票する。
+description: 顧客またはプロジェクトオーナーの確認・回答・承認を証跡付きで依頼する。
 title: "review: "
 labels: ["type:customer-review"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        回答者はIssueコメントの先頭に「承認」「変更要求」「保留」のいずれかを明記してください。
+        変更要求はこのIssue内で実装せず、内容に応じて新しいtaskまたはdecisionへ切り出し、相互にリンクしてください。
   - type: textarea
     id: review_item
     attributes:
@@ -17,9 +22,37 @@ body:
     validations:
       required: true
   - type: textarea
+    id: revision_environment
+    attributes:
+      label: 対象revision・実行環境
+      description: branch、commit、build、URL、OS、ブラウザ、データなど、同じ対象を確認できる情報を書く。
+    validations:
+      required: true
+  - type: textarea
+    id: procedure_evidence
+    attributes:
+      label: 確認手順と提示証跡
+      description: 確認手順、期待する観点、スクリーンショット・動画・ログなどの証跡を書く。
+    validations:
+      required: true
+  - type: textarea
     id: options
     attributes:
       label: 選択肢と推奨案
+    validations:
+      required: true
+  - type: textarea
+    id: change_handoff
+    attributes:
+      label: 変更要求時の切り出し先
+      description: 変更要求を新しいtaskまたはdecisionへ切り出す基準と、作成後のリンク先を書く。
+    validations:
+      required: true
+  - type: textarea
+    id: completion
+    attributes:
+      label: 反映確認後の完了条件
+      description: 回答、変更反映、再確認、証跡記録のどこまで完了したらcloseするかを書く。
     validations:
       required: true
   - type: textarea

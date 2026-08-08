@@ -1,0 +1,4 @@
+interface:
+  display_name: "Grill Me"
+  short_description: "Stress-test plans through a focused decision interview"
+  default_prompt: "Use $grill-me to challenge this plan one decision at a time before implementation."

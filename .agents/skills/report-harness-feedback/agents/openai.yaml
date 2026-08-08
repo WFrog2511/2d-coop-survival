@@ -1,0 +1,4 @@
+interface:
+  display_name: "Report Harness Feedback"
+  short_description: "Capture reusable harness failures as structured feedback"
+  default_prompt: "Use $report-harness-feedback to turn this recurring agent failure into a review-ready harness feedback report."

@@ -1,12 +1,12 @@
-# LOCAL-001: 開発環境とAgent運用の初期化
+# GitHub Issue #1: 開発環境とAgent運用の初期化
 
-> GitHub remote未接続かつGitHub CLI未認証のための一時Issue。GitHub接続後に`type:task` Issueへ移行する。
+> [GitHub Issue #1](https://github.com/WFrog2511/2d-coop-survival/issues/1)へ移行済み。この文書はオフライン作業時の記録として保持する。
 
 ## 状態
 
 - 種別: task
 - リスク区分: 軽量
-- 状態: ローカル完了（GitHub移行・commit待ち）
+- 状態: 完了（GitHub Issue #1へ移行済み）
 - 日付: 2026-08-02
 
 ## 目的
@@ -53,7 +53,7 @@
 - Python 3.12用の別環境と依存追加は行わず、`timezone.utc`と子プロセスUTF-8指定で既存Python 3.10へ適合させた。
 - pnpm workspace、ゲーム依存、CI、デプロイ設定はDefinition of Delivery承認まで追加しない。
 - 追加を再検討する条件: Delivery範囲、対応ランタイム、GitHub repositoryが人間確認されたとき。
-## GitHub移行時
+## GitHub移行結果
 
-- GitHub Issue URL: 未移行
-- ローカルIDとこのパスをIssue番号・URLへ置換する。
+- GitHub Issue: [#1](https://github.com/WFrog2511/2d-coop-survival/issues/1)（completed）
+- 初期commit: [`57a39c0`](https://github.com/WFrog2511/2d-coop-survival/commit/57a39c0b154306a84b3c172a9cf2d3258821f0c1)

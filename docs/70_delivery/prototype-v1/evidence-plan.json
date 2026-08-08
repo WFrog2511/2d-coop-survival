@@ -1,0 +1,37 @@
+{
+  "release": "prototype-v1",
+  "commands": [
+    {
+      "name": "pnpm-check",
+      "argv": ["corepack.cmd", "pnpm", "check"]
+    },
+    {
+      "name": "pnpm-build-bundle",
+      "argv": ["corepack.cmd", "pnpm", "build:bundle"]
+    },
+    {
+      "name": "pnpm-test-e2e",
+      "argv": ["corepack.cmd", "pnpm", "test:e2e"]
+    },
+    {
+      "name": "markdown-links",
+      "argv": ["python", "-X", "utf8", "scripts/check_markdown_links.py", "docs"]
+    },
+    {
+      "name": "docgen-check",
+      "argv": ["python", "-X", "utf8", "scripts/docgen.py", "--check", "docs/40_design/detail/**/*.md"]
+    },
+    {
+      "name": "acceptance-matrix-release",
+      "argv": ["python", "-X", "utf8", "scripts/check_acceptance_matrix.py", "--release", "docs/70_delivery/prototype-v1/acceptance-matrix.md"]
+    },
+    {
+      "name": "delivery-readiness-release",
+      "argv": ["python", "-X", "utf8", "scripts/check_delivery_readiness.py", "--release", "docs/70_delivery/prototype-v1/release-readiness.md"]
+    },
+    {
+      "name": "git-diff-check",
+      "argv": ["git", "diff", "--check", "origin/main...HEAD"]
+    }
+  ]
+}

@@ -1,6 +1,6 @@
-# LOCAL-002: 最初のDefinition of Deliveryを決める
+# GitHub Issue #4: 最初のDefinition of Deliveryを決める
 
-> GitHub remote未接続かつGitHub CLI未認証のための一時decision。GitHub接続後に`type:decision` Issueへ移行する。
+> [GitHub Issue #4](https://github.com/WFrog2511/2d-coop-survival/issues/4)へ移行済み。この文書はオフライン作業時の承認記録として保持する。
 
 ## 状態
 
@@ -36,7 +36,7 @@
 
 - 自動検査: lint、型検査、ゲームルール単体テスト、代表Playwright E2E。
 - 手動確認: 操作可能、敗北理由が理解可能、再挑戦可能、実測fpsを記録できる。
-- 人間確認: [LOCAL-004](2026-08-02_prototype-v0-review.md)でプレイ結果を確認する。
+- 人間確認: [GitHub Issue #3](https://github.com/WFrog2511/2d-coop-survival/issues/3)でプレイ結果を確認する。
 - 証跡: PR検査結果を残す。納品用Evidence package、tag、release noteはこの縦切りでは対象外。
 
 ## 重要領域と必須ケース
@@ -56,8 +56,7 @@
 
 範囲、対象ブラウザ、証跡条件を変更するときは、このdecisionの移行先GitHub Issueで承認し、旧GOと旧証跡を履歴として残す。
 
-## GitHub移行時
+## GitHub移行結果
 
-- GitHub Issue URL: 未移行
-- この承認記録と対象外を`type:decision` Issueへ移す。
-- 受け入れマトリクスのローカルIssue参照は、対応するGitHub Issue番号へ置換する。
+- GitHub Issue: [#4](https://github.com/WFrog2511/2d-coop-survival/issues/4)（completed）
+- 顧客確認: [#3](https://github.com/WFrog2511/2d-coop-survival/issues/3)（実装待ち）

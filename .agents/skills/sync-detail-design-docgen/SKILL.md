@@ -7,6 +7,10 @@ description: Create and maintain detailed design Markdown with DOCGEN_TODO reser
 
 Read `docs/40_design/process/docgen.md` for the marker contract and supported transforms. Start a new document from `docs/40_design/templates/detail-design.md`.
 
+## Current boundary
+
+Bundled transforms currently support Python source only. TypeScript detailed design remains a manual review responsibility, and a passing `docgen.py --check` does not prove TypeScript design synchronization. A stable TypeScript public-information transform is deferred to [Issue #31](https://github.com/WFrog2511/2d-coop-survival/issues/31); do not add one as part of ordinary DOCGEN work.
+
 ## Before implementation
 
 1. Write design intent, business rules, flows, state transitions, authorization, failure behavior, and test viewpoints by hand.
@@ -16,11 +20,11 @@ Read `docs/40_design/process/docgen.md` for the marker contract and supported tr
 
 ## After implementation
 
-1. Confirm each source and target exists.
+1. Confirm each Python source and target exists.
 2. Run `python scripts/docgen.py "docs/40_design/detail/**/*.md"` from the repository root.
 3. Review promoted TODO blocks and generated diffs. Never hand-edit content between `DOCGEN:START` and `DOCGEN:END`.
 4. Run `python scripts/docgen.py --check "docs/40_design/detail/**/*.md"` and the Markdown link checker.
-5. Record the commands and results in the PR.
+5. Record the commands and results in the PR, without representing a DOCGEN result as TypeScript synchronization.
 
 ## Change the generator
 

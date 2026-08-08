@@ -1,0 +1,33 @@
+argv: ["corepack.cmd", "pnpm", "check"]
+exit_code: 0
+--- stdout ---
+
+> 2d-coop-survival@0.0.0 check C:\Users\yadok\source\repos\2d-coop-survival\.worktrees\prototype-v1
+> pnpm lint && pnpm typecheck && pnpm test:quality && pnpm test
+
+
+> 2d-coop-survival@0.0.0 lint C:\Users\yadok\source\repos\2d-coop-survival\.worktrees\prototype-v1
+> eslint . --max-warnings 0
+
+
+> 2d-coop-survival@0.0.0 typecheck C:\Users\yadok\source\repos\2d-coop-survival\.worktrees\prototype-v1
+> tsc --noEmit
+
+
+> 2d-coop-survival@0.0.0 test:quality C:\Users\yadok\source\repos\2d-coop-survival\.worktrees\prototype-v1
+> node tools/quality/japanese-comment-rule.test.mjs
+
+
+> 2d-coop-survival@0.0.0 test C:\Users\yadok\source\repos\2d-coop-survival\.worktrees\prototype-v1
+> vitest run --config vitest.config.ts
+
+
+ RUN  v4.1.10 C:/Users/yadok/source/repos/2d-coop-survival/.worktrees/prototype-v1
+
+
+ Test Files  2 passed (2)
+      Tests  41 passed (41)
+   Start at  00:52:41
+   Duration  2.23s (transform 192ms, setup 0ms, import 365ms, tests 1.53s, environment 1ms)
+
+--- stderr ---

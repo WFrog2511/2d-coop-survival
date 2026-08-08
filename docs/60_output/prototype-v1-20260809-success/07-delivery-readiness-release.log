@@ -1,0 +1,5 @@
+argv: ["python", "-X", "utf8", "scripts/check_delivery_readiness.py", "--release", "docs/70_delivery/prototype-v1/release-readiness.md"]
+exit_code: 0
+--- stdout ---
+Delivery readiness check: PASSED
+--- stderr ---
