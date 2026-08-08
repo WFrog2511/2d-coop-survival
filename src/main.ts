@@ -68,7 +68,22 @@ const STAGGERED_ENEMIES: readonly { id: EnemyInstanceId; delay: number }[] = [
   { id: 'drone-3', delay: 12000 },
 ];
 const IS_DEV = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV);
+const DEFAULT_ENEMY_INITIAL_COUNT = INITIAL_ENEMY_IDS.length;
+const DEFAULT_ENEMY_STAGGER_INTERVAL_MS = STAGGERED_ENEMIES[0].delay;
+const DEFAULT_ENEMY_SPAWN_CANDIDATE_POOL = 10;
+const MIN_ENEMY_STAGGER_INTERVAL_MS = 500;
+const MAX_ENEMY_STAGGER_INTERVAL_MS = 5000;
+const MAX_ENEMY_SPAWN_CANDIDATE_POOL = ARENA_WIDTH_TILES * ARENA_HEIGHT_TILES;
+const ENEMY_SPAWN_ORDER: readonly EnemyInstanceId[] = [
+  ...INITIAL_ENEMY_IDS,
+  ...STAGGERED_ENEMIES.map(({ id }) => id),
+];
 type EnemySpawnReason = 'initial' | 'stagger' | 'death' | 'recycle' | 'debug';
+type EnemySpawnConfig = {
+  initialCount: number;
+  staggerIntervalMs: number;
+  candidatePool: number;
+};
 type EnemyConfig = {
   kind: EnemyKind;
   speed: number;
@@ -133,6 +148,44 @@ function enemyNumbers(initial = 0): Record<EnemyInstanceId, number> {
   return enemyRecord(() => initial);
 }
 
+/** DEV用URL queryを安全な既定値へ正規化し、本番では読み取らない。 */
+function resolveEnemySpawnConfig(): EnemySpawnConfig {
+  const query = IS_DEV ? new URLSearchParams(window.location.search) : new URLSearchParams();
+  return {
+    initialCount: readDevIntegerQuery(query, 'enemyInitialCount', DEFAULT_ENEMY_INITIAL_COUNT, 0, ENEMY_SPAWN_ORDER.length),
+    staggerIntervalMs: readDevIntegerQuery(query, 'enemyStaggerIntervalMs', DEFAULT_ENEMY_STAGGER_INTERVAL_MS, MIN_ENEMY_STAGGER_INTERVAL_MS, MAX_ENEMY_STAGGER_INTERVAL_MS),
+    candidatePool: readDevIntegerQuery(query, 'enemySpawnCandidatePool', DEFAULT_ENEMY_SPAWN_CANDIDATE_POOL, 1, MAX_ENEMY_SPAWN_CANDIDATE_POOL),
+  };
+}
+
+function readDevIntegerQuery(
+  query: URLSearchParams,
+  name: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  const value = query.get(name);
+  if (value === null || value.trim().length === 0) return fallback;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback;
+}
+
+function initialEnemyIdsFor(config: EnemySpawnConfig): readonly EnemyInstanceId[] {
+  return ENEMY_SPAWN_ORDER.slice(0, config.initialCount);
+}
+
+function staggeredEnemiesFor(config: EnemySpawnConfig): readonly { id: EnemyInstanceId; delay: number }[] {
+  return ENEMY_SPAWN_ORDER.slice(config.initialCount)
+    .map((id, index) => ({ id, delay: (index + 1) * config.staggerIntervalMs }));
+}
+
+function formatEnemySpawnConfig(config: EnemySpawnConfig): string {
+  return `enemyInitialCount=${config.initialCount};enemyStaggerIntervalMs=${config.staggerIntervalMs};enemySpawnCandidatePool=${config.candidatePool}`;
+}
+
+const ENEMY_SPAWN_CONFIG = resolveEnemySpawnConfig();
+
 function sameTile(left: TilePosition, right: TilePosition): boolean {
   return left.x === right.x && left.y === right.y;
 }
@@ -163,6 +216,7 @@ const fps = element<HTMLOutputElement>('[data-testid="fps"]');
 const playerHitVignette = element<HTMLElement>('#player-hit-vignette');
 const survivalTimeHud = element<HTMLOutputElement>('[data-testid="survival-time"]');
 const spawnPhaseHud = element<HTMLOutputElement>('[data-testid="spawn-phase"]');
+spawnPhaseHud.dataset.spawnConfig = formatEnemySpawnConfig(ENEMY_SPAWN_CONFIG);
 const primaryDirectionHud = element<HTMLOutputElement>('[data-testid="primary-direction"]');
 const feedback = element<HTMLElement>('[data-testid="feedback"]');
 const resultPanel = element<HTMLElement>('[data-testid="result"]');
@@ -205,6 +259,7 @@ class Arena extends Phaser.Scene {
   private hiddenSince = new Map<EnemyInstanceId, number>();
   private recyclingEnemyId: EnemyInstanceId | undefined;
   private hiddenRecycleEnabled = true;
+  private debugPlayerInvulnerable = false;
   private paths = {} as Record<EnemyInstanceId, PathState>;
   private enemySpawnTimers = new Map<EnemyInstanceId, Phaser.Time.TimerEvent>();
   private flashes = new Map<EnemyInstanceId, Phaser.Time.TimerEvent>();
@@ -335,6 +390,25 @@ class Arena extends Phaser.Scene {
     if (!enabled) this.hiddenSince.clear();
   }
 
+  public debugSetPlayerInvulnerable(enabled: boolean): void {
+    if (!IS_DEV)
+      throw new Error('debugSetPlayerInvulnerableはDEV環境だけで使用できます。');
+    this.debugPlayerInvulnerable = enabled;
+  }
+
+  public debugMovePlayerTo(tile: TilePosition): void {
+    if (!IS_DEV)
+      throw new Error('debugMovePlayerToはDEV環境だけで使用できます。');
+    if (!Number.isInteger(tile.x) || !Number.isInteger(tile.y) || this.map.tiles[tile.y]?.[tile.x] !== 'floor')
+      throw new Error('debugMovePlayerToの移動先はfloor tileである必要があります。');
+    const point = this.world(tile);
+    this.player.setPosition(point.x, point.y).setVelocity(0, 0);
+    this.player.body?.reset(point.x, point.y);
+    this.updateTileHud();
+    this.updateVisibilityMask(true);
+    this.updateEnemyVisibility(true);
+  }
+
   public debugDamageEnemy(id: EnemyInstanceId, amount: number): void {
     if (!IS_DEV)
       throw new Error('debugDamageEnemyはDEV環境だけで使用できます。');
@@ -372,14 +446,16 @@ class Arena extends Phaser.Scene {
     this.lastHitAt = enemyNumbers(Number.NEGATIVE_INFINITY);
     this.hiddenSince.clear();
     this.recyclingEnemyId = undefined;
+    this.debugPlayerInvulnerable = false;
     this.paths = {} as Record<EnemyInstanceId, PathState>;
     this.visibilityTiles = {};
     this.visibilityMaskPlayerTile = undefined;
     this.visibilityMask.clear();
     this.disableAllBullets();
+    const initialEnemyIds = initialEnemyIdsFor(ENEMY_SPAWN_CONFIG);
     ENEMY_IDS.forEach((id) => {
       this.enemies[id].setData('stableId', id);
-      this.enemies[id].setData('spawnReason', INITIAL_ENEMY_IDS.includes(id) ? 'initial' : 'stagger');
+      this.enemies[id].setData('spawnReason', initialEnemyIds.includes(id) ? 'initial' : 'stagger');
       this.enemies[id].setData('spawnPhase', '');
       this.enemies[id].setData('primaryDirection', '');
       this.enemies[id].setData('assignedDirection', '');
@@ -399,11 +475,11 @@ class Arena extends Phaser.Scene {
     camera.startFollow(this.player);
     camera.preRender();
     this.buildAmmoBoxes();
-    INITIAL_ENEMY_IDS.forEach((id) => {
+    initialEnemyIds.forEach((id) => {
       if (!this.spawnEnemy(id, 'initial'))
         this.scheduleEnemySpawn(id, 'initial', 1000);
     });
-    STAGGERED_ENEMIES.forEach(({ id, delay }) => this.scheduleEnemySpawn(id, 'stagger', delay));
+    staggeredEnemiesFor(ENEMY_SPAWN_CONFIG).forEach(({ id, delay }) => this.scheduleEnemySpawn(id, 'stagger', delay));
     this.updateEnemyVisibility(true);
     this.startSurvivalTimer();
     if (IS_DEV)
@@ -571,7 +647,7 @@ class Arena extends Phaser.Scene {
 
   private moveEnemy(id: EnemyInstanceId): void {
     const enemy = this.enemies[id];
-    if (!enemy.active)
+    if (this.physics.world.isPaused || !enemy.active)
       return;
     if (this.time.now < this.enemyHitStopUntil[id]) {
       enemy.setVelocity(0, 0);
@@ -679,6 +755,7 @@ class Arena extends Phaser.Scene {
       this.map,
       { player: playerTile, viewport: this.viewport(), occupied, direction },
       nextSeed(this.map.seed + this.respawnCount[id] * 31 + this.recycleCount[id] * 131 + stableSlot),
+      ENEMY_SPAWN_CONFIG.candidatePool,
     );
     if (!tile) {
       this.enemies[id].setData('spawnReason', reason);
@@ -983,6 +1060,8 @@ class Arena extends Phaser.Scene {
   }
 
   private hitPlayer(id: EnemyInstanceId): void {
+    if (IS_DEV && this.debugPlayerInvulnerable)
+      return;
     if (this.state.defeated || this.state.victory || this.time.now - this.contactAt[id] < ENEMIES[id].cooldown)
       return;
     this.contactAt[id] = this.time.now;

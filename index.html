@@ -10,6 +10,27 @@
     <main>
       <header>
         <h1>メカサバイバル</h1>
+        <div id="game-shell">
+          <div id="game" aria-label="戦闘アリーナ"></div>
+          <div id="player-hit-vignette" aria-hidden="true"></div>
+          <aside id="survival-panel" class="game-overlay" aria-label="残り時間">
+            <span>残り時間</span>
+            <output class="survival-time" data-testid="survival-time">03:00</output>
+          </aside>
+          <aside id="hp-panel" class="game-overlay" aria-label="プレイヤー体力">
+            <span>HP <output data-testid="hp">100</output></span>
+            <progress data-testid="hp-bar" max="100" value="100" aria-label="プレイヤーHP"></progress>
+          </aside>
+          <aside id="ammo-panel" data-testid="ammo-panel" aria-label="弾数">
+            <span class="ammo-panel-caption">弾薬</span>
+            <output class="ammo-panel-weapon" data-testid="ammo-panel-weapon">アサルトライフル</output>
+            <output class="ammo-panel-magazine" data-testid="ammo">20/20</output>
+            <output class="ammo-panel-reserve" data-testid="ammo-reserve">予備 40/60</output>
+            <span class="ammo-panel-reload-label" data-testid="reload-progress-label" hidden>リロード中</span>
+            <progress class="ammo-panel-reload" data-testid="reload-progress" max="1" value="0" hidden aria-label="リロード進捗"></progress>
+            <output data-testid="ammo-box-count" hidden>4</output>
+          </aside>
+        </div>
         <p>
           移動: WASD / 矢印　武器: 1 ライフル / 2 ショットガン　照準: マウス移動　射撃: マウス左ボタン　リロード: R
         </p>
@@ -39,27 +60,6 @@
         <p data-testid="affinity">高速ドローン: 移動は速いが、ライフル1発で撃破可能</p>
         <p data-testid="feedback" aria-live="polite">-</p>
       </header>
-      <div id="game-shell">
-        <div id="game" aria-label="戦闘アリーナ"></div>
-        <div id="player-hit-vignette" aria-hidden="true"></div>
-        <aside id="survival-panel" class="game-overlay" aria-label="残り時間">
-          <span>残り時間</span>
-          <output class="survival-time" data-testid="survival-time">03:00</output>
-        </aside>
-        <aside id="hp-panel" class="game-overlay" aria-label="プレイヤー体力">
-          <span>HP <output data-testid="hp">100</output></span>
-          <progress data-testid="hp-bar" max="100" value="100" aria-label="プレイヤーHP"></progress>
-        </aside>
-        <aside id="ammo-panel" data-testid="ammo-panel" aria-label="弾数">
-          <span class="ammo-panel-caption">弾薬</span>
-          <output class="ammo-panel-weapon" data-testid="ammo-panel-weapon">アサルトライフル</output>
-          <output class="ammo-panel-magazine" data-testid="ammo">20/20</output>
-          <output class="ammo-panel-reserve" data-testid="ammo-reserve">予備 40/60</output>
-          <span class="ammo-panel-reload-label" data-testid="reload-progress-label" hidden>リロード中</span>
-          <progress class="ammo-panel-reload" data-testid="reload-progress" max="1" value="0" hidden aria-label="リロード進捗"></progress>
-          <output data-testid="ammo-box-count" hidden>4</output>
-        </aside>
-      </div>
       <section data-testid="result" hidden aria-live="assertive" aria-atomic="true">
         <div data-testid="defeat" hidden>
           <h2>敗北</h2>

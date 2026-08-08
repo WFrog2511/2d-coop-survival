@@ -11,6 +11,7 @@ import {
   basicApproachRoleFor,
   findPath,
   generateArenaMap,
+  generateFallbackArenaMap,
   generateNextArenaMap,
   hiddenRecycleThresholdFor,
   nextSeed,
@@ -65,14 +66,85 @@ describe('自動生成アリーナ', () => {
     expect(next.tiles).not.toEqual(first.tiles);
   });
 
-  test('通常生成は7部屋、指定サイズ、1〜3幅の通路、1マス障害物を持つ', () => {
+  test('80×50の通常生成は14部屋、指定サイズ、1〜3幅の通路、1マス障害物を持つ', () => {
     const map = generateArenaMap(seed);
-    expect(map.rooms).toHaveLength(7);
-    expect(map.rooms.every(room => room.width >= 5 && room.width <= 9)).toBe(true);
-    expect(map.rooms.every(room => room.height >= 4 && room.height <= 7)).toBe(true);
-    expect(map.corridors).toHaveLength(6);
+    expect(ARENA_WIDTH_TILES).toBe(80);
+    expect(ARENA_HEIGHT_TILES).toBe(50);
+    expect(map.width).toBe(80);
+    expect(map.height).toBe(50);
+    expect(map.tiles).toHaveLength(50);
+    expect(map.tiles.every(row => row.length === 80)).toBe(true);
+    expect(map.rooms).toHaveLength(14);
+    expect(map.rooms.every(room => room.width >= 8 && room.width <= 12)).toBe(true);
+    expect(map.rooms.every(room => room.height >= 6 && room.height <= 10)).toBe(true);
+    expect(map.corridors).toHaveLength(13);
     expect(map.corridors.every(corridor => corridor.width >= 1 && corridor.width <= 3)).toBe(true);
     expect(map.obstacles.length).toBeGreaterThan(0);
+  });
+
+  test('代表seedは通常生成を使い、fallbackに偏らない', () => {
+    [15, seed, nextSeed(seed)].forEach((fixedSeed) => {
+      const map = generateArenaMap(fixedSeed);
+      expect(map.rooms).toHaveLength(14);
+      expect(allFloorsReachable(map)).toBe(true);
+    });
+  });
+
+  test('fallbackは80×50内の3列3行中央開始で8部屋と幅2通路を置く', () => {
+    const map = generateFallbackArenaMap(seed);
+    expect(map.rooms).toEqual([
+      { x: 34, y: 20, width: 12, height: 10 },
+      { x: 34, y: 5, width: 12, height: 10 },
+      { x: 7, y: 20, width: 12, height: 10 },
+      { x: 34, y: 35, width: 12, height: 10 },
+      { x: 61, y: 20, width: 12, height: 10 },
+      { x: 7, y: 5, width: 12, height: 10 },
+      { x: 61, y: 5, width: 12, height: 10 },
+      { x: 7, y: 35, width: 12, height: 10 },
+    ]);
+    expect(map.start).toEqual({ x: 40, y: 25 });
+    expect(map.corridors).toHaveLength(7);
+    expect(map.corridors.every(corridor => corridor.width === 2)).toBe(true);
+    expect(map.corridors.slice(0, 4).map(corridor => ({ from: corridor.from, to: corridor.to }))).toEqual([
+      { from: { x: 40, y: 25 }, to: { x: 40, y: 10 } },
+      { from: { x: 40, y: 25 }, to: { x: 13, y: 25 } },
+      { from: { x: 40, y: 25 }, to: { x: 40, y: 40 } },
+      { from: { x: 40, y: 25 }, to: { x: 67, y: 25 } },
+    ]);
+    expect(map.obstacles).toEqual([]);
+    expect(map.rooms.every(room =>
+      room.x >= 1
+      && room.y >= 1
+      && room.x + room.width < ARENA_WIDTH_TILES - 1
+      && room.y + room.height < ARENA_HEIGHT_TILES - 1,
+    )).toBe(true);
+    expect(allFloorsReachable(map)).toBe(true);
+  });
+
+  test('fallbackは4主方向それぞれで12 slotの厳格な方向spawn候補を確保する', () => {
+    const map = generateFallbackArenaMap(seed);
+    const viewport = {
+      left: map.start.x - 10,
+      top: map.start.y - 6,
+      right: map.start.x + 10,
+      bottom: map.start.y + 6,
+    };
+    SPAWN_DIRECTIONS.forEach((primary) => {
+      const occupied: TilePosition[] = [map.start, ...selectAmmoBoxTiles(map)];
+      for (let slot = 0; slot < 12; slot += 1) {
+        const direction = spawnDirectionForSlot(primary, slot);
+        const tile = selectEnemySpawnTile(map, {
+          player: map.start,
+          viewport,
+          occupied,
+          direction,
+        }, nextSeed(map.seed + slot));
+        if (!tile) throw new Error(`fallbackの${primary}主方向、${slot}番目の厳格な方向spawn位置が必要です。`);
+        expect(enemyVisibility(map, map.start, tile)).toBe('hidden');
+        expect(directionFromPlayer(map.start, tile)).toBe(direction);
+        occupied.push(tile);
+      }
+    });
   });
 
   test('外周はwallで、すべてのfloorは開始地点から到達可能である', () => {
@@ -120,6 +192,31 @@ describe('自動生成アリーナ', () => {
       spawned.push(tile);
     }
     expect(new Set(spawned.map(tileKey))).toHaveLength(12);
+  });
+
+  test('中央帯の開始部屋は代表seedで12体の厳格な方向spawn候補を確保する', () => {
+    const map = generateArenaMap(1);
+    const viewport = {
+      left: map.start.x - 10,
+      top: map.start.y - 6,
+      right: map.start.x + 10,
+      bottom: map.start.y + 6,
+    };
+    const occupied: TilePosition[] = [map.start, ...selectAmmoBoxTiles(map)];
+    const primary = primarySpawnDirection(map.seed, 0);
+    for (let slot = 0; slot < 12; slot += 1) {
+      const direction = spawnDirectionForSlot(primary, slot);
+      const tile = selectEnemySpawnTile(map, {
+        player: map.start,
+        viewport,
+        occupied,
+        direction,
+      }, nextSeed(map.seed + slot));
+      if (!tile) throw new Error(`${slot}番目の厳格な方向spawn位置が必要です。`);
+      expect(enemyVisibility(map, map.start, tile)).toBe('hidden');
+      expect(directionFromPlayer(map.start, tile)).toBe(direction);
+      occupied.push(tile);
+    }
   });
 
   test('60秒境界でphaseを進め、seedとphaseから4方向を決定的に切り替える', () => {
@@ -335,6 +432,49 @@ describe('自動生成アリーナ', () => {
       occupied: [{ x: 1, y: 2 }],
       direction: 'right',
     }, seed)).toBeNull();
+  });
+
+  test('敵spawnは近いBFS候補の上位poolからseedで選び、候補不足時も条件を緩めない', () => {
+    const map = generateArenaMap(seed);
+    const player = map.start;
+    const viewport = { left: player.x, top: player.y, right: player.x, bottom: player.y };
+    const candidatesByDirection = SPAWN_DIRECTIONS.map(direction => ({
+      direction,
+      candidates: map.tiles.flatMap((row, y) => row.flatMap((tile, x) => {
+        const position = { x, y };
+        return tile === 'floor'
+          && (x < viewport.left || x > viewport.right || y < viewport.top || y > viewport.bottom)
+          && directionFromPlayer(player, position) === direction
+          && findPath(map, player, position).length > 0
+          && enemyVisibility(map, player, position) === 'hidden'
+          ? [position]
+          : [];
+      })),
+    }));
+    const selectedDirection = candidatesByDirection.find(({ candidates }) => candidates.length > 10);
+    if (!selectedDirection) throw new Error('上位10候補を確認できる厳格なspawn方角が必要です。');
+    const ranked = selectedDirection.candidates
+      .map(position => ({ position, distance: findPath(map, player, position).length - 1 }))
+      .sort((left, right) => left.distance - right.distance || left.position.y - right.position.y || left.position.x - right.position.x);
+    const request = {
+      player,
+      viewport,
+      occupied: [player],
+      direction: selectedDirection.direction,
+    };
+
+    expect(selectEnemySpawnTile(map, request, 71, 1)).toEqual(ranked[0].position);
+    const seeded = selectEnemySpawnTile(map, request, 7, 10);
+    expect(seeded).toEqual(ranked[7].position);
+    expect(selectEnemySpawnTile(map, request, 7, 10)).toEqual(seeded);
+
+    const available = ranked.slice(0, 3);
+    const availableKeys = new Set(available.map(candidate => tileKey(candidate.position)));
+    const limited = selectEnemySpawnTile(map, {
+      ...request,
+      occupied: [player, ...selectedDirection.candidates.filter(position => !availableKeys.has(tileKey(position)))],
+    }, 4);
+    expect(limited).toEqual(available[1].position);
   });
 
   test('viewportの右端と下端は境界tileを含めず、部分的に見えるtileを含む', () => {
