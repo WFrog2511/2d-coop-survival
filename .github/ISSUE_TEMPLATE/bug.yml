@@ -1,0 +1,105 @@
+name: 不具合・再現調査
+description: 再現可能な不具合を、修正と回帰確認に必要な情報とともに起票する。
+title: "bug: "
+labels: ["bug", "type:task"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        一つのIssueには一つの不具合を記録してください。不明な項目は空欄にせず「不明」または「該当なし」と記載してください。
+        秘密情報、個人情報、公開できないログは貼り付けず、安全な保管先と参照方法だけを記載してください。
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待した結果
+      description: 本来どのような状態または挙動になるべきかを書く。
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の結果
+      description: 期待と異なった状態、表示、挙動を書く。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 再現手順
+      description: 初期状態から不具合が発生するまでを、第三者が追試できる順序で書く。
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: 再現頻度
+      options:
+        - 毎回
+        - 高頻度
+        - 低頻度
+        - 一度だけ
+        - 未確認
+    validations:
+      required: true
+  - type: input
+    id: last_seen
+    attributes:
+      label: 最終発生日時
+      description: タイムゾーンを含む日時を書く。不明な場合は「不明」とする。
+      placeholder: "2026-08-08 14:30 JST"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 実行環境と再現条件
+      description: OS、ブラウザ、branch、commit、map seed、入力操作を記載する。該当しない項目はその旨を書く。
+      placeholder: |
+        - OS:
+        - ブラウザとバージョン:
+        - branch:
+        - commit:
+        - map seed:
+        - 入力操作・デバイス:
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: 影響
+      description: 影響する利用者、機能、データ、進行不能の有無を記載する。
+    validations:
+      required: true
+  - type: textarea
+    id: workaround
+    attributes:
+      label: 回避策
+      description: 回避策がない場合は「なし」と記載する。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: スクリーンショットとログ
+      description: 添付または安全な参照先を記載する。取得できない場合は理由を書く。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 修正の受け入れ条件
+      placeholder: "- [ ] 条件"
+    validations:
+      required: true
+  - type: textarea
+    id: regression
+    attributes:
+      label: 回帰テスト
+      description: 再発防止のために追加または実行するテストと、周辺機能の確認範囲を書く。
+      placeholder: "- [ ] テストまたは確認項目"
+    validations:
+      required: true

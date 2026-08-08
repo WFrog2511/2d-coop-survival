@@ -1,5 +1,5 @@
 name: 判断
-description: 人間の選択または承認が必要な事項を起票する。
+description: 人間の選択、承認、再承認が必要な事項を証跡とともに起票する。
 title: "decision: "
 labels: ["type:decision"]
 body:
@@ -10,9 +10,45 @@ body:
     validations:
       required: true
   - type: textarea
+    id: background_evidence
+    attributes:
+      label: 背景と根拠
+      description: 判断が必要になった経緯と、確認済みの事実・証跡・出典を書く。未検証事項は区別する。
+    validations:
+      required: true
+  - type: textarea
     id: options
     attributes:
       label: 選択肢と推奨案
+      description: 各選択肢の利点、欠点、推奨理由を書く。
+    validations:
+      required: true
+  - type: textarea
+    id: approver_conditions
+    attributes:
+      label: 判断者と承認条件
+      description: 誰が判断し、GO・NO-GO・再承認に何が必要かを書く。
+    validations:
+      required: true
+  - type: textarea
+    id: adoption_targets
+    attributes:
+      label: 反映先
+      description: 判断結果を反映するIssue、仕様、コード、設定、運用資料などを書く。
+    validations:
+      required: true
+  - type: textarea
+    id: revisit_conditions
+    attributes:
+      label: 再確認条件
+      description: 期限、前提変更、検証結果など、この判断を再度開く条件を書く。
+    validations:
+      required: true
+  - type: textarea
+    id: superseded_evidence
+    attributes:
+      label: 条件変更時の旧GO・旧証跡の扱い
+      description: 旧承認を失効・保留・継続のどれにするか、証跡をどう残すかを書く。
     validations:
       required: true
   - type: textarea

@@ -1,0 +1,4 @@
+interface:
+  display_name: "ハーネス振り返り"
+  short_description: "作業履歴からハーネスの問題を抽出し中央Issue候補へつなぐ"
+  default_prompt: "$retrospect-harness を使って、今回の作業からハーネスの問題点を振り返り、必要なら中央Issue候補を作成してください。"

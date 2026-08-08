@@ -1,0 +1,82 @@
+name: アイデア・バックログ候補
+description: 未承認の改善候補を、一つの問題またはプレイ体験ごとに起票する。
+title: "idea: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        一つのIssueには一つのアイデアだけを記載してください。
+        このIssueの作成・triage・closeは、実装開始やDefinition of Deliveryの承認を意味しません。実装する場合は、承認済みのtaskまたはdecisionへ切り出します。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 解決したい問題
+      description: 誰が、どの状況で、何に困っているかを書く。
+    validations:
+      required: true
+  - type: textarea
+    id: desired_experience
+    attributes:
+      label: 期待するプレイ体験・利用体験
+      description: 解決後に利用者が得る体験を、実装方法に固定しすぎずに書く。
+    validations:
+      required: true
+  - type: textarea
+    id: current_relation
+    attributes:
+      label: 現在の実装との関係
+      description: 現行挙動、既存機能、既知の制約、関連Issueとの差分を書く。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 根拠・情報源
+      description: 観察、ユーザーの声、計測、外部資料などを出典とともに記載する。根拠がない場合は仮説と明記する。
+    validations:
+      required: true
+  - type: dropdown
+    id: verification_status
+    attributes:
+      label: 検証状態
+      options:
+        - 未検証の仮説
+        - 一部確認済み
+        - 再現・確認済み
+        - 外部情報のみ
+    validations:
+      required: true
+  - type: textarea
+    id: unknowns
+    attributes:
+      label: 未確定事項
+      description: 判断または実装前に確認すべき事項を書く。ない場合は「なし」と記載する。
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: 依存関係
+      description: 先行task、decision、外部依存を書く。ない場合は「なし」と記載する。
+    validations:
+      required: true
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: 対象外
+      description: この候補に含めないものを明記する。
+    validations:
+      required: true
+  - type: dropdown
+    id: proposed_exit
+    attributes:
+      label: 希望する次の出口
+      description: triageで変更できる。選択だけでは実装や判断を承認しない。
+      options:
+        - 却下候補
+        - 調査task
+        - decision
+        - 実装task
+    validations:
+      required: true

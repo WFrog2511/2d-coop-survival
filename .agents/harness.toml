@@ -1,0 +1,18 @@
+schema_version = 1
+harness_version = "0.1.0"
+profile = "prototype-standard"
+
+[components]
+rules = ["core", "delivery", "subagent-commits"]
+skills = ["grill-me", "ponytail", "report-harness-feedback", "retrospect-harness"]
+adapters = ["codex", "typescript"]
+
+[overrides]
+paths = [".agents/overrides"]
+
+[consumer]
+validation_commands = ["corepack pnpm check"]
+
+[lsp]
+servers = ["typescript"]
+required = true

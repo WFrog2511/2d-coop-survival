@@ -1,0 +1,7 @@
+schema_version = 1
+harness_version = "0.1.0"
+source = "https://github.com/WFrog2511/agentic-development-harness.git"
+revision = "8c32ebfceba23ae032d281dc570509ab6b0f073b"
+# content_sha256 is the SHA-256 of the full raw tar stream from
+# `git archive --format=tar 8c32ebfceba23ae032d281dc570509ab6b0f073b`.
+content_sha256 = "27c5745f4a8bfec761490cc321048812f07c3e2542985f154d24b23d1e518629"
