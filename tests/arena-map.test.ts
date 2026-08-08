@@ -8,12 +8,16 @@ import {
   SPAWN_DIRECTIONS,
   SPAWN_PHASE_MS,
   TILE_SIZE,
+  basicApproachRoleFor,
   findPath,
   generateArenaMap,
   generateNextArenaMap,
+  hiddenRecycleThresholdFor,
   nextSeed,
   primarySpawnDirection,
+  recycleDelayFor,
   respawnDelayFor,
+  selectEnemySpawnTile,
   selectSpawnTile,
   selectAmmoBoxTiles,
   spawnDirectionForSlot,
@@ -194,6 +198,29 @@ describe('自動生成アリーナ', () => {
     expect(findPath(map, { x: 0, y: 0 }, map.start)).toEqual([]);
   });
 
+  test('BFSはseed省略時の経路を維持し、指定時だけ最短経路のtie-breakを変える', () => {
+    const open = mapFrom([
+      ['wall', 'wall', 'wall', 'wall', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'wall', 'wall', 'wall', 'wall'],
+    ]);
+    const start = { x: 1, y: 1 };
+    const target = { x: 3, y: 3 };
+    expect(findPath(open, start, target)).toEqual([
+      { x: 1, y: 1 },
+      { x: 2, y: 1 },
+      { x: 3, y: 1 },
+      { x: 3, y: 2 },
+      { x: 3, y: 3 },
+    ]);
+    const seededPaths = Array.from({ length: 16 }, (_, tieBreakSeed) => findPath(open, start, target, tieBreakSeed));
+    expect(new Set(seededPaths.map(path => JSON.stringify(path))).size).toBeGreaterThan(1);
+    expect(seededPaths.every(path => path.length === 5)).toBe(true);
+    expect(findPath(open, start, target, 7)).toEqual(findPath(open, start, target, 7));
+  });
+
   test('spawnはviewport外を優先し、候補がなければ最遠floorを選ぶ', () => {
     const map = generateArenaMap(seed);
     const outside = selectSpawnTile(map, {
@@ -244,6 +271,72 @@ describe('自動生成アリーナ', () => {
     }, seed)).toEqual({ x: 1, y: 2 });
   });
 
+  test('敵専用spawnは指定方向のviewport外かつhiddenな到達可能未占有tileだけを選ぶ', () => {
+    const rotateRows = (rows: ArenaMap['tiles']): ArenaMap['tiles'] =>
+      Array.from({ length: rows[0].length }, (_, y) =>
+        Array.from({ length: rows.length }, (_, x) => rows[rows.length - 1 - x][y]));
+    const rotatePosition = (position: TilePosition, height: number): TilePosition =>
+      ({ x: height - 1 - position.y, y: position.x });
+    let rows: ArenaMap['tiles'] = [
+      ['wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'floor', 'floor', 'wall', 'floor', 'floor', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall'],
+    ];
+    let player = { x: 1, y: 2 };
+    let target = { x: 5, y: 2 };
+    const directions: SpawnDirection[] = ['right', 'down', 'left', 'up'];
+    const cases = directions.map((direction) => {
+      const map = mapFrom(rows);
+      const currentPlayer = player;
+      const currentTarget = target;
+      const occupied = map.tiles.flatMap((row, y) => row.flatMap((tile, x) =>
+        tile === 'floor' && (x !== currentTarget.x || y !== currentTarget.y) ? [{ x, y }] : [],
+      ));
+      const value = { map, player: currentPlayer, target: currentTarget, occupied, direction };
+      const height = rows.length;
+      rows = rotateRows(rows);
+      player = rotatePosition(player, height);
+      target = rotatePosition(target, height);
+      return value;
+    });
+    cases.forEach(({ map, player: casePlayer, target: caseTarget, occupied, direction }) => {
+      const request = {
+        player: casePlayer,
+        viewport: { left: casePlayer.x, top: casePlayer.y, right: casePlayer.x, bottom: casePlayer.y },
+        occupied,
+        direction,
+      };
+      expect(selectEnemySpawnTile(map, request, seed)).toEqual(caseTarget);
+      expect(enemyVisibility(map, casePlayer, caseTarget)).toBe('hidden');
+      expect(findPath(map, casePlayer, caseTarget).length).toBeGreaterThan(0);
+    });
+    const rightCase = cases[0];
+    const rightRequest = {
+      player: rightCase.player,
+      viewport: { left: rightCase.player.x, top: rightCase.player.y, right: rightCase.player.x, bottom: rightCase.player.y },
+      occupied: rightCase.occupied,
+      direction: 'right' as const,
+    };
+    expect(selectEnemySpawnTile(rightCase.map, { ...rightRequest, direction: 'left' }, seed)).toBeNull();
+    expect(selectEnemySpawnTile(rightCase.map, { ...rightRequest, occupied: [...rightCase.occupied, rightCase.target] }, seed)).toBeNull();
+
+    const open = mapFrom([
+      ['wall', 'wall', 'wall', 'wall', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'wall', 'wall', 'wall', 'wall'],
+    ]);
+    expect(selectEnemySpawnTile(open, {
+      player: { x: 1, y: 2 },
+      viewport: { left: 0, top: 0, right: 1, bottom: 4 },
+      occupied: [{ x: 1, y: 2 }],
+      direction: 'right',
+    }, seed)).toBeNull();
+  });
+
   test('viewportの右端と下端は境界tileを含めず、部分的に見えるtileを含む', () => {
     expect(viewportTileRect({
       left: 0,
@@ -259,7 +352,7 @@ describe('自動生成アリーナ', () => {
     })).toEqual({ left: 0, top: 0, right: 20, bottom: 12 });
   });
 
-  test('spawnは占有tileを重複選択せず、待ち時間は範囲内かつ決定的である', () => {
+  test('spawnは占有tileを重複選択せず、各待ち時間は範囲内かつ決定的である', () => {
     const map = generateArenaMap(seed);
     const first = selectSpawnTile(map, {
       player: map.start,
@@ -281,11 +374,27 @@ describe('自動生成アリーナ', () => {
     expect(second && tileKey(second)).not.toBe(tileKey(first));
     const basic = respawnDelayFor('basic', 'basic-1', 2, seed);
     const drone = respawnDelayFor('drone', 'drone-1', 2, seed);
-    expect(basic).toBeGreaterThanOrEqual(1300);
-    expect(basic).toBeLessThanOrEqual(1900);
-    expect(drone).toBeGreaterThanOrEqual(900);
-    expect(drone).toBeLessThanOrEqual(1500);
+    expect(basic).toBeGreaterThanOrEqual(5000);
+    expect(basic).toBeLessThanOrEqual(9000);
+    expect(drone).toBeGreaterThanOrEqual(3000);
+    expect(drone).toBeLessThanOrEqual(6000);
     expect(respawnDelayFor('basic', 'basic-1', 2, seed)).toBe(basic);
+    const hiddenThreshold = hiddenRecycleThresholdFor('basic-1', 2, seed);
+    const recycleDelay = recycleDelayFor('basic-1', 2, seed);
+    expect(hiddenThreshold).toBeGreaterThanOrEqual(8000);
+    expect(hiddenThreshold).toBeLessThanOrEqual(12000);
+    expect(recycleDelay).toBeGreaterThanOrEqual(2000);
+    expect(recycleDelay).toBeLessThanOrEqual(4000);
+    expect(hiddenRecycleThresholdFor('basic-1', 2, seed)).toBe(hiddenThreshold);
+    expect(recycleDelayFor('basic-1', 2, seed)).toBe(recycleDelay);
+  });
+
+  test('基本敵IDを3体ずつ固定の接近役割へ割り当てる', () => {
+    expect(['basic-1', 'basic-2', 'basic-3'].map(basicApproachRoleFor)).toEqual(['direct', 'direct', 'direct']);
+    expect(['basic-4', 'basic-5', 'basic-6'].map(basicApproachRoleFor)).toEqual(['left', 'left', 'left']);
+    expect(['basic-7', 'basic-8', 'basic-9'].map(basicApproachRoleFor)).toEqual(['right', 'right', 'right']);
+    expect(basicApproachRoleFor('drone-1')).toBeNull();
+    expect(basicApproachRoleFor('basic-10')).toBeNull();
   });
 });
 

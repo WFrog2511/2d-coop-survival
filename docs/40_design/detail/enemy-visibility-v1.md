@@ -10,7 +10,7 @@ supercoverはtile中心間でX/Yの格子境界を跨ぐ順にtileを列挙す�
 
 死角maskはSceneが保持するworld-space Graphics 1個である。player tileをcacheし、同tileのupdateでは即returnする。cache不一致、create、spawn、respawn、retry、map再生成ではGraphicsをclearし、現行固定arenaの全tileを`hasLineOfSight(map, playerTile, tile)`で判定する。falseのtileだけ黒矩形を描き、Graphicsの実alphaは0.25とする。target wallは既存LOS endpoint規則で可視である。maskはmap/wall/enemy/silhouetteより前、playerより後ろに置き、enemy移動や毎frameのLOSは行わない。
 
-hiddenは描画だけを止める。`disableBody`、`setActive`、path、HP、velocity、damage、timerは使用しない。boundaryからnormalへ戻る時は固有texture、alpha 1、visible trueを必ずセットする。tintは既存hit flash専用である。
+visibility presentationとしてのhiddenは描画だけを止め、純粋判定からbody、HP、AIを変更しない。Issue #38の独立したrecycle policyはhidden継続8000〜12000msを参照し、最終hitから3000ms、path 10 edge以上、単一lockを満たす場合だけbodyを一時無効化してHP維持re-entryする。normal/boundaryではhidden継続をresetする。boundaryからnormalへのtexture、alpha 1、visible true復帰とhit tintは従来どおりである。
 
 ## DOCGEN
 
@@ -18,4 +18,4 @@ hiddenは描画だけを止める。`disableBody`、`setActive`、path、HP、ve
 
 ## テスト観点
 
-同tile、水平/垂直/斜線、最初wall、wall後、wall直後boundary、2tile奥hidden、4近傍限定、corner、floor外、遠距離、normal優先をunitで検査する。固定seed E2Eは敵の観測属性、mask alpha、暗転tile数、mask player tile、既存戦闘/retry回帰を確認する。観測用data属性はGraphicsの実alphaと再描画時の実計算値からだけ同期し、テスト専用値は置かない。
+同tile、水平/垂直/斜線、wall、boundary、hidden、4近傍、corner、floor外、遠距離、normal優先をunitで検査する。固定seed E2Eは表示属性とmaskに加え、Issue #38側でhidden時間を制御するDEV限定hookを使って段階投入とphaseをrecycleから分離する。productionではScene/hookをglobal公開しない。

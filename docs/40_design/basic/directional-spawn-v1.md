@@ -13,16 +13,17 @@ specification: SPEC-DIRECTIONAL-SPAWN
 - 合意済み要件は[REQ-DIRECTIONAL-SPAWN](../../20_requirements/directional-spawn-v1.md)を参照する。
 - 検証可能な仕様は[SPEC-DIRECTIONAL-SPAWN](../../30_specs/directional-spawn-v1.md)を参照する。
 - Definition of Deliveryは[Issue #22 comment 5222574276](https://github.com/WFrog2511/2d-coop-survival/issues/22#issuecomment-5222574276)を正本とする。
+- 敵循環・balance・HUDは[Issue #38](https://github.com/WFrog2511/2d-coop-survival/issues/38)のfollow-upを適用する。
 - 既存のmap生成、enemy visibility、有限弾薬、3分勝利、弾薬箱respawnを維持し、方向付きspawnに必要な差分だけを加える。
 
 ## 責務
 
 | 対象 | 責務 |
 | --- | --- |
-| `src/rules.ts` | `basic-1`〜`basic-9`、`drone-1`〜`drone-3`の12 stable ID、既存の敵種別・HPを持つCombatState、retry時の初期state |
-| `src/arena-map.ts` | 60秒phase、map seedとphaseによる主方向、stable slotの割り当て方向、player基準方向判定、方向付き`selectSpawnTile`を副作用のない関数として提供 |
-| `src/main.ts` | Phaser Sceneのrun時刻・generation・enemy sprite、初期spawn/respawn、terminal/retry、HUD/data属性同期、DEV hookを管理 |
-| `index.html` / `style.css` | 出現phase、主方向、敵12体のHPとspawn metadataを観測できるDOM HUDと表示layout |
+| `src/rules.ts` | 12 stable ID、基本敵HP4、ドローンHP2・耐性なし、retry state |
+| `src/arena-map.ts` | phase/方向、enemy専用strict selector、death/recycle delay、role、deterministic BFS tie-break |
+| `src/main.ts` | 初期8体、段階投入、death/recycle/retry TimerEvent、flank/separation、terminal、HUD/data属性、DEV hook |
+| `index.html` / `style.css` | 上中央timer、左下HP数値/bar、右下ammoと診断HUD |
 | `tests/arena-map.test.ts` / `tests/rules.test.ts` | phase、方向、12 slot、候補選択、敵stateのunit期待値 |
 | `e2e/prototype.spec.ts` | phase境界、active enemy非再配置、新phase respawn、retry、HUD/data属性、既存利用経路のE2E期待値 |
 
@@ -32,15 +33,16 @@ specification: SPEC-DIRECTIONAL-SPAWN
 flowchart TD
   reset["run開始またはretry"] --> generation["generation更新・startedAt設定"]
   generation --> map["map・player・弾薬箱を構築"]
-  map --> initial["12 stable slotをphase 0でspawn"]
-  initial --> playing["playing"]
+  map --> initial["初期8体をstrict hidden spawn"]
+  initial --> stagger["3/6/9/12秒で4体を段階投入"]
+  stagger --> playing["stable 12体でplaying"]
   playing --> hud["現在時刻からphaseと主方向をHUD更新"]
   hud --> boundary{"60秒境界か"}
   boundary -->|yes| keep["active enemyは位置とmetadataを維持"]
   boundary -->|no| playing
   keep --> playing
   playing --> defeated{"enemy撃破か"}
-  defeated -->|yes| timer["既存respawn TimerEvent"]
+  defeated -->|yes| timer["death TimerEvent"]
   timer --> guard{"同じgenerationかつplayingか"}
   guard -->|yes| spawn["spawnEnemyでcurrent phaseを適用"]
   guard -->|no| discard["副作用なしで終了"]
@@ -53,29 +55,29 @@ flowchart TD
 
 ## phase state
 
-resetはrun generationを更新し、`startedAt`を現在のScene時刻へ設定する。初期12体はphase 0としてspawnし、HUDには表示値1と0始まりの`data-phase="0"`を出す。
+resetはrun generationを更新し、初期8 IDをphase 0のstrict spawn対象、残り4 IDを3000/6000/9000/12000msのstagger対象として構築する。candidateなしは1000ms retryする。
 
 playing中は`floor(max(0, now - startedAt) / 60000)`でcurrent phaseを求める。60秒境界で定期的に変更するのはphaseと主方向のHUDだけであり、active enemyのstateやspriteを更新しない。初期spawnまたはrespawnで`spawnEnemy`を実行する時だけ、その時点のcurrent phaseを適用する。
 
-victoryまたはdefeatでは敵respawnを含むrun timerを停止し、terminal後のspawnを許可しない。retryは旧generationを無効化してtimer、map、state、sprite、HUDを初期化し、新runをphase 0から開始する。
+victory/defeat/retryはstagger、retry、death、recycleを含む全enemy TimerEventとrecycle lockを停止し、旧generation callbackを無効化する。
 
 ## 12 stable slotと9対3の割り当て
 
 stable slotは`basic-1`〜`basic-9`、`drone-1`〜`drone-3`の順で0始まりindexを持つ。`index % 4 === 3`の3 slotだけを主方向の反対方向へ割り当て、残り9 slotを主方向へ割り当てる。
 
-主方向は`up`、`right`、`down`、`left`の固定配列をmap seedとphaseで循環させる。反対方向は同配列で2つ先とする。stable slotの順序をrun中に変えず、enemy ID、種別、HP、速度、接触damage、respawn delayの既存契約を維持する。
+主方向とstable slot順は維持する。Issue #38では基本敵HP4、ドローンHP2・小口径耐性なし、death delay基本5000〜9000ms/ドローン3000〜6000msへ更新する。
 
-## candidate選択とfallback
+## enemy candidate選択と循環
 
-`spawnEnemy`はspawn時点のplayer tile、camera viewport、activeな弾薬箱、対象以外のactive enemyを既存`selectSpawnTile`へ渡す。selectorは次の順で候補を選ぶ。
+`spawnEnemy`はplayer、actual camera viewport、occupied、割り当て方向をenemy専用`selectEnemySpawnTile`へ渡し、offscreen、hidden、reachable、unoccupied、direction一致をすべて必須とする。弾薬箱用`selectSpawnTile`の既存fallbackは変更しない。
 
 1. playerから到達可能でoccupiedではないfloorをcandidateとする。
-2. viewport外候補を優先する。
-3. requested directionとplayer基準方向が一致する候補を優先する。
-4. viewportとのgapが6 tile以下の候補があればそのpoolを使う。
-5. pool内をseedの剰余indexで決定的に選ぶ。
+2. actual viewport外、hidden、requested direction一致を必須にする。
+3. strict pool内をseedの剰余indexで決定的に選ぶ。
 
-指定方向のviewport外候補がない場合は、方向を問わない既存viewport外poolへfallbackする。viewport外候補がない場合は、全candidateからplayerとのManhattan距離が最遠のfloorへfallbackする。candidate自体がなければ`null`を返す。
+enemy candidateがなければ`null`を返し、inactive/hiddenのまま同じreasonで1000ms retryする。方向変更またはvisible fallbackは行わない。
+
+deathは成功後だけ全HP、recycleはHPを保持する。recycle条件はhidden 8000〜12000ms、被弾なし3000ms、path 10 edge以上、同時1体で、2000〜4000ms後にre-entryする。基本敵はdirect/left/right各3体、stable tie-break、1 tile内の分離を使い、ドローンは高速直接追跡を維持する。
 
 ## active enemyを再配置しない境界
 
@@ -91,21 +93,21 @@ productionではSceneとhookを`window`へ公開しない。DEV hookを利用者
 
 ## 失敗時動作
 
-- 初期12体のいずれかにcandidateを確保できない場合は、必要なrun初期状態を構築できないため例外にする。
-- 通常respawnでcandidateがない場合はenemyをinactiveかつ非表示のままにし、CombatStateを復活させず、HUDへ再出現位置がないことを表示する。
+- 初期、stagger、death、recycleでcandidateを確保できない場合は1000ms retryし、可視位置へ強制spawnしない。
+- deathはstrict spawn成功までCombatStateを復活させず、recycleはCombatState HPを変更しない。
 - DEV hookの再出現が失敗した場合はrespawn count、元位置、spawn metadata、body、visibilityを直前状態へ戻して例外にする。
 - respawn callbackは登録時generationとcurrent generationを比較し、不一致またはterminalなら副作用なしで終了する。
 - occupied判定によりplayer、activeな弾薬箱、他のactive enemyと同じtileへ重複生成しない。
 
 ## 既存sliceの回帰境界
 
-- Issue #20: enemy visibilityのnormal、boundary silhouette、hidden、暗転maskと更新契約を維持する。敵数・spawn位置への対応以外へvisibilityロジックを広げない。
+- Issue #20: LOSとnormal/boundary/hidden表示は維持し、別recycle policyがhidden結果だけを参照する。
 - Issue #21: 有限弾薬、武器切替、射撃、リロード、ammo panel、弾薬箱4個を維持する。activeな弾薬箱をenemy spawnのoccupiedに含める。
 - Issue #34: 180000ms生存勝利、victory/defeatのterminal停止、retry、30000ms後の弾薬箱respawnを維持する。敵phaseは同じ`startedAt`を使い、弾薬箱respawnもactive enemyとの非重複を維持する。
 
 ## Ponytail方針と再検討条件
 
-既存のCombatState、enemy ID配列、map helper、`selectSpawnTile`、Phaser Scene/TimerEvent、run generation、respawn Map、DOM HUDを再利用する。phaseと方向は小さなpure function、Scene側は既存`spawnEnemy`への入力追加に留める。新規依存、wave director、汎用strategy、可変比率設定、将来用の抽象化は追加しない。
+既存CombatState、enemy ID、Phaser TimerEvent、generation、DOM HUDを再利用する。enemy strict selectorと小さなpure helperだけを追加し、新規依存、wave director、汎用strategyは追加しない。
 
 敵種・方向比率・phase規則を複数の承認済みsliceから個別設定する必要が生じた場合、固定12体を超える負荷で計測済みの性能問題が出た場合、またはmultiplayer同期にserver authorityが必要になった場合に限り、設定化、cache、wave director、同期境界を別Issueで再検討する。
 

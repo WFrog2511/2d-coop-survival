@@ -16,8 +16,6 @@
         <p data-testid="hud">
           武器: <output data-testid="weapon">アサルトライフル</output>
           リロード: <output data-testid="reload">待機</output>
-          プレイヤーHP: <output data-testid="hp">100</output>
-          残り時間: <output class="survival-time" data-testid="survival-time">03:00</output>
           出現phase: <output data-testid="spawn-phase" data-phase="0">1</output>
           主方向: <output data-testid="primary-direction" data-direction="up">上</output>
           マップseed: <output data-testid="map-seed">0</output>
@@ -25,24 +23,32 @@
           FPS: <output data-testid="fps">0</output>
         </p>
         <div class="enemy-hud" data-testid="enemy-hud" aria-label="敵HPと出現情報">
-          <span>基本敵 #1 HP: <output data-testid="basic-1-hp">6</output></span>
-          <span>基本敵 #2 HP: <output data-testid="basic-2-hp">6</output></span>
-          <span>基本敵 #3 HP: <output data-testid="basic-3-hp">6</output></span>
-          <span>基本敵 #4 HP: <output data-testid="basic-4-hp">6</output></span>
-          <span>基本敵 #5 HP: <output data-testid="basic-5-hp">6</output></span>
-          <span>基本敵 #6 HP: <output data-testid="basic-6-hp">6</output></span>
-          <span>基本敵 #7 HP: <output data-testid="basic-7-hp">6</output></span>
-          <span>基本敵 #8 HP: <output data-testid="basic-8-hp">6</output></span>
-          <span>基本敵 #9 HP: <output data-testid="basic-9-hp">6</output></span>
-          <span>高速ドローン #1 HP: <output data-testid="drone-1-hp">4</output></span>
-          <span>高速ドローン #2 HP: <output data-testid="drone-2-hp">4</output></span>
-          <span>高速ドローン #3 HP: <output data-testid="drone-3-hp">4</output></span>
+          <span>基本敵 #1 HP: <output data-testid="basic-1-hp">4</output></span>
+          <span>基本敵 #2 HP: <output data-testid="basic-2-hp">4</output></span>
+          <span>基本敵 #3 HP: <output data-testid="basic-3-hp">4</output></span>
+          <span>基本敵 #4 HP: <output data-testid="basic-4-hp">4</output></span>
+          <span>基本敵 #5 HP: <output data-testid="basic-5-hp">4</output></span>
+          <span>基本敵 #6 HP: <output data-testid="basic-6-hp">4</output></span>
+          <span>基本敵 #7 HP: <output data-testid="basic-7-hp">4</output></span>
+          <span>基本敵 #8 HP: <output data-testid="basic-8-hp">4</output></span>
+          <span>基本敵 #9 HP: <output data-testid="basic-9-hp">4</output></span>
+          <span>高速ドローン #1 HP: <output data-testid="drone-1-hp">2</output></span>
+          <span>高速ドローン #2 HP: <output data-testid="drone-2-hp">2</output></span>
+          <span>高速ドローン #3 HP: <output data-testid="drone-3-hp">2</output></span>
         </div>
-        <p data-testid="affinity">高速ドローン耐性: 小口径弾 50% / 散弾 100%</p>
+        <p data-testid="affinity">高速ドローン: 移動は速いが、ライフル1発で撃破可能</p>
         <p data-testid="feedback" aria-live="polite">-</p>
       </header>
       <div id="game-shell">
         <div id="game" aria-label="戦闘アリーナ"></div>
+        <aside id="survival-panel" class="game-overlay" aria-label="残り時間">
+          <span>残り時間</span>
+          <output class="survival-time" data-testid="survival-time">03:00</output>
+        </aside>
+        <aside id="hp-panel" class="game-overlay" aria-label="プレイヤー体力">
+          <span>HP <output data-testid="hp">100</output></span>
+          <progress data-testid="hp-bar" max="100" value="100" aria-label="プレイヤーHP"></progress>
+        </aside>
         <aside id="ammo-panel" data-testid="ammo-panel" aria-label="弾数">
           <span class="ammo-panel-caption">弾薬</span>
           <output class="ammo-panel-weapon" data-testid="ammo-panel-weapon">アサルトライフル</output>

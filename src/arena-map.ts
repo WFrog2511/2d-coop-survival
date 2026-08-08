@@ -34,6 +34,12 @@ export type SpawnRequest = {
   direction?: SpawnDirection;
 };
 
+export type EnemySpawnRequest = Omit<SpawnRequest, 'direction'> & {
+  direction: SpawnDirection;
+};
+
+export type BasicApproachRole = 'direct' | 'left' | 'right';
+
 export function spawnPhaseAt(startedAt: number, now: number): number {
   return Math.floor(Math.max(0, now - startedAt) / SPAWN_PHASE_MS);
 }
@@ -129,6 +135,7 @@ export function findPath(
   map: ArenaMap,
   start: TilePosition,
   target: TilePosition,
+  tieBreakSeed?: number,
 ): TilePosition[] {
   if (!isFloor(map, start) || !isFloor(map, target)) return [];
   const startKey = positionKey(start);
@@ -138,7 +145,7 @@ export function findPath(
   for (let index = 0; index < queue.length; index += 1) {
     const current = queue[index];
     if (positionKey(current) === targetKey) break;
-    neighbours(current).forEach((next) => {
+    orderedPathNeighbours(current, tieBreakSeed).forEach((next) => {
       const key = positionKey(next);
       if (!previous.has(key) && isFloor(map, next)) {
         previous.set(key, current);
@@ -215,15 +222,47 @@ export function selectSpawnTile(
   })[0];
 }
 
+/** 敵だけが使う、可視位置へfallbackしない厳格なspawn選択。 */
+export function selectEnemySpawnTile(
+  map: ArenaMap,
+  request: EnemySpawnRequest,
+  seed: number,
+): TilePosition | null {
+  const occupied = new Set(request.occupied.map(positionKey));
+  const candidates = floorTiles(map).filter(position =>
+    !occupied.has(positionKey(position))
+    && !inside(position, request.viewport)
+    && directionFrom(request.player, position) === request.direction
+    && findPath(map, request.player, position).length > 0
+    && enemyVisibility(map, request.player, position) === 'hidden',
+  );
+  return candidates.length > 0 ? candidates[(seed >>> 0) % candidates.length] : null;
+}
+
 export function respawnDelayFor(
   kind: ArenaEnemyKind,
   enemyId: string,
   respawnCount: number,
   seed: number,
 ): number {
-  const [minimum, maximum] = kind === 'basic' ? [1300, 1900] : [900, 1500];
-  const mixed = mixSeed(seed, `${enemyId}:${respawnCount}`);
-  return minimum + (mixed % (maximum - minimum + 1));
+  const [minimum, maximum] = kind === 'basic' ? [5000, 9000] : [3000, 6000];
+  return deterministicRange(seed, `death:${enemyId}:${respawnCount}`, minimum, maximum);
+}
+
+export function hiddenRecycleThresholdFor(enemyId: string, recycleCount: number, seed: number): number {
+  return deterministicRange(seed, `hidden:${enemyId}:${recycleCount}`, 8000, 12000);
+}
+
+export function recycleDelayFor(enemyId: string, recycleCount: number, seed: number): number {
+  return deterministicRange(seed, `recycle:${enemyId}:${recycleCount}`, 2000, 4000);
+}
+
+export function basicApproachRoleFor(enemyId: string): BasicApproachRole | null {
+  const match = /^basic-([1-9])$/.exec(enemyId);
+  if (!match) return null;
+  const stableNumber = Number(match[1]);
+  if (stableNumber <= 3) return 'direct';
+  return stableNumber <= 6 ? 'left' : 'right';
 }
 
 function generateCandidate(seed: number, generationSeed: number, fallback: boolean): ArenaMap | null {
@@ -431,6 +470,16 @@ function neighbours(position: TilePosition): TilePosition[] {
   ];
 }
 
+/** seed省略時は従来の4近傍順をそのまま返す。 */
+function orderedPathNeighbours(position: TilePosition, tieBreakSeed?: number): TilePosition[] {
+  const adjacent = neighbours(position);
+  if (tieBreakSeed === undefined) return adjacent;
+  return adjacent
+    .map((next, index) => ({ next, index, rank: mixSeed(tieBreakSeed, `${positionKey(position)}>${positionKey(next)}`) }))
+    .sort((left, right) => left.rank - right.rank || left.index - right.index)
+    .map(entry => entry.next);
+}
+
 function sameTileLayout(left: ArenaMap, right: ArenaMap): boolean {
   return left.tiles.every((row, y) => row.every((tile, x) => tile === right.tiles[y][x]));
 }
@@ -468,4 +517,8 @@ function mixSeed(seed: number, value: string): number {
     mixed = Math.imul(mixed ^ value.charCodeAt(index), 16_777_619) >>> 0;
   }
   return mixed;
+}
+
+function deterministicRange(seed: number, key: string, minimum: number, maximum: number): number {
+  return minimum + (mixSeed(seed, key) % (maximum - minimum + 1));
 }

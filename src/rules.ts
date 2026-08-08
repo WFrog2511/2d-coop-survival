@@ -105,7 +105,7 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
 
 const DAMAGE_MULTIPLIERS: Record<EnemyKind, Record<DamageType, number>> = {
   basic: { smallCaliber: 1, scatter: 1 },
-  drone: { smallCaliber: 0.5, scatter: 1 },
+  drone: { smallCaliber: 1, scatter: 1 },
 };
 
 export function resolveDamage(
@@ -124,7 +124,7 @@ export function droneLateralSpeedAt(now: number): number {
 function createInitialEnemies(): Record<EnemyInstanceId, EnemyState> {
   return Object.fromEntries(ENEMY_INSTANCE_IDS.map((id) => {
     const kind = id.startsWith('basic-') ? 'basic' : 'drone';
-    const hp = kind === 'basic' ? 6 : 4;
+    const hp = kind === 'basic' ? 4 : 2;
     return [id, { kind, hp, maxHp: hp, defeated: false }];
   })) as Record<EnemyInstanceId, EnemyState>;
 }

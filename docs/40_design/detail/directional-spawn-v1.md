@@ -27,13 +27,21 @@ basic_design: DESIGN-BASIC-DIRECTIONAL-SPAWN
 
 本書は純粋関数、Phaser Scene、DOM HUD、DEV限定hook、失敗時復元、unit/E2Eが共有する期待値を固定する。
 
+### Issue #38 follow-up
+
+[Issue #38](https://github.com/WFrog2511/2d-coop-survival/issues/38)はIssue #22のphase・stable slot・主9反3を維持し、旧「初期12体即時」「enemy fallback」「HP/delay不変」を上書きする。初期対象は`basic-1..6`と`drone-1..2`、残りは3000/6000/9000/12000ms staggerである。enemy spawnはassigned direction、actual viewport外、hidden、reachable、unoccupiedを必須とし、候補なしは同reasonで1000ms retryする。
+
+基本敵HP4、ドローンHP2・小口径耐性なし、death delayは5000〜9000ms/3000〜6000msとする。death成功だけ全HP、recycleはHPを保持する。hidden 8000〜12000ms、最終hitから3000ms、path 10 edge以上、同時1体を満たすenemyをinactive化し、2000〜4000ms後にstrict re-entryする。
+
+基本敵はID固定でdirect/left/right各3体、stable seedのBFS tie-break、`TILE_SIZE`内の局所分離を使う。ドローンは既存直接経路と横移動を維持する。timerはCanvas上部中央、HP数値/progressは左下、ammoは右下へDOM overlayし、pointerを遮らない。stagger/retry/death/recycle TimerEventはgeneration/terminal guardを持ち、stop/reset/terminalですべてclearする。
+
 ## 2. 対象範囲
 
 ### 対象
 
 | 項目 | 内容 |
 | --- | --- |
-| 対象ユースケース | run開始時の12体spawn、60秒phase表示、敵撃破後respawn、retry |
+| 対象ユースケース | 初期8体、4段階投入、60秒phase、death respawn、hidden recycle、retry |
 | 対象ロール | ローカル1人用プロトタイプのplayer、E2Eを実行する開発者 |
 | 対象画面/API | Phaser arena、診断HUD、TypeScript純粋関数、DEV限定`debugRespawnEnemy` |
 | 対象データ | map seed、run開始時刻、phase、stable slot、spawn方向、enemy metadata |
@@ -43,7 +51,7 @@ basic_design: DESIGN-BASIC-DIRECTIONAL-SPAWN
 | 項目 | 理由 |
 | --- | --- |
 | wave director、敵数の動的増減 | 固定12体のPrototype standardを超えるため |
-| phaseごとのHP・速度・damage・respawn delay変更 | Issue #22はspawn方向だけを対象とするため |
+| phase連動HP・速度・damage・delay | Issue #38の固定balanceだけを採用し、phase連動はしないため |
 | 汎用spawn strategy、可変比率設定 | 一つの固定規則に対する将来用抽象化となるため |
 | multiplayer sync、server authority、persistence | ローカルrun内だけの状態であるため |
 | production向けdebug API | DEV E2E専用hookであり利用者向け契約ではないため |
@@ -70,7 +78,7 @@ basic_design: DESIGN-BASIC-DIRECTIONAL-SPAWN
 | BR-DSP-004 | stable slotは`index % 4 === 3`だけ反対方向、それ以外は主方向とし、12 slotで主9・反3とする | Issue #22 DOD | なし |
 | BR-DSP-005 | stable IDは`basic-1`〜`basic-9`、`drone-1`〜`drone-3`の12個とする | Issue #22 DOD | なし |
 | BR-DSP-006 | phase境界ではactive enemyを再配置せず、次のspawnまたはrespawnだけにcurrent phaseを適用する | Issue #22 DOD | なし |
-| BR-DSP-007 | retryは旧generationを無効化し、新runを新map seed、phase 0、敵12体で開始する | Issue #22 DOD | なし |
+| BR-DSP-007 | retryは旧generationを無効化し、新runを新map seed、phase 0、初期8体と4段階投入予約で開始する | Issue #22 / #38 | なし |
 
 ## 5. 利用者導線・処理フロー
 
@@ -101,11 +109,11 @@ flowchart TD
 
 | ステップ | 操作者 | 入力 | システム処理 | 出力 |
 | ---: | --- | --- | --- | --- |
-| 1 | system | map seed、`startedAt` | phase 0と主方向を決め、12 slotをspawn | 敵12体、phase HUD |
+| 1 | system | map seed、`startedAt` | phase 0の初期8体をspawnし、4体をstagger予約 | 初期population、phase HUD |
 | 2 | player | 移動・戦闘 | active enemyを既存AIで更新 | 既存戦闘表示 |
 | 3 | system | `now` | 60秒境界でphaseと主方向HUDだけ更新 | 次回spawn用phase |
 | 4 | system | 敵撃破、respawn timer | generationとterminalを検査し`spawnEnemy`を再利用 | current phaseのrespawn |
-| 5 | player | retry | 旧generationを破棄し新runを初期化 | phase 0、新map、敵12体 |
+| 5 | player | retry | 全enemy timerと旧generationを破棄 | phase 0、新map、初期8体とstagger予約 |
 
 ## 6. 状態遷移
 
@@ -149,6 +157,7 @@ phase遷移はactive enemyの再配置イベントではない。既にactiveな
 | `data-primary-direction` | spawn時の主方向 | spawn成功後のHUD同期 |
 | `data-assigned-direction` | stable slotへ割り当てた主方向または反対方向 | spawn成功後のHUD同期 |
 | `data-spawn-tile` | `x,y` | spawn成功後のHUD同期 |
+| `data-active` / `data-spawn-reason` / `data-recycle-count` | lifecycle観測値 | active変更とHUD同期 |
 
 `data-testid="spawn-phase"`は表示値`phase + 1`と`data-phase`を持つ。`data-testid="primary-direction"`は日本語表示と`data-direction`を持つ。既存HP値とvisibility datasetは同じenemy outputで維持する。
 
@@ -163,25 +172,23 @@ phase遷移はactive enemyの再配置イベントではない。既にactiveな
 | `spawnPhaseAt(startedAt, now)` | pure function | Scene時刻2値 | 0以上のphase | 負の経過時間を0へclampし、60000msで除算してfloorする |
 | `primarySpawnDirection(seed, phase)` | pure function | map seed、phase | `SpawnDirection` | unsigned seedと0以上の整数phaseから4方向を決定的に循環させる |
 | `spawnDirectionForSlot(primary, stableSlot)` | pure function | 主方向、slot index | `SpawnDirection` | `index % 4 === 3`だけ反対方向を返す |
-| `selectSpawnTile(map, request, seed)` | pure selector | map、player、viewport、occupied、optional direction、seed | `TilePosition \| null` | 到達可能・非重複candidateから方向付きoffscreenを選び、fallbackする |
-| `Arena.spawnEnemy(id)` | Scene private method | stable enemy ID | `boolean` | current phase、slot方向、occupiedを組み立て、spriteとmetadataを更新する。候補なしは`false` |
+| `selectEnemySpawnTile(map, request, seed)` | pure selector | map、player、viewport、occupied、required direction、seed | `TilePosition \| null` | strict hidden/offscreen/direction候補だけを返す |
+| `Arena.spawnEnemy(id, reason)` | Scene private method | stable ID、reason | `boolean` | strict selector成功時だけspriteとmetadataを更新する |
+| `Arena.scheduleEnemySpawn(id, reason, delay)` | Scene private method | stable ID、reason、delay | `void` | generation/terminal guardと1000ms retryを管理する |
 | `debugRespawnEnemy(id)` | DEV限定Scene public method | stable enemy ID | `void` | E2E用に既存`spawnEnemy`を再利用する。拒否条件または復元後の失敗は例外 |
 
 外部HTTP API、永続化API、利用者向けJavaScript APIは追加しない。
 
-## 9. candidate選択とfallback
+## 9. candidate選択
 
-`selectSpawnTile`は次の順序を変更しない。
+弾薬箱用`selectSpawnTile`のfallbackは変更しない。enemy用`selectEnemySpawnTile`はreachable、unoccupied、viewport外、hidden、assigned direction一致をすべてAND条件にし、0件なら`null`を返す。
 
 1. map内floorから、playerへ到達可能かつ`occupied`に含まれないcandidateを作る。
 2. candidateから現在のcamera viewport外にある`outside`を作る。
 3. requested directionがある場合、`outside`からplayer基準方向が一致する`directed`を作る。
-4. `directed`が1件以上なら方向付きpool、0件なら方向を問わない既存`outside` poolへfallbackする。
-5. 選択したpoolからviewport gapが6 tile以下の`nearby`を作る。
-6. `nearby`が1件以上ならそれを使い、0件なら手順4のpoolを使う。
-7. poolの既存順序を保ち、`(seed >>> 0) % pool.length`のindexを選ぶ。
-8. `outside`が0件なら、全candidateをplayerからのManhattan距離が遠い順、同距離では`y`、`x`の昇順に並べ、先頭の最遠floorへfallbackする。
-9. candidateが0件なら`null`を返す。
+4. direction不一致やvisible候補へfallbackしない。
+5. strict candidateの既存順序を保ち、`(seed >>> 0) % pool.length`のindexを選ぶ。
+6. candidate 0件は`null`とし、Sceneがinactive/hiddenのまま1000ms後に同reasonで再試行する。
 
 player基準方向は`dx = target.x - player.x`、`dy = target.y - player.y`で求める。`abs(dx) > abs(dy)`なら`dx`の符号で左右、それ以外は`dy`の符号で上下を選ぶ。同率は上下を優先する。
 
@@ -192,10 +199,10 @@ enemy spawnの`occupied`にはspawn時点のplayer、activeな弾薬箱、対象
 ### reset
 
 1. generationを増やす。
-2. survival、enemy respawn、flash、ammo box respawn、reloadのTimerEventを停止・clearする。
-3. physicsをresumeし、CombatState、`startedAt`、respawn count、path、visibility cacheを初期化する。
+2. survival、stagger/retry/death/recycle、flash、ammo box、reloadのTimerEventを停止・clearする。
+3. CombatState、時刻、death/recycle count、lastHit、hiddenSince、lock、path、visibility cacheを初期化する。
 4. 新map、player、visibility mask、camera、弾薬箱を構築する。
-5. stable ID順に12回`spawnEnemy`を呼ぶ。いずれかが失敗したら初期化失敗とする。
+5. 初期8 IDをstrict spawnし、失敗は1000ms retry、残り4 IDは指定時刻へstagger予約する。
 6. survival timer、DEV公開、HUDを初期化する。
 
 ### update
@@ -204,11 +211,11 @@ enemy spawnの`occupied`にはspawn時点のplayer、activeな弾薬箱、対象
 
 ### spawn
 
-`spawnEnemy`はplayer tile、current phase、map seed、stable slot、割り当て方向、occupiedを求めて`selectSpawnTile`を呼ぶ。成功時はspriteを有効化し、stable ID、phase、主方向、割り当て方向、tileをsprite dataへ設定し、path、visibility mask、enemy visibilityを更新する。
+`spawnEnemy`はplayer tile、current phase、map seed、stable slot、割り当て方向、occupiedを求めて`selectEnemySpawnTile`を呼ぶ。成功時はspriteを有効化し、stable ID、phase、方向、tile、reasonを同期する。
 
 ### respawn
 
-敵撃破時はspriteを無効化してrespawn countを増やし、既存種別値のdelayでTimerEventを登録する。callbackはgeneration一致かつ非terminalの場合だけ`spawnEnemy`を呼び、成功後にCombatStateをrespawn済みへ更新する。
+敵撃破時はspriteを無効化し、種別ごとの決定的death delay後にstrict spawnする。成功時だけ`respawnEnemy`で全HPへ戻す。recycleはCombatStateを変更せず、HPを保持する。
 
 ### terminal
 
@@ -218,9 +225,9 @@ victoryまたはdefeatでrun timerを停止し、player/enemy velocityを0、弾
 
 | 条件 | 表示・返却 | 回復導線 |
 | --- | --- | --- |
-| `selectSpawnTile`のcandidateが0件 | `null` | 呼び出し側がenemyを生成しない |
-| 初期spawn失敗 | 例外「マップ上に敵の出現位置を確保できません」 | run初期化を成功扱いにしない |
-| 通常respawn失敗 | `spawnEnemy=false`、HUDへ再出現位置なし | enemyをinactive/hidden、CombatStateをdefeatedのまま維持 |
+| `selectEnemySpawnTile`のcandidateが0件 | `null` | 同reasonの1000ms retry |
+| initial/stagger失敗 | 1000ms retry | inactive/hiddenと同reasonを維持 |
+| death/recycle失敗 | 1000ms retry | death HP0またはrecycle現在HPとlockを維持 |
 | 旧generation callback | 副作用なし | current runを継続 |
 | terminal中callback | 副作用なし | retryまでterminalを維持 |
 | DEVで未知のID | 例外 | テストデータを修正 |
@@ -262,11 +269,11 @@ victoryまたはdefeatでrun timerを停止し、player/enemy velocityを0、弾
 | unit | 主方向循環 | 同じseedとphaseは同じ方向、連続4 phaseで4方向を一巡 |
 | unit | stable slot | 12 slotで主方向9、反対方向3、`index % 4 === 3`だけ反対 |
 | unit | 方向判定 | 左右優先条件と同率時の上下優先が仕様どおり |
-| unit | candidate/fallback | reachable、unoccupied、offscreen、direction、gap、seed indexの順。方向なし、offscreenなし、candidateなしを検証 |
-| unit | 12体初期spawn | player、弾薬箱、他enemyと非重複で、全tileが到達可能 |
-| integration/E2E | phase境界 | HUDはphase 1へ変わるがactive 12体の位置とspawn metadataは不変 |
+| unit | strict enemy selector | up/right/down/leftでreachable、unoccupied、offscreen、hidden、direction一致を検証し、visible/wrong-direction/occupiedは`null` |
+| unit/E2E | population | 初期8体と段階投入後12体がplayer、弾薬箱、他enemyと非重複 |
+| integration/E2E | population/phase | 初期8体、4段階投入後12体、phase境界でactive metadata不変 |
 | integration/E2E | DEV respawn | 1体だけが既存`spawnEnemy`経由でcurrent phase、方向、新tileを取得し、他11体は不変 |
-| E2E | retry | phase 0、新map seedの主方向、敵12体、旧generation副作用なし |
+| E2E | retry/HUD | phase 0、初期8体、stagger予約、時間上中央・HP左下・ammo右下 |
 | 既存回帰 | Issue #20 | visibility、boundary silhouette、hidden、暗転maskを維持 |
 | 既存回帰 | Issue #21 | 有限弾薬、射撃、武器切替、リロード、ammo panelを維持 |
 | 既存回帰 | Issue #34 | 3分勝利、terminal停止、弾薬箱respawn、retryを維持 |
@@ -277,7 +284,7 @@ victoryまたはdefeatでrun timerを停止し、player/enemy velocityを0、弾
 Feature: 方向別enemy spawn
 
   Scenario: 60秒境界ではactive enemyを再配置しない
-    Given phase 0で12体のenemyがactiveである
+    Given phase 0で段階投入完了後の12体がactiveである
     And 各enemyのstable ID、spawn phase、方向、spawn tileを記録している
     When run開始から60000msの境界へ進む
     Then HUDのcurrent phaseはphase 1になる
@@ -296,7 +303,7 @@ Feature: 方向別enemy spawn
     When playerがretryする
     Then run generationが更新される
     And current phaseはphase 0になる
-    And 新しいmap seedに対応する主方向と12体のenemyが初期化される
+    And 新しいmap seedに対応する主方向、初期8体、4体のstagger予約が初期化される
     And 旧generationのcallbackは新runへ副作用を与えない
 ```
 

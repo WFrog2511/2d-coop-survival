@@ -75,7 +75,7 @@ last_updated: 2026-08-02
 | BR-ARENA-005 | 初期・再出現は他個体と重ならず、viewport 外の floor を優先する。 | 固定位置・固定時刻の出現を避ける。 | なし |
 | BR-ARENA-006 | BFS は floor 上の 4 近傍だけを通過する。 | 40×25 の小規模ワールドに十分である。 | なし |
 | BR-ARENA-007 | 再挑戦時は最大64候補から直前とtile配置が異なるmapを選び、古いtimerと経路が新マップへ影響しない。 | 同じ地形への固定化と状態漏れを防ぐ。 | なし |
-| BR-ARENA-008 | 再出現待ち時間は basic が 1300〜1900ms、drone が 900〜1500ms（両端含む）で、seed・enemy ID・出現回数に対して決定的に決める。 | 出現時刻を固定しすぎず再現可能にする。 | なし |
+| BR-ARENA-008 | [Issue #38](https://github.com/WFrog2511/2d-coop-survival/issues/38) follow-upにより、death再出現待ちはbasic 5000〜9000ms、drone 3000〜6000ms（両端含む）で決定的に決める。 | 撃破後の圧力を遅延させつつ再現可能にする。 | なし |
 
 ## 5. 処理フロー
 
@@ -170,7 +170,7 @@ stateDiagram-v2
 - enemy の spawn 候補は floor かつ未占有の tile とする。
 - player の viewport に交差しない候補を優先し、候補の中から seed 付き乱数で選ぶ。
 - viewport 外候補がないときは、player からの Manhattan 距離が最大の floor を座標順で決定的に選ぶ。
-- 再出現待ち時間は basic が 1300〜1900ms、drone が 900〜1500ms（両端含む）で変動させる。同じ seed・敵個体・出現回数で同じ値になる。
+- death再出現待ちはIssue #38によりbasic 5000〜9000ms、drone 3000〜6000ms（両端含む）とする。同じseed・敵個体・出現回数で同じ値になる。
 
 ### リセットと失敗時動作
 
@@ -259,3 +259,4 @@ Feature: 遮蔽物のある自動生成アリーナ
 |---|---|---|---|
 | 2026-08-02 | 初版作成 | ドローンと武器の使い分けを成立させるため、生成地形・追従カメラ・グリッドを設計した。 | Terra |
 | 2026-08-02 | 実装同期 | 純粋生成・BFS・spawnとPhaser統合、再挑戦map差の検証結果を反映した。 | Sol review / Terra implementation |
+| 2026-08-08 | Issue #38同期 | death再出現delayを5000〜9000ms/3000〜6000msへ更新した。 | Sol |

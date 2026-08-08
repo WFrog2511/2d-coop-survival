@@ -60,10 +60,13 @@ describe('戦闘ルール', () => {
     expect(resolveDamage('basic', 'scatter', 2)).toEqual({ amount: 2, resisted: false });
     const smallCaliber = resolveDamage('drone', 'smallCaliber', 2);
     const scatter = resolveDamage('drone', 'scatter', 2);
-    expect(smallCaliber).toEqual({ amount: 1, resisted: true });
+    expect(smallCaliber).toEqual({ amount: 2, resisted: false });
     expect(scatter).toEqual({ amount: 2, resisted: false });
-    expect(damageEnemy(INITIAL_STATE, 'drone-1', smallCaliber.amount).enemies['drone-1'].hp).toBe(3);
-    expect(damageEnemy(INITIAL_STATE, 'drone-1', scatter.amount).enemies['drone-1'].hp).toBe(2);
+    expect(damageEnemy(INITIAL_STATE, 'drone-1', smallCaliber.amount).enemies['drone-1']).toMatchObject({
+      hp: 0,
+      defeated: true,
+    });
+    expect(damageEnemy(INITIAL_STATE, 'drone-1', scatter.amount).enemies['drone-1'].hp).toBe(0);
   });
 
   it('ドローン横速度は決定的で複数時刻に応じて変化する', () => {
@@ -172,12 +175,12 @@ describe('戦闘ルール', () => {
     expect(ENEMY_INSTANCE_IDS.filter(id => id.startsWith('drone-'))).toHaveLength(3);
     expect(Object.keys(INITIAL_STATE.enemies)).toEqual([...ENEMY_INSTANCE_IDS]);
     expect(damaged.enemies['basic-2']).toMatchObject({ hp: 0, defeated: true });
-    expect(damaged.enemies['basic-1']).toMatchObject({ hp: 6, defeated: false });
-    expect(damaged.enemies['basic-9']).toMatchObject({ kind: 'basic', hp: 6, defeated: false });
-    expect(damaged.enemies['drone-1']).toMatchObject({ hp: 4, defeated: false });
-    expect(damaged.enemies['drone-3']).toMatchObject({ kind: 'drone', hp: 4, defeated: false });
+    expect(damaged.enemies['basic-1']).toMatchObject({ hp: 4, maxHp: 4, defeated: false });
+    expect(damaged.enemies['basic-9']).toMatchObject({ kind: 'basic', hp: 4, maxHp: 4, defeated: false });
+    expect(damaged.enemies['drone-1']).toMatchObject({ hp: 2, maxHp: 2, defeated: false });
+    expect(damaged.enemies['drone-3']).toMatchObject({ kind: 'drone', hp: 2, maxHp: 2, defeated: false });
     expect(isEnemyDefeated(damaged, 'basic-2')).toBe(true);
-    expect(respawnEnemy(damaged, 'basic-2').enemies['basic-2']).toMatchObject({ hp: 6, defeated: false });
+    expect(respawnEnemy(damaged, 'basic-2').enemies['basic-2']).toMatchObject({ hp: 4, defeated: false });
   });
 
   it('プレイヤーへの部分ダメージと致死ダメージを区別する', () => {
