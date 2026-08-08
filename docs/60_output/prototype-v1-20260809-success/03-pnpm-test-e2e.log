@@ -1,0 +1,27 @@
+argv: ["corepack.cmd", "pnpm", "test:e2e"]
+exit_code: 0
+--- stdout ---
+
+> 2d-coop-survival@0.0.0 test:e2e C:\Users\yadok\source\repos\2d-coop-survival\.worktrees\prototype-v1
+> playwright test
+
+
+Running 8 tests using 1 worker
+
+  ok 1 e2e\prototype.spec.ts:330:1 › 自動射撃、ショットガンの発射待ち、リロード、視界遮蔽と再挑戦を確認できる (31.7s)
+  ok 2 e2e\prototype.spec.ts:517:1 › 初期8体を段階的に12体へ増やし、phase境界後のDEV再出現だけを新phaseへ反映する (23.8s)
+  ok 3 e2e\prototype.spec.ts:603:1 › DEV queryで初期数、段階間隔、候補poolを開始前に固定する (2.8s)
+  ok 4 e2e\prototype.spec.ts:626:1 › 不正なDEV spawn queryは既定値へ戻す (1.9s)
+  ok 5 e2e\prototype.spec.ts:634:1 › hidden recycleはHPを維持し、deathだけ全回復し、retry後に旧callbackを残さない (50.6s)
+  ok 6 e2e\prototype.spec.ts:708:1 › 3分の境界で勝利し、戦闘停止後の再挑戦でタイマーと状態を初期化できる (2.7s)
+  ok 7 e2e\prototype.spec.ts:732:1 › 弾薬箱は取得後30秒で同じboxIdのまま新しい画面外floorへ復活し、重複しない (58.4s)
+  ok 8 e2e\prototype.spec.ts:771:1 › victoryとretryは弾薬箱の復活待ちをclearし、新しいrunを初期化する (3.0s)
+
+  8 passed (3.0m)
+--- stderr ---
+[WebServer] (node:25592) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `pnpm --trace-warnings ...` to show where the warning was created)
+[WebServer] (node:11952) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+(node:33524) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)

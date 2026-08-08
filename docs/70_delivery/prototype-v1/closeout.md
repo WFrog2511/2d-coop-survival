@@ -10,7 +10,7 @@
 ## Fixed revision and GitHub state
 
 - Source branch: `feature/prototype-v1-delivery`
-- Source revision: `fa9e074` plus the release artifact commit on this branch
+- Source revision: `74803915c3e7d3b11d021fdc99bd924cd9e036a0`
 - Main integration PR: to be recorded after creation
 - Main merge revision: to be recorded by the integration PR
 - Tag: not created in this slice unless separately requested
@@ -18,7 +18,7 @@
 ## Validation
 
 - Preflight, matrix `--release`, readiness `--release`, quality gate, bundle, E2E, Markdown links, DOCGEN, and evidence manifest are required.
-- Evidence directory: `docs/60_output/prototype-v1-20260809/`
+- Evidence directory: `docs/60_output/prototype-v1-20260809-success/`
 
 ## Rollback
 

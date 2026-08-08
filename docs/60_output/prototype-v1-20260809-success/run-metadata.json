@@ -1,0 +1,120 @@
+{
+  "started_at": "2026-08-08T15:52:18.812472+00:00",
+  "finished_at": "2026-08-08T15:55:50.106762+00:00",
+  "root": "C:\\Users\\yadok\\source\\repos\\2d-coop-survival\\.worktrees\\prototype-v1",
+  "commit": "74803915c3e7d3b11d021fdc99bd924cd9e036a0",
+  "branch": "feature/prototype-v1-delivery",
+  "git_status": "?? docs/60_output/prototype-v1-20260809-success/",
+  "python": "3.10.10 (tags/v3.10.10:aad5f6a, Feb  7 2023, 17:20:36) [MSC v.1929 64 bit (AMD64)]",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "commands": [
+    {
+      "name": "pnpm-check",
+      "argv": [
+        "corepack.cmd",
+        "pnpm",
+        "check"
+      ],
+      "exit_code": 0,
+      "started_at": "2026-08-08T15:52:18.812472+00:00",
+      "finished_at": "2026-08-08T15:52:44.244232+00:00",
+      "log": "01-pnpm-check.log"
+    },
+    {
+      "name": "pnpm-build-bundle",
+      "argv": [
+        "corepack.cmd",
+        "pnpm",
+        "build:bundle"
+      ],
+      "exit_code": 0,
+      "started_at": "2026-08-08T15:52:44.244232+00:00",
+      "finished_at": "2026-08-08T15:52:47.011397+00:00",
+      "log": "02-pnpm-build-bundle.log"
+    },
+    {
+      "name": "pnpm-test-e2e",
+      "argv": [
+        "corepack.cmd",
+        "pnpm",
+        "test:e2e"
+      ],
+      "exit_code": 0,
+      "started_at": "2026-08-08T15:52:47.011397+00:00",
+      "finished_at": "2026-08-08T15:55:49.136716+00:00",
+      "log": "03-pnpm-test-e2e.log"
+    },
+    {
+      "name": "markdown-links",
+      "argv": [
+        "python",
+        "-X",
+        "utf8",
+        "scripts/check_markdown_links.py",
+        "docs"
+      ],
+      "exit_code": 0,
+      "started_at": "2026-08-08T15:55:49.136716+00:00",
+      "finished_at": "2026-08-08T15:55:49.396003+00:00",
+      "log": "04-markdown-links.log"
+    },
+    {
+      "name": "docgen-check",
+      "argv": [
+        "python",
+        "-X",
+        "utf8",
+        "scripts/docgen.py",
+        "--check",
+        "docs/40_design/detail/**/*.md"
+      ],
+      "exit_code": 0,
+      "started_at": "2026-08-08T15:55:49.396003+00:00",
+      "finished_at": "2026-08-08T15:55:49.618667+00:00",
+      "log": "05-docgen-check.log"
+    },
+    {
+      "name": "acceptance-matrix-release",
+      "argv": [
+        "python",
+        "-X",
+        "utf8",
+        "scripts/check_acceptance_matrix.py",
+        "--release",
+        "docs/70_delivery/prototype-v1/acceptance-matrix.md"
+      ],
+      "exit_code": 0,
+      "started_at": "2026-08-08T15:55:49.618667+00:00",
+      "finished_at": "2026-08-08T15:55:49.842460+00:00",
+      "log": "06-acceptance-matrix-release.log"
+    },
+    {
+      "name": "delivery-readiness-release",
+      "argv": [
+        "python",
+        "-X",
+        "utf8",
+        "scripts/check_delivery_readiness.py",
+        "--release",
+        "docs/70_delivery/prototype-v1/release-readiness.md"
+      ],
+      "exit_code": 0,
+      "started_at": "2026-08-08T15:55:49.842460+00:00",
+      "finished_at": "2026-08-08T15:55:49.983806+00:00",
+      "log": "07-delivery-readiness-release.log"
+    },
+    {
+      "name": "git-diff-check",
+      "argv": [
+        "git",
+        "diff",
+        "--check",
+        "origin/main...HEAD"
+      ],
+      "exit_code": 0,
+      "started_at": "2026-08-08T15:55:49.983806+00:00",
+      "finished_at": "2026-08-08T15:55:50.106762+00:00",
+      "log": "08-git-diff-check.log"
+    }
+  ]
+}
