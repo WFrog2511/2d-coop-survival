@@ -11,8 +11,9 @@
 
 - Source branch: `feature/prototype-v1-delivery`
 - Source revision: `74803915c3e7d3b11d021fdc99bd924cd9e036a0`
-- Main integration PR: to be recorded after creation
-- Main merge revision: to be recorded by the integration PR
+- Develop integration PR: [#50](https://github.com/WFrog2511/2d-coop-survival/pull/50)、merge commit `ef8f8da8bf79b7810d9020031c9940bbd4ccbe40`
+- Main integration PR: [#51](https://github.com/WFrog2511/2d-coop-survival/pull/51)
+- Main merge revision: `1d36164b5c965ae6d6726fed85890f96dc304d50`
 - Tag: not created in this slice unless separately requested
 
 ## Validation
