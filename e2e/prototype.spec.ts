@@ -328,6 +328,8 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('自動射撃、ショットガンの発射待ち、リロード、視界遮蔽と再挑戦を確認できる', async ({ page }) => {
+  // 80×50マップのLOS検査を含む代表経路に、実時間の余裕を持たせる。
+  test.setTimeout(60_000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('/');
@@ -727,7 +729,8 @@ test('3分の境界で勝利し、戦闘停止後の再挑戦でタイマーと�
 });
 
 test('弾薬箱は取得後30秒で同じboxIdのまま新しい画面外floorへ復活し、重複しない', async ({ page }) => {
-  test.setTimeout(45_000);
+  // 80×50マップの仮想時計処理に、実時間の余裕を持たせる。
+  test.setTimeout(90_000);
   await page.clock.install({ time: 0 });
   await page.clock.setFixedTime(15);
   await page.goto('/');
