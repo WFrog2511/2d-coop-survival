@@ -482,11 +482,14 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await setArenaPhysics(page, 'resume');
 
   await expect(page.getByTestId('defeat')).toBeVisible({ timeout: 45_000 });
+  await expect(page.getByTestId('wave')).toHaveAttribute('data-state', 'defeat');
   await expect(page.getByTestId('hp')).toHaveText('0');
   await expect.poll(async () => hpBar.evaluate(element => (element as HTMLProgressElement).value)).toBe(0);
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-respawn-tiles', '');
   expect(await documentBounds(gameCanvas)).toEqual(initialCanvasDocumentBounds);
   await page.getByTestId('retry').click();
+  await expect(page.getByTestId('wave')).toHaveText('1');
+  await expect(page.getByTestId('wave-remaining')).toHaveText('01:00');
   await setArenaPhysics(page, 'pause');
   await expect(page.getByTestId('defeat')).toBeHidden();
   await expect(page.getByTestId('victory')).toBeHidden();
@@ -500,6 +503,17 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expect(page.getByTestId('hp')).toHaveText('100');
   await expect.poll(async () => hpBar.evaluate(element => (element as HTMLProgressElement).value)).toBe(100);
   await expectEnemyHitPointsAndIds(page, 0);
+  await expectStrictEnemySpawns(page, INITIAL_ACTIVE_IDS, 'initial');
+  // strict確認後は経過時間に依存しないactive実数だけをHUDと照合する。
+  await expect.poll(async () => {
+    const activeEnemyCount = (await allEnemySpawnMetadata(page))
+      .filter(({ active }) => active === 'true').length;
+    return activeEnemyCount >= INITIAL_ACTIVE_IDS.length
+      && await page.getByTestId('enemy-current').textContent() === String(activeEnemyCount)
+      && await page.getByTestId('enemy-remaining').textContent() === String(activeEnemyCount);
+  }).toBe(true);
+  await expect(page.getByTestId('enemy-goal')).toHaveText(String(ENEMY_INSTANCE_IDS.length));
+  await expect(page.getByTestId('kills')).toHaveText('0');
   await expect(page.getByTestId('feedback')).toHaveText('-');
   const retryMap = generateArenaMap(1_038_872_098);
   const retryPlayerTile = `${retryMap.start.x},${retryMap.start.y}`;
@@ -531,12 +545,22 @@ test('初期8体を段階的に12体へ増やし、phase境界後のDEV再出現
   await expectStrictEnemySpawns(page, INITIAL_ACTIVE_IDS, 'initial');
   for (const { id } of STAGGERED_ENEMIES)
     await expect(page.getByTestId(`${id}-hp`)).toHaveAttribute('data-active', 'false');
+  // 固定seedでinitial strict spawnが成功したことを確認してからHUDを比較する。
+  await expect(page.getByTestId('wave')).toHaveText('1');
+  await expect(page.getByTestId('wave-remaining')).toHaveText('01:00');
+  await expect(page.getByTestId('enemy-current')).toHaveText(String(INITIAL_ACTIVE_IDS.length));
+  await expect(page.getByTestId('enemy-goal')).toHaveText(String(ENEMY_INSTANCE_IDS.length));
+  await expect(page.getByTestId('enemy-remaining')).toHaveText(String(INITIAL_ACTIVE_IDS.length));
+  await expect(page.getByTestId('kills')).toHaveText('0');
 
   let elapsed = 0;
-  for (const { id, delay } of STAGGERED_ENEMIES) {
+  for (const [index, { id, delay }] of STAGGERED_ENEMIES.entries()) {
     await page.clock.runFor(delay + 100 - elapsed);
     await expect(page.getByTestId(`${id}-hp`)).toHaveAttribute('data-active', 'true');
     await expect(page.getByTestId(`${id}-hp`)).toHaveAttribute('data-spawn-reason', 'stagger');
+    const expectedActiveCount = INITIAL_ACTIVE_IDS.length + index + 1;
+    await expect(page.getByTestId('enemy-current')).toHaveText(String(expectedActiveCount));
+    await expect(page.getByTestId('enemy-remaining')).toHaveText(String(expectedActiveCount));
     elapsed = delay + 100;
   }
   await expectStrictEnemySpawns(page, STAGGERED_ENEMIES.map(({ id }) => id), 'stagger');
@@ -562,6 +586,10 @@ test('初期8体を段階的に12体へ増やし、phase境界後のDEV再出現
   await expect(phaseHud).toHaveText('2');
   await expect(phaseHud).toHaveAttribute('data-phase', '1');
   await expect(primaryHud).toHaveAttribute('data-direction', phaseOnePrimary);
+  await expect(page.getByTestId('wave')).toHaveText('2');
+  await expect(page.getByTestId('wave-remaining')).toHaveText('01:00');
+  await expect(page.getByTestId('enemy-current')).toHaveText('12');
+  await expect(page.getByTestId('enemy-remaining')).toHaveText('12');
   expect(phaseOnePrimary).not.toBe(phaseZeroPrimary);
   expect(await allEnemySpawnMetadata(page)).toEqual(phaseZero);
 
@@ -590,14 +618,35 @@ test('初期8体を段階的に12体へ増やし、phase境界後のDEV再出現
   expect(respawned.spawnTile).not.toBe(phaseZero[targetSlot].spawnTile);
   expect(new Set(phaseOne.map(metadata => metadata.spawnTile)).size).toBe(12);
 
+  const hitPointsBeforeThirdWave = await Promise.all(ENEMY_INSTANCE_IDS.map(async id => ({
+    id,
+    hp: await page.getByTestId(`${id}-hp`).textContent(),
+  })));
+  await page.clock.fastForward(SPAWN_PHASE_MS);
+  const phaseTwoPrimary = primarySpawnDirection(mapSeed, 2);
+  await expect(phaseHud).toHaveText('3');
+  await expect(phaseHud).toHaveAttribute('data-phase', '2');
+  await expect(primaryHud).toHaveAttribute('data-direction', phaseTwoPrimary);
+  await expect(page.getByTestId('wave')).toHaveText('3');
+  await expect(page.getByTestId('wave-remaining')).toHaveText('01:00');
+  expect(await allEnemySpawnMetadata(page)).toEqual(phaseOne);
+  for (const { id, hp } of hitPointsBeforeThirdWave)
+    await expect(page.getByTestId(`${id}-hp`)).toHaveText(hp ?? '');
+
   await page.getByTestId('retry').dispatchEvent('click');
   await expect(phaseHud).toHaveText('1');
   await expect(phaseHud).toHaveAttribute('data-phase', '0');
+  await expect(page.getByTestId('wave')).toHaveText('1');
+  await expect(page.getByTestId('wave-remaining')).toHaveText('01:00');
   await expectEnemyHitPointsAndIds(page, 0);
   for (const id of INITIAL_ACTIVE_IDS)
     await expect(page.getByTestId(`${id}-hp`)).toHaveAttribute('data-active', 'true');
   for (const { id } of STAGGERED_ENEMIES)
     await expect(page.getByTestId(`${id}-hp`)).toHaveAttribute('data-active', 'false');
+  // retry後も固定seedでinitial strict spawn成功を確認してから実数を比較する。
+  await expect(page.getByTestId('enemy-current')).toHaveText(String(INITIAL_ACTIVE_IDS.length));
+  await expect(page.getByTestId('enemy-remaining')).toHaveText(String(INITIAL_ACTIVE_IDS.length));
+  await expect(page.getByTestId('kills')).toHaveText('0');
 });
 
 test('DEV queryで初期数、段階間隔、候補poolを開始前に固定する', async ({ page }) => {
@@ -668,6 +717,11 @@ test('hidden recycleはHPを維持し、deathだけ全回復し、retry後に旧
   expect(recycling.recycleCount).toBe('1');
   expect(recycling.active).toBe('false');
   expect(recycling.spawnReason).toBe('recycle');
+  const activeDuringRecycle = (await allEnemySpawnMetadata(page))
+    .filter(metadata => metadata.active === 'true').length;
+  await expect(page.getByTestId('enemy-current')).toHaveText(String(activeDuringRecycle));
+  await expect(page.getByTestId('enemy-remaining')).toHaveText(String(activeDuringRecycle));
+  await expect(page.getByTestId('kills')).toHaveText('0');
   const pendingRecycles = (await allEnemySpawnMetadata(page))
     .filter(metadata => metadata.active === 'false' && metadata.spawnReason === 'recycle');
   expect(pendingRecycles.map(metadata => metadata.stableId)).toContain(target.id);
@@ -676,13 +730,28 @@ test('hidden recycleはHPを維持し、deathだけ全回復し、retry後に旧
   await expect(page.getByTestId(`${target.id}-hp`)).toHaveAttribute('data-active', 'true');
   await expect(page.getByTestId(`${target.id}-hp`)).toHaveAttribute('data-spawn-reason', 'recycle');
   await expect(page.getByTestId(`${target.id}-hp`)).toHaveText('3');
+  const activeAfterRecycle = (await allEnemySpawnMetadata(page))
+    .filter(metadata => metadata.active === 'true').length;
+  await expect(page.getByTestId('enemy-current')).toHaveText(String(activeAfterRecycle));
+  await expect(page.getByTestId('enemy-remaining')).toHaveText(String(activeAfterRecycle));
+  await expect(page.getByTestId('kills')).toHaveText('0');
 
   await debugDamageEnemy(page, target.id, 3);
   await expect(page.getByTestId(`${target.id}-hp`)).toHaveAttribute('data-active', 'false');
+  const activeAfterDeath = (await allEnemySpawnMetadata(page))
+    .filter(metadata => metadata.active === 'true').length;
+  await expect(page.getByTestId('enemy-current')).toHaveText(String(activeAfterDeath));
+  await expect(page.getByTestId('enemy-remaining')).toHaveText(String(activeAfterDeath));
+  await expect(page.getByTestId('kills')).toHaveText('1');
   await page.clock.runFor(respawnDelayFor('basic', target.id, 1, mapSeed) + 1_100);
   await expect(page.getByTestId(`${target.id}-hp`)).toHaveAttribute('data-active', 'true');
   await expect(page.getByTestId(`${target.id}-hp`)).toHaveAttribute('data-spawn-reason', 'death');
   await expectOutputValue(page.getByTestId(`${target.id}-hp`), '4');
+  const activeAfterDeathRespawn = (await allEnemySpawnMetadata(page))
+    .filter(metadata => metadata.active === 'true').length;
+  await expect(page.getByTestId('enemy-current')).toHaveText(String(activeAfterDeathRespawn));
+  await expect(page.getByTestId('enemy-remaining')).toHaveText(String(activeAfterDeathRespawn));
+  await expect(page.getByTestId('kills')).toHaveText('1');
 
   const otherInitialBasic = (await Promise.all(INITIAL_ACTIVE_IDS
     .filter(id => id.startsWith('basic-') && id !== target.id)
@@ -700,6 +769,11 @@ test('hidden recycleはHPを維持し、deathだけ全回復し、retry後に旧
   await expect(retryEnemyHp).toHaveAttribute('data-active', 'true');
   await expect(retryEnemyHp).toHaveAttribute('data-spawn-reason', 'initial');
   await expectOutputValue(retryEnemyHp, '4');
+  const activeAfterRecycleRetry = (await allEnemySpawnMetadata(page))
+    .filter(metadata => metadata.active === 'true').length;
+  await expect(page.getByTestId('enemy-current')).toHaveText(String(activeAfterRecycleRetry));
+  await expect(page.getByTestId('enemy-remaining')).toHaveText(String(activeAfterRecycleRetry));
+  await expect(page.getByTestId('kills')).toHaveText('0');
   await page.clock.runFor(oldDeathDelay + 100);
   await expect(retryEnemyHp).toHaveAttribute('data-active', 'true');
   await expect(retryEnemyHp).toHaveAttribute('data-spawn-reason', 'initial');
@@ -713,6 +787,9 @@ test('3分の境界で勝利し、戦闘停止後の再挑戦でタイマーと�
   const beforeTerminalTile = await playerTile.textContent();
   await page.clock.fastForward(SURVIVAL_LIMIT_MS);
   await expect(page.getByTestId('survival-time')).toHaveText('00:00');
+  await expect(page.getByTestId('wave')).toHaveText('3');
+  await expect(page.getByTestId('wave')).toHaveAttribute('data-state', 'victory');
+  await expect(page.getByTestId('wave-remaining')).toHaveText('00:00');
   await expect(page.getByTestId('victory')).toBeVisible();
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-respawn-tiles', '');
   await expect(page.getByTestId('defeat')).toBeHidden();
@@ -726,6 +803,15 @@ test('3分の境界で勝利し、戦闘停止後の再挑戦でタイマーと�
   await expect(page.getByTestId('victory')).toBeHidden();
   await expect(page.getByTestId('defeat')).toBeHidden();
   await expect(page.getByTestId('survival-time')).toHaveText('03:00');
+  await expect(page.getByTestId('wave')).toHaveText('1');
+  await expect(page.getByTestId('wave')).toHaveAttribute('data-state', 'playing');
+  await expect(page.getByTestId('wave-remaining')).toHaveText('01:00');
+  const activeAfterVictoryRetry = (await allEnemySpawnMetadata(page))
+    .filter(metadata => metadata.active === 'true').length;
+  await expect(page.getByTestId('enemy-current')).toHaveText(String(activeAfterVictoryRetry));
+  await expect(page.getByTestId('enemy-goal')).toHaveText('12');
+  await expect(page.getByTestId('enemy-remaining')).toHaveText(String(activeAfterVictoryRetry));
+  await expect(page.getByTestId('kills')).toHaveText('0');
   await expect(page.getByTestId('ammo')).toHaveText('20/20');
 });
 

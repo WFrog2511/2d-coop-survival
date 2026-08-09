@@ -3,22 +3,36 @@ import {
   AMMO_BOX_RESPAWN_MS,
   ENEMY_INSTANCE_IDS,
   INITIAL_STATE,
+  STABLE_ENEMY_SLOT_COUNT,
   SURVIVAL_LIMIT_MS,
+  WAVE_COUNT,
+  WAVE_DURATION_MS,
   WEAPONS,
+  activeEnemyCount,
+  advanceRunState,
   advanceSurvivalState,
   canFireAt,
   collectAmmoBox,
   completeReload,
+  createRunState,
+  currentWaveNumber,
   damageEnemy,
   damagePlayer,
+  defeatRun,
   droneLateralSpeedAt,
   fireWeapon,
   hasReachedSurvivalLimit,
   isEnemyDefeated,
+  recordEnemyDefeated,
+  recordEnemyRecycled,
+  recordEnemySpawned,
+  remainingEnemyCount,
   remainingSurvivalMs,
+  remainingWaveMs,
   resolveDamage,
   respawnEnemy,
   retryCombat,
+  retryRun,
   selectWeapon,
   startReload,
 } from '../src/rules';
@@ -87,6 +101,80 @@ describe('戦闘ルール', () => {
     const victory = advanceSurvivalState(INITIAL_STATE, startedAt, startedAt + SURVIVAL_LIMIT_MS);
     expect(victory).toMatchObject({ victory: true, defeated: false, reloading: null });
     expect(advanceSurvivalState(victory, startedAt, startedAt + SURVIVAL_LIMIT_MS)).toBe(victory);
+  });
+
+  it('RunStateは3つの60秒waveを絶対経過時間から決定的に進める', () => {
+    const initial = createRunState();
+    const beforeFirstBoundary = advanceRunState(initial, WAVE_DURATION_MS - 1);
+    const secondWave = advanceRunState(initial, WAVE_DURATION_MS);
+    const thirdWave = advanceRunState(initial, WAVE_DURATION_MS * 2);
+    const victory = advanceRunState(initial, SURVIVAL_LIMIT_MS);
+
+    expect(WAVE_COUNT).toBe(3);
+    expect(WAVE_DURATION_MS).toBe(60000);
+    expect(beforeFirstBoundary).toMatchObject({ status: 'playing', elapsedMs: 59999 });
+    expect(currentWaveNumber(beforeFirstBoundary)).toBe(1);
+    expect(remainingWaveMs(beforeFirstBoundary)).toBe(1);
+    expect(secondWave).toEqual(advanceRunState(beforeFirstBoundary, WAVE_DURATION_MS));
+    expect(currentWaveNumber(secondWave)).toBe(2);
+    expect(remainingWaveMs(secondWave)).toBe(WAVE_DURATION_MS);
+    expect(currentWaveNumber(thirdWave)).toBe(3);
+    expect(remainingWaveMs(thirdWave)).toBe(WAVE_DURATION_MS);
+    expect(victory).toMatchObject({ status: 'victory', elapsedMs: SURVIVAL_LIMIT_MS });
+    expect(currentWaveNumber(victory)).toBe(3);
+    expect(remainingWaveMs(victory)).toBe(0);
+    expect(advanceRunState(secondWave, 1)).toBe(secondWave);
+    expect(advanceRunState(victory, SURVIVAL_LIMIT_MS + 1)).toBe(victory);
+  });
+
+  it('RunStateはspawn、撃破、recycleの実成功を現在敵数、残敵数、撃破数へ反映する', () => {
+    let state = createRunState();
+    expect(STABLE_ENEMY_SLOT_COUNT).toBe(12);
+    expect(activeEnemyCount(state)).toBe(0);
+    expect(remainingEnemyCount(state)).toBe(0);
+
+    ENEMY_INSTANCE_IDS.slice(0, 8).forEach((id) => {
+      state = recordEnemySpawned(state, id);
+    });
+    expect(activeEnemyCount(state)).toBe(8);
+    expect(remainingEnemyCount(state)).toBe(8);
+    expect(state.kills).toBe(0);
+
+    ENEMY_INSTANCE_IDS.slice(8).forEach((id) => {
+      state = recordEnemySpawned(state, id);
+    });
+    expect(activeEnemyCount(state)).toBe(12);
+    expect(remainingEnemyCount(state)).toBe(12);
+
+    const defeated = recordEnemyDefeated(state, 'basic-1');
+    expect(defeated.enemySlots['basic-1']).toBe('respawning');
+    expect(activeEnemyCount(defeated)).toBe(11);
+    expect(remainingEnemyCount(defeated)).toBe(11);
+    expect(defeated.kills).toBe(1);
+    expect(recordEnemyDefeated(defeated, 'basic-1')).toBe(defeated);
+
+    const respawned = recordEnemySpawned(defeated, 'basic-1');
+    const recycled = recordEnemyRecycled(respawned, 'drone-1');
+    expect(recycled.enemySlots['drone-1']).toBe('recycling');
+    expect(activeEnemyCount(recycled)).toBe(11);
+    expect(remainingEnemyCount(recycled)).toBe(11);
+    expect(recycled.kills).toBe(1);
+    const returned = recordEnemySpawned(recycled, 'drone-1');
+    expect(activeEnemyCount(returned)).toBe(12);
+    expect(remainingEnemyCount(returned)).toBe(12);
+    expect(returned.kills).toBe(1);
+  });
+
+  it('RunStateのdefeat terminalとretryは時間、敵枠、撃破数を初期化する', () => {
+    const active = recordEnemySpawned(createRunState(), 'basic-1');
+    const defeated = defeatRun(advanceRunState(recordEnemyDefeated(active, 'basic-1'), 1200));
+
+    expect(defeated).toMatchObject({ status: 'defeat', elapsedMs: 1200, kills: 1 });
+    expect(recordEnemySpawned(defeated, 'basic-1')).toBe(defeated);
+    expect(recordEnemyRecycled(defeated, 'basic-1')).toBe(defeated);
+    expect(advanceRunState(defeated, SURVIVAL_LIMIT_MS)).toBe(defeated);
+    expect(retryRun()).toEqual(createRunState());
+    expect(retryRun()).not.toBe(createRunState());
   });
 
   it('勝利状態は射撃、リロード、被ダメージ、敵、箱取得を無副作用で拒否する', () => {

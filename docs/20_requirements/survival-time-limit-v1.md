@@ -21,6 +21,10 @@ Issue #34 の comment 5220638729で確定したfollow-up/PR #36のDODを正本�
 
 実行環境は既存のPhaser/Viteブラウザプロトタイプとし、通信・永続化・外部サービスは使用しない。技術検証と顧客またはプロジェクトオーナーの受け入れ確認は別に扱う。
 
+## Issue #58の限定移行
+
+[REQ-WAVE-PROGRESSION](wave-progression-v1.md)は、この3分runを3つの60秒waveと純粋RunStateでも観測する点だけを限定してsupersedeする。180000msのvictory、terminal停止、retry、ammo box respawnは本要件の契約を維持する。wave固有の新敵、intermission、quota、報酬、dropは引き続き対象外とする。
+
 ## #21/#35既存契約との境界
 
 #21/#35のammo-supply-v1にある「同一run中は取得箱を再出現させない」は履歴契約として維持する。#34 follow-upが限定的にsupersedeするのはfield ammo box（map上のammo box）の再出現処理だけであり、既存の有限ammo契約、ammo/map配置文書、その他の#21/#35実装は変更しない。
@@ -43,7 +47,7 @@ survival timerは180000ms、ammo box復活timerは取得から30000msである�
 
 ## 対象外
 
-recovery item、敵の時間scale変更、waveやdrop、multiplayer sync、persistence、汎用inventory/loot基盤、外部asset、既存map生成規則の変更、#21/#35の既存実装とammo/map配置文書の修正は対象外とする。新しいDOCGEN transform、matrix/readiness/evidenceもこのPrototype standard sliceでは作成しない。
+recovery item、敵の時間scale変更、wave固有の新敵、intermission、quota、報酬、drop、multiplayer sync、persistence、汎用inventory/loot基盤、外部asset、既存map生成規則の変更、#21/#35の既存実装とammo/map配置文書の修正は対象外とする。新しいDOCGEN transform、matrix/readiness/evidenceもこのPrototype standard sliceでは作成しない。
 
 ## 検証と人間確認
 

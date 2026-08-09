@@ -10,6 +10,8 @@ specification: SPEC-SURVIVAL-TIME-LIMIT
 
 既存のCombatState、Phaser SceneのTimerEvent、generation、respawns、flashes、reloadTimer、ammoBoxes、DOM HUDを再利用する。新しいゲーム基盤や依存は導入しない。TypeScript設計は手動同期とし、新しいDOCGEN transformは追加しない。
 
+[DESIGN-BASIC-WAVE-PROGRESSION](wave-progression-v1.md)は、同じ3分runを3つの60秒waveとRunStateのHUD観測へ限定して拡張する。ここで定義する180000ms victory、terminal停止、retry、ammo box respawnの経路は維持し、wave境界にenemy配置を変更する処理は追加しない。
+
 | 責務 | 実装経路 |
 | --- | --- |
 | 期限定数と純粋状態 | src/rules.ts のSURVIVAL_LIMIT_MS、AMMO_BOX_RESPAWN_MS、remainingSurvivalMs、victory遷移、terminal guard、retryCombat |
@@ -60,4 +62,4 @@ victoryとdefeatはterminalであり、入力イベントが届いてもルー�
 
 ## 実装境界と対象外
 
-stable boxIdとcurrentTileを持つ小さなMapだけを使い、汎用inventory・loot・persistence・通信・enemy time scaling・recovery itemを追加しない。#21/#35の実装、既存ammo/map配置文書、map生成規則は変更しない。候補がまったくない場合は箱を再生成せず、HUDへ失敗を表示する。期限の変更、terminal後の復活、multiplayer sync、永続化が必要になった場合は、Issue #34の条件を更新してから別sliceで再検討する。
+stable boxIdとcurrentTileを持つ小さなMapだけを使い、汎用inventory・loot・persistence・通信・enemy time scaling・recovery item・wave固有の新敵・intermission・quota・報酬・dropを追加しない。#21/#35の実装、既存ammo/map配置文書、map生成規則は変更しない。候補がまったくない場合は箱を再生成せず、HUDへ失敗を表示する。期限の変更、terminal後の復活、multiplayer sync、永続化が必要になった場合は、Issue #34の条件を更新してから別sliceで再検討する。

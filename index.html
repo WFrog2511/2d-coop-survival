@@ -17,6 +17,11 @@
             <span>残り時間</span>
             <output class="survival-time" data-testid="survival-time">03:00</output>
           </aside>
+          <aside id="run-panel" class="game-overlay" aria-label="waveと敵の進行状況">
+            <span>Wave <output data-testid="wave" data-state="playing">1</output> 残り <output data-testid="wave-remaining">01:00</output></span>
+            <span>敵 <output data-testid="enemy-current">8</output>/<output data-testid="enemy-goal">12</output> 残り <output data-testid="enemy-remaining">8</output></span>
+            <span>撃破 <output data-testid="kills">0</output></span>
+          </aside>
           <aside id="hp-panel" class="game-overlay" aria-label="プレイヤー体力">
             <span>HP <output data-testid="hp">100</output></span>
             <progress data-testid="hp-bar" max="100" value="100" aria-label="プレイヤーHP"></progress>

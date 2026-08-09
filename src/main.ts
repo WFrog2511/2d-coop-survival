@@ -3,7 +3,7 @@ import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, basicApproachRoleFor,
 import { ArenaEffects } from './arena/effects';
 import { ArenaHud } from './arena/hud';
 import { ENEMIES, ENEMY_DEFEAT_HIT_STOP_MS, ENEMY_HIT_STOP_MS, ENEMY_IDS, ENEMY_LABELS, ENEMY_SPAWN_ORDER, INITIAL_ENEMY_IDS, PLAYER_HIT_STOP_MS, STAGGERED_ENEMIES } from './game-data';
-import { AMMO_BOX_RESPAWN_MS, SURVIVAL_LIMIT_MS, WEAPONS, advanceSurvivalState, cancelReload, collectAmmoBox as collectAmmoBoxState, completeReload, damageEnemy, damagePlayer, droneLateralSpeedAt, fireWeapon, isEnemyDefeated, remainingSurvivalMs, resolveDamage, respawnEnemy, retryCombat, selectWeapon, startReload, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type WeaponId } from './rules';
+import { AMMO_BOX_RESPAWN_MS, SURVIVAL_LIMIT_MS, WEAPONS, advanceRunState, advanceSurvivalState, cancelReload, collectAmmoBox as collectAmmoBoxState, completeReload, damageEnemy, damagePlayer, defeatRun, droneLateralSpeedAt, fireWeapon, isEnemyDefeated, recordEnemyDefeated, recordEnemyRecycled, recordEnemySpawned, remainingSurvivalMs, resolveDamage, respawnEnemy, retryCombat, retryRun, selectWeapon, startReload, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type RunState, type WeaponId } from './rules';
 
 const WIDTH = 800;
 const HEIGHT = 500;
@@ -131,6 +131,7 @@ class Arena extends Phaser.Scene {
   private mapSeed = Date.now() >>> 0;
   private generation = 0;
   private state: CombatState = retryCombat();
+  private runState: RunState = retryRun();
   private meta = new Map<Phaser.Physics.Arcade.Sprite, BulletMeta>();
   private contactAt = enemyNumbers();
   private playerHitStopUntil = 0;
@@ -305,8 +306,8 @@ class Arena extends Phaser.Scene {
     this.state = damageEnemy(this.state, id, amount);
     const defeated = isEnemyDefeated(this.state, id);
     this.startEnemyImpact(id, this.state.weapon, defeated);
-    this.refreshHud();
     if (defeated) this.scheduleDefeatedEnemy(id);
+    this.refreshHud();
   }
 
   private reset(initial = false): void {
@@ -314,6 +315,7 @@ class Arena extends Phaser.Scene {
     this.stopRunTimers();
     this.physics.resume();
     this.state = retryCombat();
+    this.runState = retryRun();
     this.survivalStartedAt = this.time.now;
     this.contactAt = enemyNumbers();
     this.playerHitStopUntil = 0;
@@ -468,16 +470,21 @@ class Arena extends Phaser.Scene {
   }
 
   private updateSurvival(): void {
-    const next = advanceSurvivalState(this.state, this.survivalStartedAt, this.time.now);
+    const nextRunState = advanceRunState(this.runState, this.time.now - this.survivalStartedAt);
+    this.runState = nextRunState;
     this.updateSurvivalHud();
-    if (next === this.state)
+    if (nextRunState.status !== 'victory')
       return;
-    this.state = next;
+    const nextCombatState = advanceSurvivalState(this.state, this.survivalStartedAt, this.time.now);
+    if (nextCombatState === this.state)
+      return;
+    this.state = nextCombatState;
     this.enterTerminal('victory');
   }
 
   private updateSurvivalHud(): void {
     arenaHud.updateSurvival(remainingSurvivalMs(this.survivalStartedAt, this.time.now));
+    arenaHud.updateRun(this.runState);
   }
 
   private updateSpawnPhaseHud(): void {
@@ -638,6 +645,7 @@ class Arena extends Phaser.Scene {
       .enableBody(true, point.x, point.y, true, true)
       .setVelocity(0, 0)
       .clearTint();
+    this.runState = recordEnemySpawned(this.runState, id);
     this.enemies[id].setData('stableId', id);
     this.enemies[id].setData('spawnPhase', phase);
     this.enemies[id].setData('primaryDirection', primaryDirection);
@@ -745,6 +753,7 @@ class Arena extends Phaser.Scene {
     }
     this.recyclingEnemyId = id;
     this.recycleCount[id] += 1;
+    this.runState = recordEnemyRecycled(this.runState, id);
     this.enemies[id].disableBody(true, true);
     this.enemies[id].setData('spawnReason', 'recycle');
     this.hideEnemyVisuals(id);
@@ -752,6 +761,7 @@ class Arena extends Phaser.Scene {
     delete this.visibilityTiles[id];
     this.hiddenSince.delete(id);
     this.scheduleEnemySpawn(id, 'recycle', recycleDelayFor(id, this.recycleCount[id], this.map.seed));
+    this.refreshHud();
   }
 
   private applyEnemyVisibility(id: EnemyInstanceId, visibility: EnemyVisibility): void {
@@ -905,14 +915,13 @@ class Arena extends Phaser.Scene {
       };
       this.knockbackUntil[id] = this.enemyHitStopUntil[id] + 180;
     }
+    if (defeated) this.scheduleDefeatedEnemy(id);
     this.refreshHud();
-    if (!defeated)
-      return;
-    this.scheduleDefeatedEnemy(id);
   }
 
   private scheduleDefeatedEnemy(id: EnemyInstanceId): void {
     const enemy = this.enemies[id];
+    this.runState = recordEnemyDefeated(this.runState, id);
     enemy.disableBody(true, false);
     this.hideEnemyVisuals(id);
     this.hiddenSince.delete(id);
@@ -956,6 +965,9 @@ class Arena extends Phaser.Scene {
   }
 
   private enterTerminal(result: 'defeat' | 'victory'): void {
+    this.runState = result === 'defeat'
+      ? defeatRun(this.runState)
+      : advanceRunState(this.runState, SURVIVAL_LIMIT_MS);
     this.stopRunTimers();
     this.state = cancelReload(this.state);
     this.player.setVelocity(0, 0);
@@ -1085,6 +1097,7 @@ class Arena extends Phaser.Scene {
         active: isReloading,
         progress: isReloading ? Phaser.Math.Clamp(this.reloadTimer!.getProgress(), 0, 1) : 0,
       },
+      runState: this.runState,
       remainingSurvivalMs: remainingSurvivalMs(this.survivalStartedAt, this.time.now),
       spawnPhase: phase,
       primaryDirection: primarySpawnDirection(this.map.seed, phase),

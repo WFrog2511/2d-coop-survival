@@ -19,6 +19,8 @@ specification: SPEC-SURVIVAL-TIME-LIMIT
 
 ## 0. #21/#35既存契約との境界
 
+[DESIGN-DETAIL-WAVE-PROGRESSION](wave-progression-v1.md)は、3分runの時間進行を3つの60秒waveとRunStateのHUD観測へ限定して拡張する。ここで定義するvictory、terminal、retry、ammo box復活は維持し、wave固有の新敵、intermission、quota、報酬、dropは追加しない。
+
 #21/#35のammo-supply-v1にある「同一run中は取得箱を再出現させない」は履歴契約として維持する。#34 follow-upが限定的にsupersedeするのはfield ammo box（map上のammo box）の再出現処理だけであり、既存の有限ammo契約、ammo/map配置文書、その他の#21/#35実装は変更しない。
 
 survival timerは180000ms、ammo box復活timerは取得から30000msである。victory/defeat/retryで復活timerを停止・clearするterminal優先を守り、pending callbackはそのrunのterminal後に実行させない。
@@ -61,7 +63,7 @@ callbackではtimer mapからboxIdを先に削除し、generation一致かつ非
 
 map生成、敵spawn、既存ammo/reloadの失敗処理は既存経路を維持する。旧generationのtimer callback、terminal中の入力、同boxIdの重複overlapは無副作用で終了する。候補がまったくない復活callbackは箱spriteを生成せずHUDへ失敗を表示する。terminalになったrunの復活待ち箱は復活させず、retryで新mapの箱4個へ初期化する。
 
-recovery item、enemy time scaling、multiplayer sync、persistence、inventory/loot、wave/drop、map配置変更、#21/#35の実装変更、既存ammo/map配置文書変更は対象外とする。
+recovery item、enemy time scaling、multiplayer sync、persistence、inventory/loot、wave固有の新敵、intermission、quota、報酬、drop、map配置変更、#21/#35の実装変更、既存ammo/map配置文書変更は対象外とする。
 
 ## 6. 検証期待値
 

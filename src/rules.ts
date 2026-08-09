@@ -23,7 +23,29 @@ export const ENEMY_INSTANCE_IDS = [
 /** 安定した敵枠を表す個別識別子。 */
 export type EnemyInstanceId = (typeof ENEMY_INSTANCE_IDS)[number];
 export const SURVIVAL_LIMIT_MS = 180000;
+export const WAVE_DURATION_MS = 60000;
+export const WAVE_COUNT = SURVIVAL_LIMIT_MS / WAVE_DURATION_MS;
+export const STABLE_ENEMY_SLOT_COUNT = ENEMY_INSTANCE_IDS.length;
 export const AMMO_BOX_RESPAWN_MS = 30000;
+
+/** runの継続中またはterminalの状態を表す。 */
+export type RunStatus = 'playing' | 'victory' | 'defeat';
+
+/** stableな敵枠がspawn、撃破、recycleのどの段階にあるかを表す。 */
+export type RunEnemySlotStatus = 'waiting' | 'active' | 'respawning' | 'recycling';
+
+/**
+ * 3 waveの時間進行と敵枠の観測値をまとめた純粋なrun状態。
+ *
+ * `enemySlots`は実際にspawn成功した枠だけを`active`にするため、
+ * strict spawnの再試行中もHUDの現在数とPhaser spriteを一致させられる。
+ */
+export type RunState = {
+  status: RunStatus;
+  elapsedMs: number;
+  kills: number;
+  enemySlots: Record<EnemyInstanceId, RunEnemySlotStatus>;
+};
 
 /** 発射、装弾、補給を決める武器の静的定義。 */
 export type WeaponDefinition = {
@@ -170,6 +192,159 @@ export const INITIAL_STATE: CombatState = {
 
 function cloneEnemies(enemies: Record<EnemyInstanceId, EnemyState>): Record<EnemyInstanceId, EnemyState> {
   return Object.fromEntries(ENEMY_INSTANCE_IDS.map(id => [id, { ...enemies[id] }])) as Record<EnemyInstanceId, EnemyState>;
+}
+
+function createWaitingEnemySlots(): Record<EnemyInstanceId, RunEnemySlotStatus> {
+  return Object.fromEntries(ENEMY_INSTANCE_IDS.map(id => [id, 'waiting'])) as Record<EnemyInstanceId, RunEnemySlotStatus>;
+}
+
+function withEnemySlot(
+  state: RunState,
+  enemyId: EnemyInstanceId,
+  status: RunEnemySlotStatus,
+): RunState {
+  return {
+    ...state,
+    enemySlots: { ...state.enemySlots, [enemyId]: status },
+  };
+}
+
+function normalizedRunElapsedMs(elapsedMs: number): number {
+  const value = Number.isNaN(elapsedMs) ? 0 : elapsedMs;
+  return Math.min(SURVIVAL_LIMIT_MS, Math.max(0, Math.floor(value)));
+}
+
+/**
+ * 新しいrunを未spawnの12 stable slotとともに作成する。
+ *
+ * @returns 初期化済みのrun状態。
+ */
+export function createRunState(): RunState {
+  return {
+    status: 'playing',
+    elapsedMs: 0,
+    kills: 0,
+    enemySlots: createWaitingEnemySlots(),
+  };
+}
+
+/**
+ * run開始からの絶対経過時間を使い、waveと勝利境界へ決定的に進める。
+ *
+ * @param state 現在のrun状態。
+ * @param elapsedMs run開始からの絶対経過ミリ秒。
+ * @returns 経過時間と必要な勝利状態を反映したrun状態。
+ */
+export function advanceRunState(state: RunState, elapsedMs: number): RunState {
+  if (state.status !== 'playing') return state;
+  const nextElapsedMs = Math.max(state.elapsedMs, normalizedRunElapsedMs(elapsedMs));
+  const status: RunStatus = nextElapsedMs >= SURVIVAL_LIMIT_MS ? 'victory' : 'playing';
+  if (nextElapsedMs === state.elapsedMs && status === state.status)
+    return state;
+  return { ...state, elapsedMs: nextElapsedMs, status };
+}
+
+/**
+ * 現在のrunが属する1始まりのwave番号を返す。
+ *
+ * @param state 現在のrun状態。
+ * @returns 1から3の範囲に収めたwave番号。
+ */
+export function currentWaveNumber(state: RunState): number {
+  return Math.min(WAVE_COUNT, Math.floor(state.elapsedMs / WAVE_DURATION_MS) + 1);
+}
+
+/**
+ * 現在のwaveが終わるまでの残り時間を返す。
+ *
+ * @param state 現在のrun状態。
+ * @returns 0から60000までの残りミリ秒。
+ */
+export function remainingWaveMs(state: RunState): number {
+  if (state.elapsedMs >= SURVIVAL_LIMIT_MS)
+    return 0;
+  return WAVE_DURATION_MS - state.elapsedMs % WAVE_DURATION_MS;
+}
+
+/**
+ * 現在Phaser上でactiveとして観測すべき敵枠数を返す。
+ *
+ * @param state 現在のrun状態。
+ * @returns activeなstable enemy slot数。
+ */
+export function activeEnemyCount(state: RunState): number {
+  return ENEMY_INSTANCE_IDS.filter(id => state.enemySlots[id] === 'active').length;
+}
+
+/**
+ * 現在activeかつ未撃破として残る敵数を返す。
+ *
+ * death eventは同時にslotを`respawning`へ移すため、ここで返す数は
+ * Phaser上のactive sprite数と同期する。これは撃破quotaではない。
+ *
+ * @param state 現在のrun状態。
+ * @returns activeかつ未撃破の敵枠数。
+ */
+export function remainingEnemyCount(state: RunState): number {
+  return activeEnemyCount(state);
+}
+
+/**
+ * Phaserの敵spawnが成功したとき、そのstable slotをactiveへ遷移する。
+ *
+ * @param state 現在のrun状態。
+ * @param enemyId spawnに成功したstable enemy slot。
+ * @returns spawn成功を反映したrun状態。
+ */
+export function recordEnemySpawned(state: RunState, enemyId: EnemyInstanceId): RunState {
+  if (state.status !== 'playing' || state.enemySlots[enemyId] === 'active')
+    return state;
+  return withEnemySlot(state, enemyId, 'active');
+}
+
+/**
+ * activeな敵が撃破されたとき、再出現待ちと撃破数を記録する。
+ *
+ * @param state 現在のrun状態。
+ * @param enemyId 撃破されたstable enemy slot。
+ * @returns deathを反映したrun状態。
+ */
+export function recordEnemyDefeated(state: RunState, enemyId: EnemyInstanceId): RunState {
+  if (state.status !== 'playing' || state.enemySlots[enemyId] !== 'active')
+    return state;
+  return { ...withEnemySlot(state, enemyId, 'respawning'), kills: state.kills + 1 };
+}
+
+/**
+ * hidden enemyをHP維持のままrecycle待ちへ遷移する。
+ *
+ * @param state 現在のrun状態。
+ * @param enemyId recycleするstable enemy slot。
+ * @returns recycle待ちを反映したrun状態。
+ */
+export function recordEnemyRecycled(state: RunState, enemyId: EnemyInstanceId): RunState {
+  if (state.status !== 'playing' || state.enemySlots[enemyId] !== 'active')
+    return state;
+  return withEnemySlot(state, enemyId, 'recycling');
+}
+
+/**
+ * player HPが0になったrunをdefeat terminalへ遷移する。
+ *
+ * @param state 現在のrun状態。
+ * @returns defeatを反映したrun状態。
+ */
+export function defeatRun(state: RunState): RunState {
+  return state.status === 'playing' ? { ...state, status: 'defeat' } : state;
+}
+
+/**
+ * terminal後の再挑戦用に、独立した初期run状態を作る。
+ *
+ * @returns elapsed、撃破数、敵枠を初期化したrun状態。
+ */
+export function retryRun(): RunState {
+  return createRunState();
 }
 
 /**
