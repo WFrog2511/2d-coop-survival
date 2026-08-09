@@ -57,13 +57,15 @@ profileと変更駆動gateは[AGENTS.md](AGENTS.md)を正本にします。TypeS
 ```powershell
 pnpm install --frozen-lockfile
 pnpm check
+# TypeScriptコメント/JSDocだけを直接確認する場合
+corepack pnpm exec node scripts/check_typescript_comments.mjs .
 # bundle / Vite runtime変更時だけ、pnpm checkの後に実行する
 pnpm build:bundle
 ```
 
 `pnpm check`はlint、typecheck、TypeScript日本語コメント規則、unitを内包する最終treeのcanonical full gateです。同じtreeへ`pnpm lint`、`pnpm typecheck`、`pnpm test`を重ねません。`pnpm build`は後方互換用でtypecheckを再実行するため、PR検証では`pnpm build:bundle`を使います。`pnpm lint:fix`は安全なlint修正、`pnpm format`はESLintのlayout修正だけを適用します。
 
-pre-commit hookは`git diff --cached --check`、staged Python日本語コメント、staged acceptance matrixの高速で決定的な機械検査だけを行います。full TypeScript gate、全docs link、DOCGENはPR前の変更駆動gateです。人間向けのTypeScriptコメントとJSDocには日本語を1文字以上含めます。ESLint、TypeScript、triple-slash、coverage、formatter、shebang、generatedのdirectiveは対象外です。
+pre-commit hookは`git diff --cached --check`、staged Python日本語コメント、staged TypeScriptコメント/JSDoc、staged acceptance matrixを検査し、Node.js 22のCorepackで`corepack pnpm lint`と`corepack pnpm typecheck`も実行します。いずれかが失敗するとcommitは中止されます。tests、bundle、E2E、全docs link、DOCGENはhookへ入れず、PR前の変更駆動gateで実行します。人間向けのTypeScriptコメントとJSDocには日本語を1文字以上含めます。ESLint、TypeScript、triple-slash、coverage、formatter、shebang、generatedのdirectiveは対象外です。
 
 `pnpm test:e2e`はPlaywright Chromiumを使います。Google Chrome最新版での武器操作は[GitHub Issue #14](https://github.com/WFrog2511/2d-coop-survival/issues/14)、高速ドローンによる撃破優先度は[GitHub Issue #15](https://github.com/WFrog2511/2d-coop-survival/issues/15)、自動生成マップでの移動と遮蔽物判断は[GitHub Issue #17](https://github.com/WFrog2511/2d-coop-survival/issues/17)で人間確認しました。
 
@@ -134,7 +136,7 @@ Codexが自動検出できるよう、Skillsは[.agents/skills/](.agents/skills/
 ## 開発フレームワーク
 
 - [.github/ISSUE_TEMPLATE/](.github/ISSUE_TEMPLATE/): task / decision / question / customer-reviewのIssue Forms
-- [.githooks/pre-commit](.githooks/pre-commit): staged diff、Python日本語、受け入れマトリクスだけの機械検査
+- [.githooks/pre-commit](.githooks/pre-commit): staged diff、Python/TypeScript日本語、受け入れマトリクスとCorepack lint/typecheckのcommit時検査
 - [.codex/](.codex/config.toml): trustedな新しいtaskで有効になる固定Luna Max planner/reviewer・sole writer設定
 - [templates/](templates/): Definition of Delivery、PR、証跡、closeout、Agent引き継ぎ
 - [scripts/](scripts/): 文書・設計・受け入れ・納品証跡の機械検査

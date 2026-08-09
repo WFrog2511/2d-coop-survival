@@ -20,6 +20,7 @@ The following direct dependencies are recorded in `pnpm-lock.yaml`. They are not
 | `@stylistic/eslint-plugin` | 5.10.0 | MIT |
 | `codex-lsp-bridge` | 0.3.3 | MIT |
 | `eslint` | 10.8.0 | MIT |
+| `eslint-plugin-jsdoc` | 64.0.1 | BSD-3-Clause |
 | `typescript` | 6.0.3 | Apache-2.0 |
 | `typescript-language-server` | 5.3.0 | Apache-2.0 |
 | `typescript-eslint` | 8.65.0 | MIT |

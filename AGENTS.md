@@ -43,6 +43,7 @@ main -> develop -> feature/<topic>
 - `main` はリリース用、`develop` は開発統合用とする。
 - 作業は `feature/<topic>` ブランチで行い、原則として `develop` へPRを作る。
 - マージはユーザー承認後にのみ行う。
+- 作業sliceの品質gateが通ったら、意図した変更だけを親が追加許可なしにstage・commitする。push、PR作成、merge、Issueクローズ、顧客承認は別途明示確認を受ける。
 - PRには関連Issue、変更理由、検証結果、既知の制約を記載する。
 - commit messageは `<type>(<scope>): <日本語の説明>` とする。
 - `type`は`chore`、`docs`、`feat`、`fix`、`test`、`refactor`など変更目的を表す語、`scope`は`project`、`frontend`、`backend`、具体的なservice名など変更対象を表す語にする。
@@ -78,7 +79,7 @@ Prototype standardでmatrix、release-readiness、evidenceを作成・更新す�
 `.codex/config.toml`と`.codex/agents/`はtrusted projectだけで有効になる。変更後は新しいtrusted taskを開始し、`terra_max_planner_reviewer`と`terra_max_writer`が使えることを確認してから依存する。最大sub-agent数は3とし、将来のproject sub-agentは`gpt-5.6-terra` / `max`を使う。SOL root orchestrator（`gpt-5.6-sol`）はtask / Issue / Git / GitHub / agent orchestrationを担当し、Terra Max planner/reviewerとsole writerはplan / write / review / unitを担当する。`gpt-5.6-terra`が使えない場合の別モデルへのfallbackはユーザー確認後だけ行う。
 
 - `terra_max_planner_reviewer`はread-onlyで、実装前のplanと最終diff reviewを一つのcheckpointとして担当する。workspace、GitHub、Gitの書換えはしない。
-- `terra_max_writer`はworkspace-writeの唯一のwriterであり、writeと対象unitを担当する。同じtaskで他のwriterを並行起動せず、stage、commit、push、merge、顧客承認は親の明示権限なしに行わない。
+- `terra_max_writer`はworkspace-writeの唯一のwriterであり、writeと対象unitを担当する。同じtaskで他のwriterを並行起動せず、stage・commitは親が品質gate後に自動で行い、writer自身は行わない。push、merge、顧客承認は親の明示権限なしに行わない。
 - Prototype standardの標準コード変更は、Terra Max planner/reviewerのplan → Terra Max sole writerのwriteと対象unit → Terra Max planner/reviewerのfinal diff reviewを原則とする。軽微なfinding修正後は変更箇所だけを再reviewし、厳格変更、重大finding、Definition of Delivery変更後は独立reviewを広げる。Publish-onlyではsub-agentを使わない。
 - handoffにはIssue / Definition of Delivery、対象ファイル、現在diff、直近gate結果、停止条件だけを渡す。長い履歴やraw logを複製しない。
 - 通常の`apply_patch`が一度実際に書込み失敗したと確認した場合だけ、対象パスを検証したcandidate、SHA-256、backup、原子的置換を使う。helperを先回りして追加せず、backupは検証とreviewが終わるまで保持する。
@@ -99,7 +100,7 @@ PR前に最終treeへ必要なgateを一度だけ実行する。修正でtreeが
 
 | 変更またはphase | gate | 境界 |
 | --- | --- | --- |
-| すべてのcommit | `git diff --cached --check`、`python -X utf8 scripts/check_japanese_comments.py --staged`、`python -X utf8 scripts/check_acceptance_matrix.py --staged` | pre-commitは高速で決定的なstaged機械検査だけ。full品質gate、全docs link、DOCGENは実行しない |
+| すべてのcommit | `git diff --cached --check`、`python -X utf8 scripts/check_japanese_comments.py --staged`、`corepack pnpm exec node scripts/check_typescript_comments.mjs --staged`、`python -X utf8 scripts/check_acceptance_matrix.py --staged`、`corepack pnpm lint`、`corepack pnpm typecheck` | pre-commitはstaged機械検査に加えてNode.js 22/Corepackの静的解析を実行する。tests、bundle、E2E、全docs link、DOCGENは実行しない |
 | TypeScript品質変更 | `pnpm check` | `lint`、`typecheck`、`test:quality`、unitを内包する唯一のfull TypeScript gate。最終treeで`pnpm lint`や`pnpm typecheck`を別途重ねない |
 | bundle / Vite runtime変更 | `pnpm build:bundle` | `pnpm check`後にVite bundleだけを検証する。`pnpm build`は後方互換用の`typecheck && build:bundle`であり、PR手順では使わない |
 | 利用経路、描画、ブラウザ状態変更 | 関連する`pnpm test:e2e` | Definition of Deliveryの代表利用経路を対象化する |
@@ -141,7 +142,7 @@ PR前に最終treeへ必要なgateを一度だけ実行する。修正でtreeが
 
 1. Prototype standardではtask Issueの受け入れ条件、PR検証、unit / E2E、必要時のcustomer-reviewを追跡に使い、featureごとのmatrixを原則作成・更新しない。
 2. Delivery-strictでは既存の要件ID・仕様ID・GitHub Issue番号を受け入れIDに再利用し、同じ内容の要件行とIssue行を重複させない。
-3. matrixを変更したときだけPR前に`python -X utf8 scripts/check_acceptance_matrix.py --check <matrix>`を実行する。hookの`--staged`はエージェントやネットワークを使わない機械検査だけである。
+3. matrixを変更したときだけPR前に`python -X utf8 scripts/check_acceptance_matrix.py --check <matrix>`を実行する。matrix checkerの`--staged`はエージェントやネットワークを使わない機械検査だけであり、hook全体はcommit時のlint/typecheckも実行する。
 4. 納品前に`type:customer-review` Issueのラベル・回答・反映先をGitHubで確認し、`python -X utf8 scripts/check_acceptance_matrix.py --release <matrix>`を実行する。
 
 通常検査は`未検証`と`待ち`を許可する。納品検査では技術検証`PASS`、顧客確認`不要`または`承認`、実装参照、証跡を必須とする。テスト成功から顧客承認を推測せず、スクリプトからマトリクスを自動更新しない。既存matrixは履歴として保持し、方針移行だけの遡及編集をしない。
@@ -222,6 +223,7 @@ PR前に最終treeへ必要なgateを一度だけ実行する。修正でtreeが
 ## TypeScript品質ゲート
 
 - 人間向けのTypeScriptコメントとJSDocには日本語を1文字以上含める。ESLint、TypeScript、triple-slash、coverage、formatter、shebang、generatedのdirectiveは検査対象外とする。
+- pre-commitではステージ済みTypeScriptだけを既存の`typescript-eslint` parserとlocal ESLint ruleで `corepack pnpm exec node scripts/check_typescript_comments.mjs --staged` により検査し、Node.js 22/Corepackで`corepack pnpm lint`と`corepack pnpm typecheck`を実行する。失敗時はcommitを中止し、tests、bundle、E2EはPR前gateに残す。
 - 最終treeのTypeScript full gateは`pnpm check`だけである。`pnpm check`に含まれる`pnpm lint`、`pnpm typecheck`、`pnpm test:quality`、`pnpm test`を同じtreeへ別途実行しない。`pnpm lint:fix`は安全なlint修正、`pnpm format`はESLintのlayout修正だけを行う。
 - bundle検証が必要な場合は、`pnpm check`後に`pnpm build:bundle`を実行する。`pnpm build`は後方互換であり、PR gateの重複回避には使わない。
 - Terra Max planner/reviewerがplanとreviewを、Terra Max writerが唯一の実装writerとしてwriteと対象unitを担当する。Agentの結果は人間承認の代替にしない。

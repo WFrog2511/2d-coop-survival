@@ -1,72 +1,15 @@
 import Phaser from 'phaser';
-import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, basicApproachRoleFor, enemyVisibility, findPath, hasLineOfSight, type EnemyVisibility, generateArenaMap, generateNextArenaMap, hiddenRecycleThresholdFor, nextSeed, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, selectEnemySpawnTile, selectSpawnTile, spawnDirectionForSlot, spawnPhaseAt, type ArenaMap, type SpawnDirection, type TilePosition, viewportTileRect } from './arena-map';
-import { AMMO_BOX_RESPAWN_MS, ENEMY_INSTANCE_IDS, SURVIVAL_LIMIT_MS, WEAPONS, advanceSurvivalState, cancelReload, collectAmmoBox as collectAmmoBoxState, completeReload, damageEnemy, damagePlayer, droneLateralSpeedAt, fireWeapon, isEnemyDefeated, remainingSurvivalMs, resolveDamage, respawnEnemy, retryCombat, selectWeapon, startReload, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type WeaponId } from './rules';
-
-type CameraShakeProfile = { duration: number; intensity: number };
-type PlayerHitVignetteProfile = { duration: number; opacity: number };
-type SoundEffectProfile = {
-  duration: number;
-  startFrequency: number;
-  endFrequency: number;
-  volume: number;
-  waveform: OscillatorType;
-  noiseVolume: number;
-  noiseFrequency: number;
-};
-type EnemyHitEffectProfile
-  = { shape: 'circle'; duration: number; radius: number; color: number; scale: number }
-    | { shape: 'star'; duration: number; points: number; innerRadius: number; outerRadius: number; color: number; scale: number };
+import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, basicApproachRoleFor, enemyVisibility, findPath, hasLineOfSight, type EnemyVisibility, generateArenaMap, generateNextArenaMap, hiddenRecycleThresholdFor, nextSeed, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, selectEnemySpawnTile, selectSpawnTile, spawnDirectionForSlot, spawnPhaseAt, type ArenaMap, type TilePosition, viewportTileRect } from './arena-map';
+import { ArenaEffects } from './arena/effects';
+import { ArenaHud } from './arena/hud';
+import { ENEMIES, ENEMY_DEFEAT_HIT_STOP_MS, ENEMY_HIT_STOP_MS, ENEMY_IDS, ENEMY_LABELS, ENEMY_SPAWN_ORDER, INITIAL_ENEMY_IDS, PLAYER_HIT_STOP_MS, STAGGERED_ENEMIES } from './game-data';
+import { AMMO_BOX_RESPAWN_MS, SURVIVAL_LIMIT_MS, WEAPONS, advanceSurvivalState, cancelReload, collectAmmoBox as collectAmmoBoxState, completeReload, damageEnemy, damagePlayer, droneLateralSpeedAt, fireWeapon, isEnemyDefeated, remainingSurvivalMs, resolveDamage, respawnEnemy, retryCombat, selectWeapon, startReload, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type WeaponId } from './rules';
 
 const WIDTH = 800;
 const HEIGHT = 500;
 const WORLD_WIDTH = ARENA_WIDTH_TILES * TILE_SIZE;
 const WORLD_HEIGHT = ARENA_HEIGHT_TILES * TILE_SIZE;
 const BULLET_POOL_SIZE = 48;
-const ENEMY_HIT_STOP_MS: Record<WeaponId, number> = { rifle: 12, shotgun: 35 };
-const ENEMY_DEFEAT_HIT_STOP_MS: Record<WeaponId, number> = { rifle: 24, shotgun: 42 };
-const PLAYER_HIT_STOP_MS: Record<EnemyKind, number> = { basic: 30, drone: 45 };
-const CAMERA_SHAKE_COOLDOWN_MS = 70;
-const SHOTGUN_SHAKE = { duration: 70, intensity: 0.0016 };
-const WEAPON_FIRE_SHAKE: Record<WeaponId, CameraShakeProfile> = {
-  rifle: { duration: 95, intensity: 0.0024 },
-  shotgun: { duration: 95, intensity: 0.0050 },
-};
-const FIRE_SOUND: Record<WeaponId, SoundEffectProfile> = {
-  rifle: { duration: 65, startFrequency: 360, endFrequency: 120, volume: 0.08, waveform: 'sawtooth', noiseVolume: 0.035, noiseFrequency: 3000 },
-  shotgun: { duration: 95, startFrequency: 190, endFrequency: 70, volume: 0.13, waveform: 'square', noiseVolume: 0.08, noiseFrequency: 1800 },
-};
-const ENEMY_DEFEAT_SOUND: Record<EnemyKind, SoundEffectProfile> = {
-  basic: { duration: 180, startFrequency: 300, endFrequency: 90, volume: 0.1, waveform: 'triangle', noiseVolume: 0, noiseFrequency: 1600 },
-  drone: { duration: 220, startFrequency: 500, endFrequency: 110, volume: 0.12, waveform: 'sawtooth', noiseVolume: 0.015, noiseFrequency: 2400 },
-};
-const MUZZLE_FLASH: Record<WeaponId, { duration: number; points: number; innerRadius: number; outerRadius: number; scale: number; color: number }> = {
-  rifle: { duration: 55, points: 8, innerRadius: 5, outerRadius: 16, scale: 1.35, color: 0x9de9ff },
-  shotgun: { duration: 85, points: 10, innerRadius: 7, outerRadius: 25, scale: 1.6, color: 0xffdd76 },
-};
-const ENEMY_HIT_EFFECT: Record<EnemyKind, EnemyHitEffectProfile> = {
-  basic: { shape: 'circle', duration: 85, radius: 12, color: 0xff7b7b, scale: 1.8 },
-  drone: { shape: 'star', duration: 110, points: 6, innerRadius: 8, outerRadius: 17, color: 0x6d4cff, scale: 2.1 },
-};
-const ENEMY_DEFEAT_SHAKE: Record<EnemyKind, CameraShakeProfile> = {
-  basic: { duration: 190, intensity: 0.0064 },
-  drone: { duration: 190, intensity: 0.0096 },
-};
-const PLAYER_HIT_SHAKE: Record<EnemyKind, CameraShakeProfile> = {
-  basic: { duration: 55, intensity: 0.0008 },
-  drone: { duration: 120, intensity: 0.0032 },
-};
-const PLAYER_HIT_VIGNETTE: Record<EnemyKind, PlayerHitVignetteProfile> = {
-  basic: { duration: 180, opacity: 0.42 },
-  drone: { duration: 240, opacity: 0.58 },
-};
-const ENEMY_IDS = ENEMY_INSTANCE_IDS;
-const INITIAL_ENEMY_IDS: readonly EnemyInstanceId[] = ['basic-1', 'basic-2', 'basic-3', 'basic-4', 'basic-5', 'basic-6', 'drone-1', 'drone-2'];
-const STAGGERED_ENEMIES: readonly { id: EnemyInstanceId; delay: number }[] = [
-  { id: 'basic-7', delay: 3000 },
-  { id: 'basic-8', delay: 6000 },
-  { id: 'basic-9', delay: 9000 },
-  { id: 'drone-3', delay: 12000 },
-];
 const IS_DEV = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV);
 const DEFAULT_ENEMY_INITIAL_COUNT = INITIAL_ENEMY_IDS.length;
 const DEFAULT_ENEMY_STAGGER_INTERVAL_MS = STAGGERED_ENEMIES[0].delay;
@@ -74,21 +17,11 @@ const DEFAULT_ENEMY_SPAWN_CANDIDATE_POOL = 10;
 const MIN_ENEMY_STAGGER_INTERVAL_MS = 500;
 const MAX_ENEMY_STAGGER_INTERVAL_MS = 5000;
 const MAX_ENEMY_SPAWN_CANDIDATE_POOL = ARENA_WIDTH_TILES * ARENA_HEIGHT_TILES;
-const ENEMY_SPAWN_ORDER: readonly EnemyInstanceId[] = [
-  ...INITIAL_ENEMY_IDS,
-  ...STAGGERED_ENEMIES.map(({ id }) => id),
-];
 type EnemySpawnReason = 'initial' | 'stagger' | 'death' | 'recycle' | 'debug';
 type EnemySpawnConfig = {
   initialCount: number;
   staggerIntervalMs: number;
   candidatePool: number;
-};
-type EnemyConfig = {
-  kind: EnemyKind;
-  speed: number;
-  damage: number;
-  cooldown: number;
 };
 type BulletMeta = {
   weapon: WeaponId;
@@ -125,25 +58,6 @@ function enemyRecord<T>(create: (id: EnemyInstanceId) => T): Record<EnemyInstanc
   return Object.fromEntries(ENEMY_IDS.map(id => [id, create(id)])) as Record<EnemyInstanceId, T>;
 }
 
-const ENEMIES = enemyRecord<EnemyConfig>(id => id.startsWith('basic-')
-  ? { kind: 'basic', speed: 68, damage: 8, cooldown: 1500 }
-  : { kind: 'drone', speed: 150, damage: 6, cooldown: 1200 });
-const ENEMY_LABELS = enemyRecord((id) => {
-  const number = id.split('-')[1];
-  return id.startsWith('basic-') ? `基本敵 #${number}` : `高速ドローン #${number}`;
-});
-const DIRECTION_LABELS: Record<SpawnDirection, string> = {
-  up: '上',
-  right: '右',
-  down: '下',
-  left: '左',
-};
-function element<T extends Element>(selector: string): T {
-  const value = document.querySelector<T>(selector);
-  if (!value)
-    throw new Error(`必要なHUD要素が見つかりません: ${selector}`);
-  return value;
-}
 function enemyNumbers(initial = 0): Record<EnemyInstanceId, number> {
   return enemyRecord(() => initial);
 }
@@ -185,6 +99,7 @@ function formatEnemySpawnConfig(config: EnemySpawnConfig): string {
 }
 
 const ENEMY_SPAWN_CONFIG = resolveEnemySpawnConfig();
+const arenaHud = new ArenaHud(formatEnemySpawnConfig(ENEMY_SPAWN_CONFIG));
 
 function sameTile(left: TilePosition, right: TilePosition): boolean {
   return left.x === right.x && left.y === right.y;
@@ -194,39 +109,10 @@ function tileKey(tile: TilePosition): string {
   return `${tile.x},${tile.y}`;
 }
 
-function formatSurvivalTime(remainingMs: number): string {
-  const totalSeconds = Math.ceil(remainingMs / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
-}
-const playerHp = element<HTMLOutputElement>('[data-testid="hp"]');
-const playerHpBar = element<HTMLProgressElement>('[data-testid="hp-bar"]');
-const weaponHud = element<HTMLOutputElement>('[data-testid="weapon"]');
-const ammoHud = element<HTMLOutputElement>('[data-testid="ammo"]');
-const ammoPanelWeaponHud = element<HTMLOutputElement>('[data-testid="ammo-panel-weapon"]');
-const reserveHud = element<HTMLOutputElement>('[data-testid="ammo-reserve"]');
-const ammoBoxCountHud = element<HTMLOutputElement>('[data-testid="ammo-box-count"]');
-const reloadProgressLabel = element<HTMLElement>('[data-testid="reload-progress-label"]');
-const reloadProgressHud = element<HTMLProgressElement>('[data-testid="reload-progress"]');
-const reloadHud = element<HTMLOutputElement>('[data-testid="reload"]');
-const mapSeedHud = element<HTMLOutputElement>('[data-testid="map-seed"]');
-const playerTileHud = element<HTMLOutputElement>('[data-testid="player-tile"]');
-const fps = element<HTMLOutputElement>('[data-testid="fps"]');
-const playerHitVignette = element<HTMLElement>('#player-hit-vignette');
-const survivalTimeHud = element<HTMLOutputElement>('[data-testid="survival-time"]');
-const spawnPhaseHud = element<HTMLOutputElement>('[data-testid="spawn-phase"]');
-spawnPhaseHud.dataset.spawnConfig = formatEnemySpawnConfig(ENEMY_SPAWN_CONFIG);
-const primaryDirectionHud = element<HTMLOutputElement>('[data-testid="primary-direction"]');
-const feedback = element<HTMLElement>('[data-testid="feedback"]');
-const resultPanel = element<HTMLElement>('[data-testid="result"]');
-const defeat = element<HTMLElement>('[data-testid="defeat"]');
-const victory = element<HTMLElement>('[data-testid="victory"]');
-const retry = element<HTMLButtonElement>('[data-testid="retry"]');
-const enemyHp = enemyRecord(id => element<HTMLOutputElement>(`[data-testid="${id}-hp"]`));
 let resetArena: (() => void) | undefined;
 class Arena extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Sprite;
+  private effects!: ArenaEffects;
   private enemies!: Record<EnemyInstanceId, Phaser.Physics.Arcade.Sprite>;
   private silhouettes!: Record<EnemyInstanceId, Phaser.GameObjects.Image>;
   private bullets!: Phaser.Physics.Arcade.Group;
@@ -251,8 +137,6 @@ class Arena extends Phaser.Scene {
   private enemyHitStopUntil = enemyNumbers();
   private knockbackUntil = enemyNumbers();
   private knockbackVelocity = enemyRecord(() => ({ x: 0, y: 0 }));
-  private shakeCooldownUntil = 0;
-  private shakeIntensity = 0;
   private respawnCount = enemyNumbers();
   private recycleCount = enemyNumbers();
   private lastHitAt = enemyNumbers(Number.NEGATIVE_INFINITY);
@@ -262,7 +146,6 @@ class Arena extends Phaser.Scene {
   private debugPlayerInvulnerable = false;
   private paths = {} as Record<EnemyInstanceId, PathState>;
   private enemySpawnTimers = new Map<EnemyInstanceId, Phaser.Time.TimerEvent>();
-  private flashes = new Map<EnemyInstanceId, Phaser.Time.TimerEvent>();
   private reloadTimer: Phaser.Time.TimerEvent | undefined;
   private visibilityTiles = {} as Partial<Record<EnemyInstanceId, { player: TilePosition; enemy: TilePosition }>>;
   constructor() {
@@ -272,6 +155,7 @@ class Arena extends Phaser.Scene {
   create(): void {
     resetArena = () => this.reset();
     this.createTextures();
+    this.effects = new ArenaEffects(this, arenaHud.playerHitVignette);
     this.walls = this.physics.add.staticGroup();
     this.ammoBoxes = this.physics.add.staticGroup();
     this.player = this.physics.add
@@ -315,7 +199,7 @@ class Arena extends Phaser.Scene {
   update(): void {
     if (this.state.defeated || this.state.victory)
       return;
-    fps.value = String(Math.round(this.game.loop.actualFps));
+    arenaHud.updateFps(Math.round(this.game.loop.actualFps));
     this.updateSpawnPhaseHud();
     this.updateSurvival();
     if (this.state.defeated || this.state.victory)
@@ -352,15 +236,14 @@ class Arena extends Phaser.Scene {
     if (this.state.defeated || this.state.victory || !this.enemies[id].active)
       throw new Error(`再出現できない敵です: ${id}`);
     const enemy = this.enemies[id];
-    const hud = enemyHp[id];
     const previous = {
       x: enemy.x,
       y: enemy.y,
-      spawnPhase: hud.dataset.spawnPhase ?? '',
-      primaryDirection: hud.dataset.primaryDirection ?? '',
-      assignedDirection: hud.dataset.assignedDirection ?? '',
-      spawnTile: hud.dataset.spawnTile ?? '',
-      spawnReason: hud.dataset.spawnReason ?? '',
+      spawnPhase: String(enemy.getData('spawnPhase') ?? ''),
+      primaryDirection: String(enemy.getData('primaryDirection') ?? ''),
+      assignedDirection: String(enemy.getData('assignedDirection') ?? ''),
+      spawnTile: String(enemy.getData('spawnTile') ?? ''),
+      spawnReason: String(enemy.getData('spawnReason') ?? ''),
     };
     const previousRespawnCount = this.respawnCount[id];
     enemy.disableBody(true, true);
@@ -437,10 +320,7 @@ class Arena extends Phaser.Scene {
     this.enemyHitStopUntil = enemyNumbers();
     this.knockbackUntil = enemyNumbers();
     this.knockbackVelocity = enemyRecord(() => ({ x: 0, y: 0 }));
-    this.shakeCooldownUntil = 0;
-    this.shakeIntensity = 0;
-    this.cameras.main.resetFX();
-    playerHitVignette.classList.remove('is-active');
+    this.effects.reset();
     this.respawnCount = enemyNumbers();
     this.recycleCount = enemyNumbers();
     this.lastHitAt = enemyNumbers(Number.NEGATIVE_INFINITY);
@@ -484,11 +364,7 @@ class Arena extends Phaser.Scene {
     this.startSurvivalTimer();
     if (IS_DEV)
       (window as Window & { __arenaScene?: Arena }).__arenaScene = this;
-    feedback.textContent = '-';
-    resultPanel.hidden = true;
-    resultPanel.dataset.state = 'playing';
-    defeat.hidden = true;
-    victory.hidden = true;
+    arenaHud.setPlaying();
     this.refreshHud();
   }
 
@@ -601,27 +477,23 @@ class Arena extends Phaser.Scene {
   }
 
   private updateSurvivalHud(): void {
-    survivalTimeHud.value = formatSurvivalTime(remainingSurvivalMs(this.survivalStartedAt, this.time.now));
+    arenaHud.updateSurvival(remainingSurvivalMs(this.survivalStartedAt, this.time.now));
   }
 
   private updateSpawnPhaseHud(): void {
     const phase = spawnPhaseAt(this.survivalStartedAt, this.time.now);
     const primaryDirection = primarySpawnDirection(this.map.seed, phase);
-    spawnPhaseHud.value = String(phase + 1);
-    spawnPhaseHud.dataset.phase = String(phase);
-    primaryDirectionHud.value = DIRECTION_LABELS[primaryDirection];
-    primaryDirectionHud.dataset.direction = primaryDirection;
+    arenaHud.updateSpawnPhase(phase, primaryDirection);
   }
 
   private stopRunTimers(): void {
     this.survivalTimer?.remove(false);
     this.survivalTimer = undefined;
     this.enemySpawnTimers.forEach(timer => timer.remove(false));
-    this.flashes.forEach(timer => timer.remove(false));
     this.ammoBoxRespawns.forEach(timer => timer.remove(false));
     this.enemySpawnTimers.clear();
-    this.flashes.clear();
     this.ammoBoxRespawns.clear();
+    this.effects.stop();
     this.reloadTimer?.remove(false);
     this.reloadTimer = undefined;
     this.recyclingEnemyId = undefined;
@@ -640,9 +512,7 @@ class Arena extends Phaser.Scene {
           obscuredTileCount += 1;
         }
     this.visibilityMaskPlayerTile = { ...playerTile };
-    playerTileHud.dataset.visibilityMaskAlpha = String(this.visibilityMask.alpha);
-    playerTileHud.dataset.obscuredTileCount = String(obscuredTileCount);
-    playerTileHud.dataset.visibilityPlayerTile = `${playerTile.x},${playerTile.y}`;
+    arenaHud.updateVisibilityMask(this.visibilityMask.alpha, obscuredTileCount, playerTile);
   }
 
   private moveEnemy(id: EnemyInstanceId): void {
@@ -831,7 +701,7 @@ class Arena extends Phaser.Scene {
       const enemyTile = this.tile(enemy);
       const previous = this.visibilityTiles[id];
       if (!force && previous && sameTile(previous.player, playerTile) && sameTile(previous.enemy, enemyTile)) {
-        const visibility = enemyHp[id].dataset.visibility as EnemyVisibility;
+        const visibility = this.currentEnemyVisibility(id);
         this.syncEnemyHud(id, visibility);
         this.updateHiddenRecycle(id, visibility, playerTile, enemyTile);
         return;
@@ -906,25 +776,32 @@ class Arena extends Phaser.Scene {
     this.syncEnemyHud(id, 'hidden');
   }
 
+  private currentEnemyVisibility(id: EnemyInstanceId): EnemyVisibility {
+    if (this.enemies[id].visible)
+      return 'normal';
+    return this.silhouettes[id].visible ? 'boundary' : 'hidden';
+  }
+
   private syncEnemyHud(id: EnemyInstanceId, visibility: EnemyVisibility): void {
     const enemy = this.enemies[id];
     const silhouette = this.silhouettes[id];
-    const hud = enemyHp[id];
-    hud.dataset.stableId = String(enemy.getData('stableId') ?? id);
-    hud.dataset.spawnPhase = String(enemy.getData('spawnPhase') ?? '');
-    hud.dataset.primaryDirection = String(enemy.getData('primaryDirection') ?? '');
-    hud.dataset.assignedDirection = String(enemy.getData('assignedDirection') ?? '');
-    hud.dataset.spawnTile = String(enemy.getData('spawnTile') ?? '');
-    hud.dataset.spawnReason = String(enemy.getData('spawnReason') ?? '');
-    hud.dataset.active = String(enemy.active);
-    hud.dataset.recycleCount = String(this.recycleCount[id]);
-    hud.dataset.visibility = visibility;
-    hud.dataset.spriteTexture = enemy.texture.key;
-    hud.dataset.spriteAlpha = String(enemy.alpha);
-    hud.dataset.spriteVisible = String(enemy.visible);
-    hud.dataset.silhouetteTexture = silhouette.texture.key;
-    hud.dataset.silhouetteAlpha = String(silhouette.alpha);
-    hud.dataset.silhouetteVisible = String(silhouette.visible);
+    arenaHud.updateEnemy(id, {
+      stableId: String(enemy.getData('stableId') ?? id),
+      spawnPhase: String(enemy.getData('spawnPhase') ?? ''),
+      primaryDirection: String(enemy.getData('primaryDirection') ?? ''),
+      assignedDirection: String(enemy.getData('assignedDirection') ?? ''),
+      spawnTile: String(enemy.getData('spawnTile') ?? ''),
+      spawnReason: String(enemy.getData('spawnReason') ?? ''),
+      active: enemy.active,
+      recycleCount: this.recycleCount[id],
+      visibility,
+      spriteTexture: enemy.texture.key,
+      spriteAlpha: enemy.alpha,
+      spriteVisible: enemy.visible,
+      silhouetteTexture: silhouette.texture.key,
+      silhouetteAlpha: silhouette.alpha,
+      silhouetteVisible: silhouette.visible,
+    });
   }
 
   private changeWeapon(weapon: WeaponId): void {
@@ -934,7 +811,7 @@ class Arena extends Phaser.Scene {
     if (interrupted)
       this.stopReload();
     this.state = selectWeapon(this.state, weapon);
-    feedback.textContent = interrupted ? `リロード中断: ${WEAPONS[weapon].label}` : `武器: ${WEAPONS[weapon].label}`;
+    arenaHud.setFeedback(interrupted ? `リロード中断: ${WEAPONS[weapon].label}` : `武器: ${WEAPONS[weapon].label}`);
     this.refreshHud();
   }
 
@@ -944,22 +821,22 @@ class Arena extends Phaser.Scene {
     const weapon = this.state.weapon;
     const next = startReload(this.state);
     if (next === this.state) {
-      feedback.textContent = this.state.reloading !== null
+      arenaHud.setFeedback(this.state.reloading !== null
         ? 'リロード中です'
         : this.state.reserve[weapon] <= 0
           ? '予備弾薬がありません。弾薬箱を探してください'
-          : '弾倉は満タンです';
+          : '弾倉は満タンです');
       return;
     }
     this.state = next;
     const generation = this.generation;
-    feedback.textContent = `リロード中: ${WEAPONS[weapon].label}`;
+    arenaHud.setFeedback(`リロード中: ${WEAPONS[weapon].label}`);
     this.reloadTimer = this.time.delayedCall(WEAPONS[weapon].reloadMs, () => {
       if (generation !== this.generation || this.state.defeated || this.state.victory)
         return;
       this.state = completeReload(this.state, weapon);
       this.reloadTimer = undefined;
-      feedback.textContent = `リロード完了: ${WEAPONS[weapon].label}`;
+      arenaHud.setFeedback(`リロード完了: ${WEAPONS[weapon].label}`);
       this.refreshHud();
     });
     this.refreshHud();
@@ -986,15 +863,13 @@ class Arena extends Phaser.Scene {
     this.state = result.state;
     if (!result.fired) {
       if (this.state.reloading !== null)
-        feedback.textContent = 'リロード中です';
+        arenaHud.setFeedback('リロード中です');
       else if (this.state.ammo[this.state.weapon] === 0)
-        feedback.textContent = '弾切れ: Rでリロード';
+        arenaHud.setFeedback('弾切れ: Rでリロード');
       return;
     }
-    this.shakeCamera(WEAPON_FIRE_SHAKE[weaponId]);
-    this.playSoundEffect(FIRE_SOUND[weaponId]);
     const base = Phaser.Math.Angle.Between(this.player.x, this.player.y, pointer.worldX, pointer.worldY);
-    this.playMuzzleFlash(weaponId, base);
+    this.effects.playWeaponFire(this.player, weaponId, base);
     for (let index = 0; index < weapon.pellets; index += 1) {
       const bullet = this.bullets.get(this.player.x, this.player.y, `bullet-${this.state.weapon}`) as Phaser.Physics.Arcade.Sprite | null;
       if (!bullet)
@@ -1021,15 +896,8 @@ class Arena extends Phaser.Scene {
     this.state = damageEnemy(this.state, id, result.amount);
     const defeated = isEnemyDefeated(this.state, id);
     this.startEnemyImpact(id, data.weapon, defeated);
-    feedback.textContent = `${result.resisted ? '耐性' : '命中'}: ${WEAPONS[data.weapon].label} → ${ENEMY_LABELS[id]}`;
-    enemy.setTint(16777215);
-    const generation = this.generation;
-    this.flashes.get(id)?.remove(false);
-    this.flashes.set(id, this.time.delayedCall(90, () => {
-      if (generation === this.generation)
-        enemy.clearTint();
-      this.flashes.delete(id);
-    }));
+    arenaHud.setFeedback(`${result.resisted ? '耐性' : '命中'}: ${WEAPONS[data.weapon].label} → ${ENEMY_LABELS[id]}`);
+    this.effects.flashEnemy(enemy);
     if (data.knockback > 0) {
       this.knockbackVelocity[id] = {
         x: data.directionX * data.knockback,
@@ -1078,124 +946,13 @@ class Arena extends Phaser.Scene {
     const duration = defeated ? ENEMY_DEFEAT_HIT_STOP_MS[weapon] : ENEMY_HIT_STOP_MS[weapon];
     this.enemyHitStopUntil[id] = Math.max(this.enemyHitStopUntil[id], this.time.now + duration);
     this.enemies[id].setVelocity(0, 0);
-    this.playEnemyHitEffect(id);
-    if (defeated) {
-      this.shakeCamera(ENEMY_DEFEAT_SHAKE[ENEMIES[id].kind]);
-      this.playSoundEffect(ENEMY_DEFEAT_SOUND[ENEMIES[id].kind]);
-    } else if (weapon === 'shotgun')
-      this.shakeCamera(SHOTGUN_SHAKE);
-  }
-
-  private playSoundEffect(effect: SoundEffectProfile): void {
-    if (!(this.sound instanceof Phaser.Sound.WebAudioSoundManager))
-      return;
-    try {
-      const manager = this.sound;
-      const context = manager.context;
-      if (context.state === 'suspended')
-        context.resume().catch(() => undefined);
-      const now = context.currentTime;
-      const endAt = now + effect.duration / 1000;
-      const gain = context.createGain();
-      gain.gain.setValueAtTime(effect.volume, now);
-      gain.gain.exponentialRampToValueAtTime(0.0001, endAt);
-      gain.connect(manager.destination);
-      const oscillator = context.createOscillator();
-      oscillator.type = effect.waveform;
-      oscillator.frequency.setValueAtTime(effect.startFrequency, now);
-      oscillator.frequency.exponentialRampToValueAtTime(effect.endFrequency, endAt);
-      oscillator.connect(gain);
-      oscillator.start(now);
-      oscillator.stop(endAt);
-      if (effect.noiseVolume === 0)
-        return;
-      const noise = context.createBufferSource();
-      const noiseBuffer = context.createBuffer(1, Math.ceil(context.sampleRate * effect.duration / 1000), context.sampleRate);
-      const samples = noiseBuffer.getChannelData(0);
-      for (let index = 0; index < samples.length; index += 1)
-        samples[index] = Math.random() * 2 - 1;
-      const noiseFilter = context.createBiquadFilter();
-      noiseFilter.type = 'lowpass';
-      noiseFilter.frequency.setValueAtTime(effect.noiseFrequency, now);
-      const noiseGain = context.createGain();
-      noiseGain.gain.setValueAtTime(effect.noiseVolume, now);
-      noiseGain.gain.exponentialRampToValueAtTime(0.0001, endAt);
-      noise.buffer = noiseBuffer;
-      noise.connect(noiseFilter).connect(noiseGain).connect(manager.destination);
-      noise.start(now);
-      noise.stop(endAt);
-    } catch {
-      return;
-    }
-  }
-
-  private playMuzzleFlash(weapon: WeaponId, angle: number): void {
-    const flash = MUZZLE_FLASH[weapon];
-    const distance = this.player.displayWidth / 2 + flash.outerRadius;
-    const muzzle = this.add.star(
-      this.player.x + Math.cos(angle) * distance,
-      this.player.y + Math.sin(angle) * distance,
-      flash.points,
-      flash.innerRadius,
-      flash.outerRadius,
-      flash.color,
-      0.9,
-    ).setRotation(angle + Math.PI / 2).setDepth(4);
-    this.tweens.add({
-      targets: muzzle,
-      scale: flash.scale,
-      alpha: 0,
-      duration: flash.duration,
-      ease: 'Quad.Out',
-      onComplete: () => muzzle.destroy(),
-    });
-  }
-
-  private playEnemyHitEffect(id: EnemyInstanceId): void {
-    const effect = ENEMY_HIT_EFFECT[ENEMIES[id].kind];
-    const enemy = this.enemies[id];
-    const hit = effect.shape === 'circle'
-      ? this.add.circle(enemy.x, enemy.y, effect.radius, effect.color, 0.25)
-      : this.add.star(enemy.x, enemy.y, effect.points, effect.innerRadius, effect.outerRadius, effect.color, 0.25);
-    hit
-      .setStrokeStyle(2, effect.color, 0.9)
-      .setDepth(4);
-    this.tweens.add({
-      targets: hit,
-      scaleX: effect.scale,
-      scaleY: effect.scale,
-      alpha: 0,
-      duration: effect.duration,
-      ease: 'Quad.Out',
-      onComplete: () => hit.destroy(),
-    });
+    this.effects.playEnemyImpact(this.enemies[id], ENEMIES[id].kind, weapon, defeated);
   }
 
   private startPlayerImpact(kind: EnemyKind): void {
     this.playerHitStopUntil = Math.max(this.playerHitStopUntil, this.time.now + PLAYER_HIT_STOP_MS[kind]);
     this.player.setVelocity(0, 0);
-    this.shakeCamera(PLAYER_HIT_SHAKE[kind]);
-    this.playPlayerHitVignette(kind);
-  }
-
-  private playPlayerHitVignette(kind: EnemyKind): void {
-    const vignette = PLAYER_HIT_VIGNETTE[kind];
-    playerHitVignette.style.setProperty('--player-hit-vignette-duration', `${vignette.duration}ms`);
-    playerHitVignette.style.setProperty('--player-hit-vignette-opacity', String(vignette.opacity));
-    playerHitVignette.classList.remove('is-active');
-    playerHitVignette.getBoundingClientRect();
-    playerHitVignette.classList.add('is-active');
-  }
-
-  private shakeCamera(effect: CameraShakeProfile): void {
-    const force = effect.intensity > this.shakeIntensity || this.time.now < this.shakeCooldownUntil;
-    if (force && effect.intensity <= this.shakeIntensity)
-      return;
-    if (!force)
-      this.shakeIntensity = 0;
-    this.shakeCooldownUntil = this.time.now + CAMERA_SHAKE_COOLDOWN_MS;
-    this.shakeIntensity = effect.intensity;
-    this.cameras.main.shake(effect.duration, effect.intensity, force);
+    this.effects.playPlayerImpact(kind);
   }
 
   private enterTerminal(result: 'defeat' | 'victory'): void {
@@ -1208,11 +965,7 @@ class Arena extends Phaser.Scene {
     });
     this.disableAllBullets();
     this.physics.pause();
-    resultPanel.hidden = false;
-    resultPanel.dataset.state = result;
-    defeat.hidden = result !== 'defeat';
-    victory.hidden = result !== 'victory';
-    retry.focus();
+    arenaHud.showResult(result);
     this.refreshHud();
   }
 
@@ -1246,7 +999,7 @@ class Arena extends Phaser.Scene {
         nextSeed(this.map.seed + current.respawnCount + current.seedOffset),
       );
       if (!tile) {
-        feedback.textContent = '弾薬箱の再配置先がありません';
+        arenaHud.setFeedback('弾薬箱の再配置先がありません');
         this.refreshHud();
         return;
       }
@@ -1269,7 +1022,7 @@ class Arena extends Phaser.Scene {
     this.ammoBoxes.remove(box, true, true);
     state.currentTile = null;
     this.scheduleAmmoBoxRespawn(boxId);
-    feedback.textContent = '弾薬箱から補給しました';
+    arenaHud.setFeedback('弾薬箱から補給しました');
     this.refreshHud();
   }
 
@@ -1301,55 +1054,43 @@ class Arena extends Phaser.Scene {
   }
 
   private updateTileHud(): void {
-    const tile = this.tile(this.player);
-    playerTileHud.value = `${tile.x},${tile.y}`;
+    arenaHud.updateTile(this.tile(this.player));
   }
 
   private updateReloadProgressHud(): void {
     const isReloading = this.state.reloading !== null && this.reloadTimer !== undefined;
-    reloadProgressLabel.hidden = !isReloading;
-    reloadProgressHud.hidden = !isReloading;
-    if (!isReloading) {
-      reloadProgressHud.value = 0;
-      reloadProgressHud.removeAttribute('aria-valuetext');
-      return;
-    }
-    const progress = Phaser.Math.Clamp(this.reloadTimer!.getProgress(), 0, 1);
-    reloadProgressHud.value = progress;
-    reloadProgressHud.setAttribute('aria-valuetext', String(Math.round(progress * 100)) + '%');
+    arenaHud.updateReloadProgress({
+      active: isReloading,
+      progress: isReloading ? Phaser.Math.Clamp(this.reloadTimer!.getProgress(), 0, 1) : 0,
+    });
   }
 
   private refreshHud(): void {
-    playerHp.value = String(this.state.playerHp);
-    playerHpBar.value = this.state.playerHp;
-    ENEMY_IDS.forEach((id) => {
-      enemyHp[id].value = String(this.state.enemies[id].hp);
-    });
-    weaponHud.value = WEAPONS[this.state.weapon].label;
-    const weapon = WEAPONS[this.state.weapon];
-    ammoPanelWeaponHud.value = weapon.label;
-    ammoHud.value = this.state.ammo[this.state.weapon] + '/' + weapon.magazineSize;
-    reserveHud.value = '予備 ' + this.state.reserve[this.state.weapon] + '/' + weapon.reserveMax;
-    ammoHud.dataset.magazine = String(this.state.ammo[this.state.weapon]);
-    ammoHud.dataset.magazineCapacity = String(weapon.magazineSize);
-    reserveHud.dataset.reserve = String(this.state.reserve[this.state.weapon]);
-    reserveHud.dataset.reserveCapacity = String(weapon.reserveMax);
-    ammoBoxCountHud.value = String(this.ammoBoxes.countActive(true));
-    ammoBoxCountHud.dataset.activeTiles = this.activeAmmoBoxKeys().join('|');
-    ammoBoxCountHud.dataset.activeBoxes = this.activeAmmoBoxEntries().join('|');
-    ammoBoxCountHud.dataset.offscreenBoxes = this.offscreenAmmoBoxIds().join('|');
     const pendingBoxIds = [...this.ammoBoxRespawns.keys()];
-    ammoBoxCountHud.dataset.respawnBoxes = pendingBoxIds.join('|');
-    ammoBoxCountHud.dataset.respawnTiles = pendingBoxIds.map((boxId) => {
+    const pendingAmmoBoxOriginTiles = pendingBoxIds.map((boxId) => {
       const state = this.ammoBoxStates.get(boxId);
       return state ? tileKey(state.originTile) : '';
-    }).filter(key => key.length > 0).join('|');
-    reloadHud.value = this.state.reloading === null ? '待機' : `リロード中: ${WEAPONS[this.state.reloading].label}`;
-    this.updateReloadProgressHud();
-    this.updateSurvivalHud();
-    this.updateSpawnPhaseHud();
-    mapSeedHud.value = String(this.map.seed);
-    this.updateTileHud();
+    }).filter(key => key.length > 0);
+    const isReloading = this.state.reloading !== null && this.reloadTimer !== undefined;
+    const phase = spawnPhaseAt(this.survivalStartedAt, this.time.now);
+    arenaHud.refresh({
+      state: this.state,
+      ammoBoxCount: this.ammoBoxes.countActive(true),
+      activeAmmoBoxTiles: this.activeAmmoBoxKeys(),
+      activeAmmoBoxEntries: this.activeAmmoBoxEntries(),
+      offscreenAmmoBoxIds: this.offscreenAmmoBoxIds(),
+      pendingAmmoBoxIds: pendingBoxIds,
+      pendingAmmoBoxOriginTiles,
+      reload: {
+        active: isReloading,
+        progress: isReloading ? Phaser.Math.Clamp(this.reloadTimer!.getProgress(), 0, 1) : 0,
+      },
+      remainingSurvivalMs: remainingSurvivalMs(this.survivalStartedAt, this.time.now),
+      spawnPhase: phase,
+      primaryDirection: primarySpawnDirection(this.map.seed, phase),
+      mapSeed: this.map.seed,
+      playerTile: this.tile(this.player),
+    });
   }
 
   private createTextures(): void {
@@ -1436,7 +1177,7 @@ class Arena extends Phaser.Scene {
   }
 }
 new Phaser.Game({ type: Phaser.AUTO, parent: 'game', width: WIDTH, height: HEIGHT, backgroundColor: '#101827', physics: { default: 'arcade', arcade: { debug: false } }, scene: Arena });
-retry.addEventListener('click', () => resetArena?.());
+arenaHud.onRetry(() => resetArena?.());
 window.addEventListener('keydown', (event) => {
   if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ', 'w', 'a', 's', 'd', 'r', '1', '2'].includes(event.key.toLowerCase()))
     event.preventDefault();
