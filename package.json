@@ -5,7 +5,7 @@
   "version": "0.0.0",
   "packageManager": "pnpm@10.33.2",
   "engines": {
-    "node": ">=22 <23",
+    "node": ">=22.22.2 <23",
     "pnpm": "10.33.2"
   },
   "scripts": {
@@ -31,6 +31,7 @@
     "@stylistic/eslint-plugin": "5.10.0",
     "codex-lsp-bridge": "0.3.3",
     "eslint": "10.8.0",
+    "eslint-plugin-jsdoc": "64.0.1",
     "typescript": "6.0.3",
     "typescript-eslint": "8.65.0",
     "typescript-language-server": "5.3.0",

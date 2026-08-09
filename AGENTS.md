@@ -43,6 +43,7 @@ main -> develop -> feature/<topic>
 - `main` はリリース用、`develop` は開発統合用とする。
 - 作業は `feature/<topic>` ブランチで行い、原則として `develop` へPRを作る。
 - マージはユーザー承認後にのみ行う。
+- 作業sliceの品質gateが通ったら、意図した変更だけを親が追加許可なしにstage・commitする。push、PR作成、merge、Issueクローズ、顧客承認は別途明示確認を受ける。
 - PRには関連Issue、変更理由、検証結果、既知の制約を記載する。
 - commit messageは `<type>(<scope>): <日本語の説明>` とする。
 - `type`は`chore`、`docs`、`feat`、`fix`、`test`、`refactor`など変更目的を表す語、`scope`は`project`、`frontend`、`backend`、具体的なservice名など変更対象を表す語にする。
@@ -78,7 +79,7 @@ Prototype standardでmatrix、release-readiness、evidenceを作成・更新す�
 `.codex/config.toml`と`.codex/agents/`はtrusted projectだけで有効になる。変更後は新しいtrusted taskを開始し、`terra_max_planner_reviewer`と`terra_max_writer`が使えることを確認してから依存する。最大sub-agent数は3とし、将来のproject sub-agentは`gpt-5.6-terra` / `max`を使う。SOL root orchestrator（`gpt-5.6-sol`）はtask / Issue / Git / GitHub / agent orchestrationを担当し、Terra Max planner/reviewerとsole writerはplan / write / review / unitを担当する。`gpt-5.6-terra`が使えない場合の別モデルへのfallbackはユーザー確認後だけ行う。
 
 - `terra_max_planner_reviewer`はread-onlyで、実装前のplanと最終diff reviewを一つのcheckpointとして担当する。workspace、GitHub、Gitの書換えはしない。
-- `terra_max_writer`はworkspace-writeの唯一のwriterであり、writeと対象unitを担当する。同じtaskで他のwriterを並行起動せず、stage、commit、push、merge、顧客承認は親の明示権限なしに行わない。
+- `terra_max_writer`はworkspace-writeの唯一のwriterであり、writeと対象unitを担当する。同じtaskで他のwriterを並行起動せず、stage・commitは親が品質gate後に自動で行い、writer自身は行わない。push、merge、顧客承認は親の明示権限なしに行わない。
 - Prototype standardの標準コード変更は、Terra Max planner/reviewerのplan → Terra Max sole writerのwriteと対象unit → Terra Max planner/reviewerのfinal diff reviewを原則とする。軽微なfinding修正後は変更箇所だけを再reviewし、厳格変更、重大finding、Definition of Delivery変更後は独立reviewを広げる。Publish-onlyではsub-agentを使わない。
 - handoffにはIssue / Definition of Delivery、対象ファイル、現在diff、直近gate結果、停止条件だけを渡す。長い履歴やraw logを複製しない。
 - 通常の`apply_patch`が一度実際に書込み失敗したと確認した場合だけ、対象パスを検証したcandidate、SHA-256、backup、原子的置換を使う。helperを先回りして追加せず、backupは検証とreviewが終わるまで保持する。

@@ -25,16 +25,31 @@ const FALLBACK_ROOM_SLOTS = [
   { column: 0, row: 2 },
 ] as const;
 
+/** アリーナを構成する壁または床のtile種別。 */
 export type Tile = 'wall' | 'floor';
+
+/** 敵spawnを割り当てる四方向。 */
 export type SpawnDirection = (typeof SPAWN_DIRECTIONS)[number];
 
+/** tile座標を表す整数位置。 */
 export type TilePosition = { x: number; y: number };
+
+/** tile単位の表示領域を表す境界矩形。 */
 export type TileRect = { left: number; top: number; right: number; bottom: number };
+
+/** 生成された部屋の左上位置と大きさ。 */
 export type Room = { x: number; y: number; width: number; height: number };
+
+/** 二つの部屋を結ぶ直交通路の定義。 */
 export type Corridor = { from: TilePosition; to: TilePosition; width: number; horizontalFirst: boolean };
+
+/** spawn遅延計算に使う敵種別。 */
 export type ArenaEnemyKind = 'basic' | 'drone';
+
+/** プレイヤーから見た敵の表示状態。 */
 export type EnemyVisibility = 'normal' | 'boundary' | 'hidden';
 
+/** 生成済みアリーナの地形、開始位置、再現用seed。 */
 export type ArenaMap = {
   seed: number;
   width: number;
@@ -47,6 +62,7 @@ export type ArenaMap = {
   start: TilePosition;
 };
 
+/** 通常のspawn候補を選ぶためのプレイヤー、表示領域、占有位置。 */
 export type SpawnRequest = {
   player: TilePosition;
   viewport: TileRect;
@@ -54,25 +70,54 @@ export type SpawnRequest = {
   direction?: SpawnDirection;
 };
 
+/** 敵spawnで必須にする方向を含む候補条件。 */
 export type EnemySpawnRequest = Omit<SpawnRequest, 'direction'> & {
   direction: SpawnDirection;
 };
 
+/** 基本敵がプレイヤーへ接近するときの役割。 */
 export type BasicApproachRole = 'direct' | 'left' | 'right';
 
+/**
+ * 経過時間から現在のspawn phase番号を求める。
+ *
+ * @param startedAt ランを開始した時刻。
+ * @param now 現在時刻。
+ * @returns 0始まりのspawn phase番号。
+ */
 export function spawnPhaseAt(startedAt: number, now: number): number {
   return Math.floor(Math.max(0, now - startedAt) / SPAWN_PHASE_MS);
 }
 
+/**
+ * seedとphaseから主spawn方向を決定する。
+ *
+ * @param seed アリーナ生成に使うseed。
+ * @param phase 0始まりのspawn phase番号。
+ * @returns 四方向のうち選ばれた主方向。
+ */
 export function primarySpawnDirection(seed: number, phase: number): SpawnDirection {
   return SPAWN_DIRECTIONS[((seed >>> 0) + Math.max(0, Math.floor(phase))) % SPAWN_DIRECTIONS.length];
 }
 
+/**
+ * 安定した敵枠へ主方向または反対方向を割り当てる。
+ *
+ * @param primary 主spawn方向。
+ * @param stableSlot 0始まりの安定した敵枠番号。
+ * @returns 割り当てられたspawn方向。
+ */
 export function spawnDirectionForSlot(primary: SpawnDirection, stableSlot: number): SpawnDirection {
   if (Math.max(0, Math.floor(stableSlot)) % 4 !== 3) return primary;
   return SPAWN_DIRECTIONS[(SPAWN_DIRECTIONS.indexOf(primary) + 2) % SPAWN_DIRECTIONS.length];
 }
 
+/**
+ * world座標の表示範囲をtile境界へ変換する。
+ *
+ * @param view world座標で表した表示範囲。
+ * @returns アリーナ内へ丸めたtile境界。
+ */
 export function viewportTileRect(view: { left: number; top: number; right: number; bottom: number }): TileRect {
   return {
     left: Math.max(0, Math.floor(view.left / TILE_SIZE)),
@@ -95,10 +140,22 @@ class SeededRandom {
   }
 }
 
+/**
+ * 次の疑似乱数seedを決定的に生成する。
+ *
+ * @param seed 現在のseed。
+ * @returns unsigned 32-bit整数へ正規化した次のseed。
+ */
 export function nextSeed(seed: number): number {
   return (Math.imul(seed >>> 0, 1_664_525) + 1_013_904_223) >>> 0;
 }
 
+/**
+ * 到達可能な通常地形またはfallback地形を生成する。
+ *
+ * @param seed 生成を再現する初期seed。
+ * @returns 到達可能性を満たすアリーナ地形。
+ */
 export function generateArenaMap(seed: number): ArenaMap {
   let candidateSeed = seed >>> 0;
   for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -109,13 +166,24 @@ export function generateArenaMap(seed: number): ArenaMap {
   return generateFallbackArenaMap(seed);
 }
 
-/** 通常生成の再試行上限に達したときの連結済み地形を返す。 */
+/**
+ * 通常生成の再試行上限に達したときの連結済み地形を返す。
+ *
+ * @param seed 生成を再現する初期seed。
+ * @returns fallback配置で生成した到達可能なアリーナ地形。
+ */
 export function generateFallbackArenaMap(seed: number): ArenaMap {
   const map = generateCandidate(seed >>> 0, seed >>> 0, true);
   if (!map || !allFloorsReachable(map)) throw new Error('fallbackアリーナを生成できません。');
   return map;
 }
 
+/**
+ * 現在の地形と異なる次のアリーナ地形を生成する。
+ *
+ * @param current 現在表示しているアリーナ地形。
+ * @returns tile配置が異なる次のアリーナ地形。
+ */
 export function generateNextArenaMap(current: ArenaMap): ArenaMap {
   let seed = nextSeed(current.seed);
   for (let attempt = 0; attempt < 64; attempt += 1) {
@@ -126,6 +194,13 @@ export function generateNextArenaMap(current: ArenaMap): ArenaMap {
   throw new Error('異なるアリーナを生成できません。');
 }
 
+/**
+ * 指定位置がアリーナ内の床tileかを判定する。
+ *
+ * @param map 判定対象のアリーナ地形。
+ * @param position 判定するtile座標。
+ * @returns 範囲内の床tileなら真。
+ */
 export function isFloor(map: ArenaMap, position: TilePosition): boolean {
   return position.x >= 0
     && position.y >= 0
@@ -134,7 +209,14 @@ export function isFloor(map: ArenaMap, position: TilePosition): boolean {
     && map.tiles[position.y][position.x] === 'floor';
 }
 
-/** プレイヤーから対象tileへの見通しを、cornerを含む全通過tileで判定する。 */
+/**
+ * プレイヤーから対象tileへの見通しを、cornerを含む全通過tileで判定する。
+ *
+ * @param map 判定対象のアリーナ地形。
+ * @param player 見通しの起点となるプレイヤー位置。
+ * @param target 見通しを判定する対象位置。
+ * @returns 壁に遮られない見通しがあれば真。
+ */
 export function hasLineOfSight(
   map: ArenaMap,
   player: TilePosition,
@@ -145,7 +227,14 @@ export function hasLineOfSight(
   return line.every((position, index) => index === line.length - 1 || map.tiles[position.y][position.x] !== 'wall');
 }
 
-/** 敵floorの通常表示、壁際の共通silhouette、非表示を純粋に決める。 */
+/**
+ * 敵floorの通常表示、壁際の共通silhouette、非表示を純粋に決める。
+ *
+ * @param map 判定対象のアリーナ地形。
+ * @param player 視認するプレイヤー位置。
+ * @param enemy 表示を判定する敵位置。
+ * @returns 敵に適用する表示状態。
+ */
 export function enemyVisibility(
   map: ArenaMap,
   player: TilePosition,
@@ -158,6 +247,15 @@ export function enemyVisibility(
     : 'hidden';
 }
 
+/**
+ * 床tileだけを通る最短経路を幅優先探索で求める。
+ *
+ * @param map 探索対象のアリーナ地形。
+ * @param start 経路の始点。
+ * @param target 経路の終点。
+ * @param tieBreakSeed 同距離候補の順序を決める任意seed。
+ * @returns 始点から終点までのtile列。到達不能なら空配列。
+ */
 export function findPath(
   map: ArenaMap,
   start: TilePosition,
@@ -190,11 +288,25 @@ export function findPath(
   return path.reverse();
 }
 
+/**
+ * すべての床tileが開始位置から到達可能かを判定する。
+ *
+ * @param map 判定対象のアリーナ地形。
+ * @returns 全床tileが到達可能なら真。
+ */
 export function allFloorsReachable(map: ArenaMap): boolean {
   const distances = pathDistances(map, map.start);
   return distances.size > 0 && floorTiles(map).every(position => distances.has(positionKey(position)));
 }
 
+/**
+ * 弾薬箱を置く重複しない床tileを決定的に選ぶ。
+ *
+ * @param map 選択対象のアリーナ地形。
+ * @param occupied すでに使用中として除外するtile座標。
+ * @param count 選択する弾薬箱の数。
+ * @returns seed順で選んだ弾薬箱のtile座標。
+ */
 export function selectAmmoBoxTiles(
   map: ArenaMap,
   occupied: readonly TilePosition[] = [],
@@ -211,6 +323,14 @@ export function selectAmmoBoxTiles(
     .slice(0, Math.max(0, count));
 }
 
+/**
+ * 表示範囲外を優先して通常のspawn tileを選ぶ。
+ *
+ * @param map 選択対象のアリーナ地形。
+ * @param request プレイヤー、表示範囲、占有位置の条件。
+ * @param seed 候補から一つを選ぶ決定用seed。
+ * @returns 選択したtile座標。候補がなければnull。
+ */
 export function selectSpawnTile(
   map: ArenaMap,
   request: SpawnRequest,
@@ -238,7 +358,15 @@ export function selectSpawnTile(
   })[0];
 }
 
-/** 敵だけが使う、可視位置へfallbackしない厳格なspawn選択。 */
+/**
+ * 敵だけが使う、可視位置へfallbackしない厳格なspawn選択。
+ *
+ * @param map 選択対象のアリーナ地形。
+ * @param request 敵spawnの必須方向を含む候補条件。
+ * @param seed 候補poolから一つを選ぶ決定用seed。
+ * @param candidatePoolSize 近距離候補として比較する最大数。
+ * @returns 選択した非可視tile座標。候補がなければnull。
+ */
 export function selectEnemySpawnTile(
   map: ArenaMap,
   request: EnemySpawnRequest,
@@ -277,6 +405,15 @@ export function selectEnemySpawnTile(
   return pool[(seed >>> 0) % pool.length].position;
 }
 
+/**
+ * 撃破後の敵再出現遅延を決定的に求める。
+ *
+ * @param kind 再出現する敵種別。
+ * @param enemyId 安定した敵識別子。
+ * @param respawnCount その敵の再出現回数。
+ * @param seed アリーナ生成に使うseed。
+ * @returns 敵種別と回数に対応する遅延ミリ秒。
+ */
 export function respawnDelayFor(
   kind: ArenaEnemyKind,
   enemyId: string,
@@ -287,14 +424,36 @@ export function respawnDelayFor(
   return deterministicRange(seed, `death:${enemyId}:${respawnCount}`, minimum, maximum);
 }
 
+/**
+ * 非表示の敵を再配置するまでの閾値を決定的に求める。
+ *
+ * @param enemyId 安定した敵識別子。
+ * @param recycleCount その敵の再配置回数。
+ * @param seed アリーナ生成に使うseed。
+ * @returns 非表示時間の閾値ミリ秒。
+ */
 export function hiddenRecycleThresholdFor(enemyId: string, recycleCount: number, seed: number): number {
   return deterministicRange(seed, `hidden:${enemyId}:${recycleCount}`, 8000, 12000);
 }
 
+/**
+ * 非表示の敵を再配置する待機時間を決定的に求める。
+ *
+ * @param enemyId 安定した敵識別子。
+ * @param recycleCount その敵の再配置回数。
+ * @param seed アリーナ生成に使うseed。
+ * @returns 再配置を開始するまでの遅延ミリ秒。
+ */
 export function recycleDelayFor(enemyId: string, recycleCount: number, seed: number): number {
   return deterministicRange(seed, `recycle:${enemyId}:${recycleCount}`, 2000, 4000);
 }
 
+/**
+ * 基本敵の安定枠から接近役割を決める。
+ *
+ * @param enemyId 判定する敵識別子。
+ * @returns 基本敵の接近役割。対象外の識別子ならnull。
+ */
 export function basicApproachRoleFor(enemyId: string): BasicApproachRole | null {
   const match = /^basic-([1-9])$/.exec(enemyId);
   if (!match) return null;
@@ -564,7 +723,13 @@ function neighbours(position: TilePosition): TilePosition[] {
   ];
 }
 
-/** seed省略時は従来の4近傍順をそのまま返す。 */
+/**
+ * seed省略時は従来の4近傍順をそのまま返す。
+ *
+ * @param position 隣接tileを求める基準位置。
+ * @param tieBreakSeed 同距離候補の順序を変える任意seed。
+ * @returns 探索順に並べた隣接tile。
+ */
 function orderedPathNeighbours(position: TilePosition, tieBreakSeed?: number): TilePosition[] {
   const adjacent = neighbours(position);
   if (tieBreakSeed === undefined) return adjacent;
