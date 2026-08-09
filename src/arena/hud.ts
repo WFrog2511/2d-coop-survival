@@ -1,6 +1,6 @@
 import type { EnemyVisibility, SpawnDirection, TilePosition } from '../arena-map';
 import { DIRECTION_LABELS, ENEMY_IDS } from '../game-data';
-import { STABLE_ENEMY_SLOT_COUNT, WEAPONS, activeEnemyCount, currentWaveNumber, remainingEnemyCount, remainingWaveMs, type CombatState, type EnemyInstanceId, type RunState } from '../rules';
+import { STABLE_ENEMY_SLOT_COUNT, WEAPONS, activeEnemyCount, currentRunPhase, currentWaveNumber, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, type CombatState, type EnemyInstanceId, type RunState } from '../rules';
 
 export type EnemyHudView = {
   stableId: string;
@@ -71,8 +71,11 @@ export class ArenaHud {
   private readonly fps = element<HTMLOutputElement>('[data-testid="fps"]');
   public readonly playerHitVignette = element<HTMLElement>('#player-hit-vignette');
   private readonly survivalTimeHud = element<HTMLOutputElement>('[data-testid="survival-time"]');
+  private readonly runPanel = element<HTMLElement>('[data-testid="run-panel"]');
   private readonly waveHud = element<HTMLOutputElement>('[data-testid="wave"]');
   private readonly waveRemainingHud = element<HTMLOutputElement>('[data-testid="wave-remaining"]');
+  private readonly runPhaseHud = element<HTMLOutputElement>('[data-testid="run-phase"]');
+  private readonly phaseRemainingHud = element<HTMLOutputElement>('[data-testid="phase-remaining"]');
   private readonly enemyCurrentHud = element<HTMLOutputElement>('[data-testid="enemy-current"]');
   private readonly enemyGoalHud = element<HTMLOutputElement>('[data-testid="enemy-goal"]');
   private readonly enemyRemainingHud = element<HTMLOutputElement>('[data-testid="enemy-remaining"]');
@@ -86,8 +89,9 @@ export class ArenaHud {
   private readonly retry = element<HTMLButtonElement>('[data-testid="retry"]');
   private readonly enemyHp = enemyRecord(id => element<HTMLOutputElement>(`[data-testid="${id}-hp"]`));
 
-  constructor(spawnConfig: string) {
+  constructor(spawnConfig: string, runConfig: string) {
     this.spawnPhaseHud.dataset.spawnConfig = spawnConfig;
+    this.runPanel.dataset.runConfig = runConfig;
   }
 
   public onRetry(listener: () => void): void {
@@ -190,9 +194,14 @@ export class ArenaHud {
   }
 
   public updateRun(state: RunState): void {
+    const phase = currentRunPhase(state);
     this.waveHud.value = String(currentWaveNumber(state));
     this.waveHud.dataset.state = state.status;
     this.waveRemainingHud.value = formatSurvivalTime(remainingWaveMs(state));
+    this.runPanel.dataset.phase = phase;
+    this.runPhaseHud.value = phase === 'combat' ? '戦闘' : '休憩';
+    this.runPhaseHud.dataset.phase = phase;
+    this.phaseRemainingHud.value = formatSurvivalTime(remainingPhaseMs(state));
     this.enemyCurrentHud.value = String(activeEnemyCount(state));
     this.enemyGoalHud.value = String(STABLE_ENEMY_SLOT_COUNT);
     this.enemyRemainingHud.value = String(remainingEnemyCount(state));

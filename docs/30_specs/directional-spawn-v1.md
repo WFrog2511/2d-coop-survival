@@ -12,6 +12,10 @@ requirements: REQ-DIRECTIONAL-SPAWN
 - 合意済み要件は[REQ-DIRECTIONAL-SPAWN](../20_requirements/directional-spawn-v1.md)を参照する。
 - 本仕様はTypeScript実装と手動で同期する。現行DOCGENはPython sourceだけを対象とするため、DOCGEN検査のPASSを本仕様とTypeScriptの同期確認へ読み替えない。
 
+## Issue #58の時間契約移行
+
+[SPEC-WAVE-PROGRESSION](wave-progression-v1.md)（Issue #58）は、Issue #34由来の180000ms（03:00）期限をdynamic RunState scheduleへ時間契約だけsupersedeする。既定は3 combat wave各150000ms、wave 1/2後のrest各60000ms、総570000msである。本書内の3分勝利・180000ms terminal記述は履歴として残し、現在の時間・phase残り・victory境界はSPEC-WAVE-PROGRESSIONを正本とする。60000ms spawn phase、方向計算、strict spawn、terminal/retryのgeneration guard、ammo box契約は変更しない。
+
 ## phaseと主方向
 
 run開始時刻を`startedAt`、現在のゲーム時刻を`now`とし、0始まりのphaseを次で求める。

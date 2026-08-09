@@ -4,4 +4,4 @@
 
 ## Index
 
-- [wave-progression-v1 仕様](wave-progression-v1.md): RunState、wave境界、enemy event、HUD/data-testidの検証契約。
+- [wave-progression-v1 仕様](wave-progression-v1.md): RunState schedule、combat/rest境界、enemy event、HUD/data-testidの検証契約。

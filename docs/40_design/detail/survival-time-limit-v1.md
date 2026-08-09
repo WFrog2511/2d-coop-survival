@@ -19,7 +19,7 @@ specification: SPEC-SURVIVAL-TIME-LIMIT
 
 ## 0. #21/#35既存契約との境界
 
-[DESIGN-DETAIL-WAVE-PROGRESSION](wave-progression-v1.md)は、3分runの時間進行を3つの60秒waveとRunStateのHUD観測へ限定して拡張する。ここで定義するvictory、terminal、retry、ammo box復活は維持し、wave固有の新敵、intermission、quota、報酬、dropは追加しない。
+[DESIGN-DETAIL-WAVE-PROGRESSION](wave-progression-v1.md)は、この詳細設計の180000ms生存timerと各60000ms waveを、3 combat wave各150000ms、wave 1/2後のrest各60000ms、dynamicな570000ms既定scheduleへsupersedeする。この文書の旧時間値と03:00前提のテスト期待値は履歴であり、現在の時間・phase・HUD設計はDESIGN-DETAIL-WAVE-PROGRESSIONを正本とする。victory、terminal、retry、ammo box復活は維持し、wave固有の新敵、quota、報酬、dropは追加しない。
 
 #21/#35のammo-supply-v1にある「同一run中は取得箱を再出現させない」は履歴契約として維持する。#34 follow-upが限定的にsupersedeするのはfield ammo box（map上のammo box）の再出現処理だけであり、既存の有限ammo契約、ammo/map配置文書、その他の#21/#35実装は変更しない。
 

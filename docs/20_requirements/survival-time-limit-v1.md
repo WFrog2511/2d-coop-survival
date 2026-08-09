@@ -23,7 +23,7 @@ Issue #34 の comment 5220638729で確定したfollow-up/PR #36のDODを正本�
 
 ## Issue #58の限定移行
 
-[REQ-WAVE-PROGRESSION](wave-progression-v1.md)は、この3分runを3つの60秒waveと純粋RunStateでも観測する点だけを限定してsupersedeする。180000msのvictory、terminal停止、retry、ammo box respawnは本要件の契約を維持する。wave固有の新敵、intermission、quota、報酬、dropは引き続き対象外とする。
+[REQ-WAVE-PROGRESSION](wave-progression-v1.md)は、本要件の180000ms（03:00）生存期限と各60000ms wave時間を、3 combat wave各150000ms、wave 1/2後のrest各60000ms、既定570000ms（09:30）へsupersedeする。この文書内の旧時間値とそれを前提にする受け入れ条件は履歴であり、現在の時間・phase・HUD契約はREQ-WAVE-PROGRESSIONを正本とする。victory/defeatのterminal停止、retry、ammo box respawn、有限ammoの導線は維持する。wave固有の新敵、quota、報酬、dropは引き続き対象外とする。
 
 ## #21/#35既存契約との境界
 

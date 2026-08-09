@@ -3,7 +3,7 @@ import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, basicApproachRoleFor,
 import { ArenaEffects } from './arena/effects';
 import { ArenaHud } from './arena/hud';
 import { ENEMIES, ENEMY_DEFEAT_HIT_STOP_MS, ENEMY_HIT_STOP_MS, ENEMY_IDS, ENEMY_LABELS, ENEMY_SPAWN_ORDER, INITIAL_ENEMY_IDS, PLAYER_HIT_STOP_MS, STAGGERED_ENEMIES } from './game-data';
-import { AMMO_BOX_RESPAWN_MS, SURVIVAL_LIMIT_MS, WEAPONS, advanceRunState, advanceSurvivalState, cancelReload, collectAmmoBox as collectAmmoBoxState, completeReload, damageEnemy, damagePlayer, defeatRun, droneLateralSpeedAt, fireWeapon, isEnemyDefeated, recordEnemyDefeated, recordEnemyRecycled, recordEnemySpawned, remainingSurvivalMs, resolveDamage, respawnEnemy, retryCombat, retryRun, selectWeapon, startReload, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type RunState, type WeaponId } from './rules';
+import { AMMO_BOX_RESPAWN_MS, COMBAT_WAVE_DURATION_MS, REST_DURATION_MS, WEAPONS, advanceRunState, advanceSurvivalState, cancelReload, collectAmmoBox as collectAmmoBoxState, completeReload, createRunSchedule, currentRunPhase, damageEnemy, damagePlayer, defeatRun, droneLateralSpeedAt, enemySpeedMultiplierForPhase, fireWeapon, hiddenRecyclePathDistanceForPhase, isEnemyDefeated, recordEnemyDefeated, recordEnemyRecycled, recordEnemySpawned, remainingSurvivalMs, resolveDamage, respawnEnemy, retryCombat, retryRun, runDurationMs, selectWeapon, startReload, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type RunPhase, type RunSchedule, type RunState, type WeaponId } from './rules';
 
 const WIDTH = 800;
 const HEIGHT = 500;
@@ -17,6 +17,10 @@ const DEFAULT_ENEMY_SPAWN_CANDIDATE_POOL = 10;
 const MIN_ENEMY_STAGGER_INTERVAL_MS = 500;
 const MAX_ENEMY_STAGGER_INTERVAL_MS = 5000;
 const MAX_ENEMY_SPAWN_CANDIDATE_POOL = ARENA_WIDTH_TILES * ARENA_HEIGHT_TILES;
+const MIN_COMBAT_WAVE_DURATION_MS = 1000;
+const MAX_COMBAT_WAVE_DURATION_MS = 300000;
+const MIN_REST_DURATION_MS = 500;
+const MAX_REST_DURATION_MS = 120000;
 type EnemySpawnReason = 'initial' | 'stagger' | 'death' | 'recycle' | 'debug';
 type EnemySpawnConfig = {
   initialCount: number;
@@ -72,6 +76,15 @@ function resolveEnemySpawnConfig(): EnemySpawnConfig {
   };
 }
 
+/** DEV用combat/rest queryを安全な既定値へ正規化し、本番では読み取らない。 */
+function resolveRunSchedule(): RunSchedule {
+  const query = IS_DEV ? new URLSearchParams(window.location.search) : new URLSearchParams();
+  return createRunSchedule(
+    readDevIntegerQuery(query, 'combatWaveDurationMs', COMBAT_WAVE_DURATION_MS, MIN_COMBAT_WAVE_DURATION_MS, MAX_COMBAT_WAVE_DURATION_MS),
+    readDevIntegerQuery(query, 'restDurationMs', REST_DURATION_MS, MIN_REST_DURATION_MS, MAX_REST_DURATION_MS),
+  );
+}
+
 function readDevIntegerQuery(
   query: URLSearchParams,
   name: string,
@@ -98,8 +111,13 @@ function formatEnemySpawnConfig(config: EnemySpawnConfig): string {
   return `enemyInitialCount=${config.initialCount};enemyStaggerIntervalMs=${config.staggerIntervalMs};enemySpawnCandidatePool=${config.candidatePool}`;
 }
 
+function formatRunSchedule(schedule: RunSchedule): string {
+  return `combatWaveDurationMs=${schedule.combatWaveDurationMs};restDurationMs=${schedule.restDurationMs}`;
+}
+
 const ENEMY_SPAWN_CONFIG = resolveEnemySpawnConfig();
-const arenaHud = new ArenaHud(formatEnemySpawnConfig(ENEMY_SPAWN_CONFIG));
+const RUN_SCHEDULE = resolveRunSchedule();
+const arenaHud = new ArenaHud(formatEnemySpawnConfig(ENEMY_SPAWN_CONFIG), formatRunSchedule(RUN_SCHEDULE));
 
 function sameTile(left: TilePosition, right: TilePosition): boolean {
   return left.x === right.x && left.y === right.y;
@@ -131,7 +149,8 @@ class Arena extends Phaser.Scene {
   private mapSeed = Date.now() >>> 0;
   private generation = 0;
   private state: CombatState = retryCombat();
-  private runState: RunState = retryRun();
+  private runState: RunState = retryRun(RUN_SCHEDULE);
+  private mapPhase: RunPhase | undefined;
   private meta = new Map<Phaser.Physics.Arcade.Sprite, BulletMeta>();
   private contactAt = enemyNumbers();
   private playerHitStopUntil = 0;
@@ -315,7 +334,8 @@ class Arena extends Phaser.Scene {
     this.stopRunTimers();
     this.physics.resume();
     this.state = retryCombat();
-    this.runState = retryRun();
+    this.runState = retryRun(RUN_SCHEDULE);
+    this.mapPhase = undefined;
     this.survivalStartedAt = this.time.now;
     this.contactAt = enemyNumbers();
     this.playerHitStopUntil = 0;
@@ -377,23 +397,39 @@ class Arena extends Phaser.Scene {
     this.ammoBoxes.clear(true, true);
     this.ammoBoxStates.clear();
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
-    this.ground = this.add.graphics().setDepth(-2).lineStyle(1, 0x31516b, 0.55);
-    for (let x = 0; x <= WORLD_WIDTH; x += TILE_SIZE)
-      this.ground.lineBetween(x, 0, x, WORLD_HEIGHT);
-    for (let y = 0; y <= WORLD_HEIGHT; y += TILE_SIZE)
-      this.ground.lineBetween(0, y, WORLD_WIDTH, y);
-    this.wallArt = this.add.graphics().setDepth(-1).fillStyle(0x26374a, 1).lineStyle(1, 0x55728b, 1);
+    this.ground = this.add.graphics().setDepth(-2);
+    this.wallArt = this.add.graphics().setDepth(-1);
     for (let y = 0; y < this.map.height; y += 1)
       for (let x = 0; x < this.map.width; x += 1)
         if (this.map.tiles[y][x] === 'wall') {
           const px = x * TILE_SIZE;
           const py = y * TILE_SIZE;
-          this.wallArt.fillRect(px, py, TILE_SIZE, TILE_SIZE).strokeRect(px, py, TILE_SIZE, TILE_SIZE);
           const wall = this.physics.add.staticImage(px + TILE_SIZE / 2, py + TILE_SIZE / 2, 'wall');
           wall.setVisible(false);
           this.walls.add(wall);
         }
     this.walls.refresh();
+    this.updateMapPalette(true);
+  }
+
+  private updateMapPalette(force = false): void {
+    const phase = currentRunPhase(this.runState);
+    if (!force && this.mapPhase === phase)
+      return;
+    this.mapPhase = phase;
+    const palette = phase === 'combat'
+      ? { ground: 0x101827, grid: 0x31516b, wall: 0x26374a, wallEdge: 0x55728b }
+      : { ground: 0x6b573b, grid: 0xae8a58, wall: 0x79573a, wallEdge: 0xe2bb78 };
+    this.ground?.clear().fillStyle(palette.ground, 1).fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT).lineStyle(1, palette.grid, 0.55);
+    for (let x = 0; x <= WORLD_WIDTH; x += TILE_SIZE)
+      this.ground?.lineBetween(x, 0, x, WORLD_HEIGHT);
+    for (let y = 0; y <= WORLD_HEIGHT; y += TILE_SIZE)
+      this.ground?.lineBetween(0, y, WORLD_WIDTH, y);
+    this.wallArt?.clear().fillStyle(palette.wall, 1).lineStyle(1, palette.wallEdge, 1);
+    for (let y = 0; y < this.map.height; y += 1)
+      for (let x = 0; x < this.map.width; x += 1)
+        if (this.map.tiles[y][x] === 'wall')
+          this.wallArt?.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE).strokeRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
   }
 
   private buildAmmoBoxes(): void {
@@ -461,7 +497,7 @@ class Arena extends Phaser.Scene {
 
   private startSurvivalTimer(): void {
     const generation = this.generation;
-    this.survivalTimer = this.time.delayedCall(SURVIVAL_LIMIT_MS, () => {
+    this.survivalTimer = this.time.delayedCall(runDurationMs(this.runState.schedule), () => {
       this.survivalTimer = undefined;
       if (generation !== this.generation)
         return;
@@ -472,10 +508,16 @@ class Arena extends Phaser.Scene {
   private updateSurvival(): void {
     const nextRunState = advanceRunState(this.runState, this.time.now - this.survivalStartedAt);
     this.runState = nextRunState;
+    this.updateMapPalette();
     this.updateSurvivalHud();
     if (nextRunState.status !== 'victory')
       return;
-    const nextCombatState = advanceSurvivalState(this.state, this.survivalStartedAt, this.time.now);
+    const nextCombatState = advanceSurvivalState(
+      this.state,
+      this.survivalStartedAt,
+      this.time.now,
+      runDurationMs(nextRunState.schedule),
+    );
     if (nextCombatState === this.state)
       return;
     this.state = nextCombatState;
@@ -483,7 +525,11 @@ class Arena extends Phaser.Scene {
   }
 
   private updateSurvivalHud(): void {
-    arenaHud.updateSurvival(remainingSurvivalMs(this.survivalStartedAt, this.time.now));
+    arenaHud.updateSurvival(remainingSurvivalMs(
+      this.survivalStartedAt,
+      this.time.now,
+      runDurationMs(this.runState.schedule),
+    ));
     arenaHud.updateRun(this.runState);
   }
 
@@ -536,6 +582,7 @@ class Arena extends Phaser.Scene {
       return;
     }
     const config = ENEMIES[id];
+    const speedMultiplier = enemySpeedMultiplierForPhase(currentRunPhase(this.runState));
     const playerTile = this.tile(this.player);
     const enemyTile = this.tile(enemy);
     const cached = this.paths[id];
@@ -572,14 +619,20 @@ class Arena extends Phaser.Scene {
     const length = Math.hypot(dx, dy) || 1;
     if (config.kind === 'drone') {
       const side = droneLateralSpeedAt(this.time.now);
-      enemy.setVelocity((dx / length) * config.speed - (dy / length) * side, (dy / length) * config.speed + (dx / length) * side);
+      enemy.setVelocity(
+        ((dx / length) * config.speed - (dy / length) * side) * speedMultiplier,
+        ((dy / length) * config.speed + (dx / length) * side) * speedMultiplier,
+      );
       return;
     }
     const separation = this.basicSeparation(id);
     const desiredX = dx / length + separation.x * 0.45;
     const desiredY = dy / length + separation.y * 0.45;
     const desiredLength = Math.hypot(desiredX, desiredY) || 1;
-    enemy.setVelocity((desiredX / desiredLength) * config.speed, (desiredY / desiredLength) * config.speed);
+    enemy.setVelocity(
+      (desiredX / desiredLength) * config.speed * speedMultiplier,
+      (desiredY / desiredLength) * config.speed * speedMultiplier,
+    );
   }
 
   private basicApproachTarget(id: EnemyInstanceId, enemy: TilePosition, player: TilePosition): TilePosition {
@@ -747,7 +800,7 @@ class Arena extends Phaser.Scene {
       return;
     }
     const pathDistance = findPath(this.map, enemyTile, playerTile).length - 1;
-    if (pathDistance < 10) {
+    if (pathDistance < hiddenRecyclePathDistanceForPhase(currentRunPhase(this.runState))) {
       this.hiddenSince.set(id, this.time.now);
       return;
     }
@@ -967,7 +1020,7 @@ class Arena extends Phaser.Scene {
   private enterTerminal(result: 'defeat' | 'victory'): void {
     this.runState = result === 'defeat'
       ? defeatRun(this.runState)
-      : advanceRunState(this.runState, SURVIVAL_LIMIT_MS);
+      : advanceRunState(this.runState, runDurationMs(this.runState.schedule));
     this.stopRunTimers();
     this.state = cancelReload(this.state);
     this.player.setVelocity(0, 0);
@@ -1098,7 +1151,11 @@ class Arena extends Phaser.Scene {
         progress: isReloading ? Phaser.Math.Clamp(this.reloadTimer!.getProgress(), 0, 1) : 0,
       },
       runState: this.runState,
-      remainingSurvivalMs: remainingSurvivalMs(this.survivalStartedAt, this.time.now),
+      remainingSurvivalMs: remainingSurvivalMs(
+        this.survivalStartedAt,
+        this.time.now,
+        runDurationMs(this.runState.schedule),
+      ),
       spawnPhase: phase,
       primaryDirection: primarySpawnDirection(this.map.seed, phase),
       mapSeed: this.map.seed,

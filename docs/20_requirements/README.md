@@ -4,4 +4,4 @@
 
 ## Index
 
-- [wave-progression-v1 要件](wave-progression-v1.md): 3つの60秒wave、固定12 slot、HUD、terminal/retryの移行境界。
+- [wave-progression-v1 要件](wave-progression-v1.md): 3 combat waveと2 rest、固定12 slot、phase HUD、terminal/retryの移行境界。

@@ -12,6 +12,10 @@ follow_up_task: https://github.com/WFrog2511/2d-coop-survival/issues/38
 
 敵の出現方向を60秒ごとに切り替え、主方向と反対方向から圧力をかけることで、既存の戦闘・索敵・弾薬管理・3分間生存ループを維持したまま、playerに位置取りの判断を生むローカル1人用プロトタイプを提供する。
 
+## Issue #58の時間契約移行
+
+[REQ-WAVE-PROGRESSION](wave-progression-v1.md)（Issue #58）は、Issue #34由来の180000ms（3分）生存期限だけをdynamic scheduleへsupersedeする。既定は3 combat wave各150000msとwave 1/2後のrest各60000ms、総570000msである。この文書中の3分記述は履歴であり、現在のrun時間・phase残り・victory境界はREQ-WAVE-PROGRESSIONを正本とする。60秒spawn phase、4方向と主9・反3の方向規則、terminal/retryのgeneration guard、弾薬箱respawn契約は維持する。
+
 ## 必須範囲
 
 - run開始時をphase 0とし、経過時間60000msごとにphaseを1増やす。phase表示は利用者向けに1始まりとする。

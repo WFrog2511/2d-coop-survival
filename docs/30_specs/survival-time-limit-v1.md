@@ -19,7 +19,7 @@ retryCombatはvictory=false、defeated=false、HP100、武器別ammo/reserve、�
 
 ## Issue #58の限定移行
 
-[SPEC-WAVE-PROGRESSION](wave-progression-v1.md)は、同じstartedAtを3つの60秒wave、RunState、enemy current/goal/remaining/kills HUDへ反映する点だけを限定してsupersedeする。180000msのvictory state、terminal guard、retryCombat、ammo box規則は本仕様を維持する。wave境界でenemy配置、HP、directional spawn metadataを変更せず、wave固有の新敵、intermission、quota、報酬、dropは対象外とする。
+[SPEC-WAVE-PROGRESSION](wave-progression-v1.md)は、本仕様の180000ms期限と各60000ms waveをdynamic RunState scheduleへsupersedeする。既定は3 combat wave各150000ms、wave 1/2後のrest各60000ms、総570000msである。この文書内の旧時間式、03:00 HUD、180000ms境界の期待値は履歴であり、現在の時間・phase・HUD仕様はSPEC-WAVE-PROGRESSIONを正本とする。victory state、terminal guard、retryCombat、ammo box規則は維持し、phase境界でenemy配置、HP、directional spawn metadataを変更しない。
 
 ## #21/#35既存契約との境界
 

@@ -15,10 +15,12 @@
           <div id="player-hit-vignette" aria-hidden="true"></div>
           <aside id="survival-panel" class="game-overlay" aria-label="残り時間">
             <span>残り時間</span>
-            <output class="survival-time" data-testid="survival-time">03:00</output>
+            <output class="survival-time" data-testid="survival-time">09:30</output>
           </aside>
-          <aside id="run-panel" class="game-overlay" aria-label="waveと敵の進行状況">
-            <span>Wave <output data-testid="wave" data-state="playing">1</output> 残り <output data-testid="wave-remaining">01:00</output></span>
+          <aside id="run-panel" class="game-overlay" data-testid="run-panel" data-phase="combat" aria-label="waveと敵の進行状況">
+            <span>Wave <output data-testid="wave" data-state="playing">1</output></span>
+            <span>フェーズ <output data-testid="run-phase" data-phase="combat">戦闘</output> 残り <output data-testid="phase-remaining">02:30</output></span>
+            <output data-testid="wave-remaining" hidden>02:30</output>
             <span>敵 <output data-testid="enemy-current">8</output>/<output data-testid="enemy-goal">12</output> 残り <output data-testid="enemy-remaining">8</output></span>
             <span>撃破 <output data-testid="kills">0</output></span>
           </aside>
@@ -72,7 +74,7 @@
         </div>
         <div data-testid="victory" hidden>
           <h2>勝利</h2>
-          <p>3分間、生き残りました。</p>
+          <p>3つの戦闘waveを生き残りました。</p>
         </div>
         <button data-testid="retry" type="button">再挑戦</button>
       </section>
