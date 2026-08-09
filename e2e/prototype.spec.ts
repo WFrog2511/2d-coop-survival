@@ -36,6 +36,10 @@ type ArenaDebugScene = {
   debugDamageEnemy: (id: EnemyId, amount: number) => void;
 };
 
+function devStartUrl(path: string): string {
+  return path + (path.includes('?') ? '&' : '?') + 'start=dev';
+}
+
 async function currentAmmo(page: import('@playwright/test').Page): Promise<number> {
   const text = await page.getByTestId('ammo').textContent();
   return Number(text?.split('/')[0]);
@@ -124,6 +128,7 @@ async function collectAmmoBoxWithClock(
     if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
     scene.debugMovePlayerTo(tile);
   }, target);
+  await page.keyboard.press('e');
   await page.clock.runFor(100);
   await expect(boxCount).toHaveText('3', { timeout: 2_000 });
 }
@@ -159,6 +164,25 @@ async function setPlayerInvulnerable(
     if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
     scene.debugSetPlayerInvulnerable(nextEnabled);
   }, enabled);
+}
+
+async function aimPlayer(
+  page: import('@playwright/test').Page,
+  direction: TilePosition,
+): Promise<void> {
+  const canvas = await page.locator('#game canvas').boundingBox();
+  if (!canvas) throw new Error('ゲームcanvasの位置を取得できません。');
+  const view = await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene & { player: { x: number; y: number } } }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    const worldView = scene.cameras.main.worldView;
+    return { player: scene.player, left: worldView.left, top: worldView.top, right: worldView.right, bottom: worldView.bottom };
+  });
+  const targetX = view.player.x + direction.x * 100;
+  const targetY = view.player.y + direction.y * 100;
+  const normalizedX = Math.min(0.95, Math.max(0.05, (targetX - view.left) / (view.right - view.left)));
+  const normalizedY = Math.min(0.95, Math.max(0.05, (targetY - view.top) / (view.bottom - view.top)));
+  await page.mouse.move(canvas.x + canvas.width * normalizedX, canvas.y + canvas.height * normalizedY);
 }
 
 async function debugDamageEnemy(
@@ -237,6 +261,42 @@ function parseFloorTile(
   if (map.tiles[tile.y]?.[tile.x] !== 'floor')
     throw new Error(`${label}のtileがfloorではありません: ${value}`);
   return tile;
+}
+
+function findDashLane(map: ReturnType<typeof generateArenaMap>): {
+  origin: TilePosition;
+  direction: TilePosition;
+} {
+  const directions: readonly TilePosition[] = [
+    { x: 1, y: 0 },
+    { x: -1, y: 0 },
+    { x: 0, y: 1 },
+    { x: 0, y: -1 },
+  ];
+  for (let y = 0; y < map.height; y += 1) {
+    for (let x = 0; x < map.width; x += 1) {
+      if (map.tiles[y][x] !== 'floor') continue;
+      for (const direction of directions) {
+        const hasFloorLane = [1, 2, 3, 4].every((step) => {
+          const nextX = x + direction.x * step;
+          const nextY = y + direction.y * step;
+          const perpendicular = { x: -direction.y, y: direction.x };
+          return [-1, 0, 1].every(offset =>
+            map.tiles[nextY + perpendicular.y * offset]?.[nextX + perpendicular.x * offset] === 'floor',
+          );
+        });
+        if (hasFloorLane)
+          return { origin: { x, y }, direction };
+      }
+    }
+  }
+  throw new Error('回避検証用の4タイル直線が見つかりません。');
+}
+
+function playerTile(value: string | null): TilePosition {
+  const match = value?.match(/^(\d+),(\d+)$/);
+  if (!match) throw new Error(`プレイヤーtileが不正です: ${String(value)}`);
+  return { x: Number(match[1]), y: Number(match[2]) };
 }
 
 function directionFromPlayer(player: TilePosition, spawn: TilePosition): SpawnDirection {
@@ -327,12 +387,66 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+test('役職を選択してから開始し、選択値をHUDへ表示する', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('start-gate')).toBeVisible();
+  await expect(page.locator('#game canvas')).toHaveCount(0);
+  await expect(page.getByTestId('role-options').locator('input')).toHaveCount(5);
+  await expect(page.getByTestId('start')).toBeDisabled();
+
+  await page.getByTestId('role-sniper').focus();
+  await page.keyboard.press('Space');
+  await expect(page.getByTestId('role-sniper')).toBeChecked();
+  await expect(page.getByTestId('start')).toBeEnabled();
+  await page.getByTestId('start').focus();
+  await page.keyboard.press('Space');
+
+  await expect(page.getByTestId('start-gate')).toBeHidden();
+  await expect(page.locator('#game canvas')).toBeVisible();
+  await expect(page.getByTestId('role')).toHaveText('スナイパー（紫）');
+  await expect(page.getByTestId('role')).toHaveAttribute('data-role', 'sniper');
+});
+
+test('SpaceとShiftで照準方向へ回避し、クールダウン中は再発動しない', async ({ page }) => {
+  test.setTimeout(30_000);
+  await page.goto(devStartUrl('/'));
+  await expect(page.locator('#game canvas')).toBeVisible();
+  await setPlayerInvulnerable(page, true);
+  const mapSeed = Number(await page.getByTestId('map-seed').textContent());
+  const lane = findDashLane(generateArenaMap(mapSeed));
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, lane.origin);
+  await page.waitForTimeout(300);
+  await aimPlayer(page, lane.direction);
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(300);
+  const afterSpace = playerTile(await page.getByTestId('player-tile').textContent());
+  expect(afterSpace).toEqual({
+    x: lane.origin.x + lane.direction.x * 2,
+    y: lane.origin.y + lane.direction.y * 2,
+  });
+  await page.keyboard.press('Shift');
+  await page.waitForTimeout(300);
+  expect(playerTile(await page.getByTestId('player-tile').textContent())).toEqual(afterSpace);
+  await page.waitForTimeout(1_800);
+  await aimPlayer(page, lane.direction);
+  await page.keyboard.press('Shift');
+  await page.waitForTimeout(300);
+  expect(playerTile(await page.getByTestId('player-tile').textContent())).toEqual({
+    x: lane.origin.x + lane.direction.x * 4,
+    y: lane.origin.y + lane.direction.y * 4,
+  });
+});
+
 test('自動射撃、ショットガンの発射待ち、リロード、視界遮蔽と再挑戦を確認できる', async ({ page }) => {
   // 80×50マップのLOS検査を含む代表経路に、実時間の余裕を持たせる。
   test.setTimeout(60_000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto('/');
+  await page.goto(devStartUrl('/'));
   const gameCanvas = page.locator('#game canvas');
   await expect(gameCanvas).toBeVisible();
   // 初期spawn metadataと可視状態を同じ時点で観測するため、敵移動前に止める。
@@ -440,6 +554,9 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   const initialBoxKeys = await page.getByTestId('ammo-box-count').getAttribute('data-active-tiles');
   expect(tileKeysFromAttribute(initialBoxKeys)).toContain(firstBoxKey);
   await moveToTile(page, map, firstBox, playerTileHud);
+  await expect(page.getByTestId('ammo-box-count')).toHaveText('4');
+  await expect(page.getByTestId('pickup-prompt')).toBeVisible();
+  await page.keyboard.press('e');
   await expect(page.getByTestId('ammo-box-count')).toHaveText('3');
   const waitingBoxKeys = await page.getByTestId('ammo-box-count').getAttribute('data-active-tiles');
   expect(tileKeysFromAttribute(waitingBoxKeys)).not.toContain(firstBoxKey);
@@ -542,7 +659,7 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
 test('初期8体を段階的に12体へ増やし、spawn phaseとcombat/rest境界を分離する', async ({ page }) => {
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
-  await page.goto('/');
+  await page.goto(devStartUrl('/'));
   await setHiddenRecycle(page, false);
   await setArenaPhysics(page, 'pause');
   const phaseHud = page.getByTestId('spawn-phase');
@@ -694,7 +811,7 @@ test('初期8体を段階的に12体へ増やし、spawn phaseとcombat/rest境�
 test('DEV queryでspawnとcombat/rest scheduleを開始前に固定する', async ({ page }) => {
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
-  await page.goto('/?enemyInitialCount=1&enemyStaggerIntervalMs=500&enemySpawnCandidatePool=1&combatWaveDurationMs=1000&restDurationMs=500');
+  await page.goto(devStartUrl('/?enemyInitialCount=1&enemyStaggerIntervalMs=500&enemySpawnCandidatePool=1&combatWaveDurationMs=1000&restDurationMs=500'));
   await setHiddenRecycle(page, false);
   await setArenaPhysics(page, 'pause');
   const phaseHud = page.getByTestId('spawn-phase');
@@ -737,7 +854,7 @@ test('DEV queryでspawnとcombat/rest scheduleを開始前に固定する', asyn
 });
 
 test('不正なDEV spawnとschedule queryは既定値へ戻す', async ({ page }) => {
-  await page.goto('/?enemyInitialCount=13&enemyStaggerIntervalMs=0&enemySpawnCandidatePool=4001&combatWaveDurationMs=999&restDurationMs=120001');
+  await page.goto(devStartUrl('/?enemyInitialCount=13&enemyStaggerIntervalMs=0&enemySpawnCandidatePool=4001&combatWaveDurationMs=999&restDurationMs=120001'));
   await expect(page.getByTestId('spawn-phase')).toHaveAttribute(
     'data-spawn-config',
     'enemyInitialCount=8;enemyStaggerIntervalMs=3000;enemySpawnCandidatePool=10',
@@ -753,7 +870,7 @@ test('hidden recycleはHPを維持し、deathだけ全回復し、retry後に旧
   test.setTimeout(90_000);
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
-  await page.goto('/');
+  await page.goto(devStartUrl('/'));
   await setArenaPhysics(page, 'pause');
   await expectStrictEnemySpawns(page, INITIAL_ACTIVE_IDS, 'initial');
   const mapSeed = Number(await page.getByTestId('map-seed').textContent());
@@ -851,7 +968,7 @@ test('restではpath距離5 tile以上のhidden敵をrecycleできる', async ({
   test.setTimeout(90_000);
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
-  await page.goto('/?enemyInitialCount=1&enemyStaggerIntervalMs=30000&combatWaveDurationMs=1000&restDurationMs=30000');
+  await page.goto(devStartUrl('/?enemyInitialCount=1&enemyStaggerIntervalMs=30000&combatWaveDurationMs=1000&restDurationMs=30000'));
   await setArenaPhysics(page, 'pause');
   await setHiddenRecycle(page, false);
   const target: EnemyId = 'basic-1';
@@ -895,7 +1012,7 @@ test('restではpath距離5 tile以上のhidden敵をrecycleできる', async ({
 test('DEV scheduleの終端で勝利し、再挑戦でcombat phaseを初期化できる', async ({ page }) => {
   await page.clock.install({ time: 15 });
   await page.clock.pauseAt(15);
-  await page.goto('/?combatWaveDurationMs=1000&restDurationMs=500');
+  await page.goto(devStartUrl('/?combatWaveDurationMs=1000&restDurationMs=500'));
   await setPlayerInvulnerable(page, true);
   await expect(page.getByTestId('survival-time')).toHaveText('00:04');
   const playerTile = page.getByTestId('player-tile');
@@ -938,7 +1055,7 @@ test('弾薬箱は取得後30秒で同じboxIdのまま新しい画面外floor�
   test.setTimeout(90_000);
   await page.clock.install({ time: 0 });
   await page.clock.setFixedTime(15);
-  await page.goto('/');
+  await page.goto(devStartUrl('/'));
   await setPlayerInvulnerable(page, true);
   const mapSeed = Number(await page.getByTestId('map-seed').textContent());
   const map = generateArenaMap(mapSeed);
@@ -977,7 +1094,7 @@ test('victoryとretryは弾薬箱の復活待ちをclearし、新しいrunを初
   await page.clock.install({ time: 0 });
   await page.clock.setFixedTime(15);
   const terminalRunDurationMs = 40_000;
-  await page.goto('/?combatWaveDurationMs=10000&restDurationMs=5000');
+  await page.goto(devStartUrl('/?combatWaveDurationMs=10000&restDurationMs=5000'));
   await setPlayerInvulnerable(page, true);
   const mapSeed = Number(await page.getByTestId('map-seed').textContent());
   const map = generateArenaMap(mapSeed);

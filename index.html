@@ -10,9 +10,18 @@
     <main>
       <header>
         <h1>メカサバイバル</h1>
+        <section id="start-gate" data-testid="start-gate" aria-labelledby="start-gate-title">
+          <h2 id="start-gate-title">出撃準備</h2>
+          <p>役職を選択してから開始してください。役職の能力と固定装備は後続の対応です。</p>
+          <div id="role-options" data-testid="role-options" role="radiogroup" aria-label="役職"></div>
+          <button data-testid="start" type="button" disabled>開始</button>
+        </section>
         <div id="game-shell">
           <div id="game" aria-label="戦闘アリーナ"></div>
           <div id="player-hit-vignette" aria-hidden="true"></div>
+          <aside id="pickup-prompt" class="game-overlay" data-testid="pickup-prompt" hidden aria-live="polite">
+            <kbd>E</kbd>: 拾う
+          </aside>
           <aside id="survival-panel" class="game-overlay" aria-label="waveとフェーズ残り時間">
             <span>Wave <output data-testid="wave" data-state="playing">1</output></span>
             <span><output data-testid="run-phase" data-phase="combat">夜（戦闘）</output> 残り <output data-testid="phase-remaining">02:30</output></span>
@@ -46,6 +55,7 @@
         </p>
         <p data-testid="hud">
           武器: <output data-testid="weapon">アサルトライフル</output>
+          役職: <output data-testid="role" data-role="">未選択</output>
           リロード: <output data-testid="reload">待機</output>
           出現phase: <output data-testid="spawn-phase" data-phase="0">1</output>
           主方向: <output data-testid="primary-direction" data-direction="up">上</output>

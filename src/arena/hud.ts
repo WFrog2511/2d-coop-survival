@@ -1,5 +1,6 @@
 import type { EnemyVisibility, SpawnDirection, TilePosition } from '../arena-map';
 import { DIRECTION_LABELS, ENEMY_IDS } from '../game-data';
+import { PLAYER_ROLES, type PlayerRoleId } from '../player-data';
 import { STABLE_ENEMY_SLOT_COUNT, WEAPONS, activeEnemyCount, currentRunPhase, currentWaveNumber, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, type CombatState, type EnemyInstanceId, type RunState } from '../rules';
 
 export type EnemyHudView = {
@@ -63,6 +64,8 @@ export class ArenaHud {
   private readonly ammoPanelWeaponHud = element<HTMLOutputElement>('[data-testid="ammo-panel-weapon"]');
   private readonly reserveHud = element<HTMLOutputElement>('[data-testid="ammo-reserve"]');
   private readonly ammoBoxCountHud = element<HTMLOutputElement>('[data-testid="ammo-box-count"]');
+  private readonly playerRoleHud = element<HTMLOutputElement>('[data-testid="role"]');
+  private readonly pickupPrompt = element<HTMLElement>('[data-testid="pickup-prompt"]');
   private readonly reloadProgressLabel = element<HTMLElement>('[data-testid="reload-progress-label"]');
   private readonly reloadProgressHud = element<HTMLProgressElement>('[data-testid="reload-progress"]');
   private readonly reloadHud = element<HTMLOutputElement>('[data-testid="reload"]');
@@ -96,6 +99,19 @@ export class ArenaHud {
 
   public onRetry(listener: () => void): void {
     this.retry.addEventListener('click', listener);
+  }
+
+  public setPlayerRole(roleId: PlayerRoleId): void {
+    const role = PLAYER_ROLES.find(candidate => candidate.id === roleId);
+    if (!role)
+      return;
+    this.playerRoleHud.value = `${role.label}（${role.color}）`;
+    this.playerRoleHud.dataset.role = role.id;
+    this.playerRoleHud.style.color = role.accent;
+  }
+
+  public setPickupPrompt(visible: boolean): void {
+    this.pickupPrompt.hidden = !visible;
   }
 
   public updateFps(value: number): void {

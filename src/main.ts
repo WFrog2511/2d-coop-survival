@@ -3,6 +3,8 @@ import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, basicApproachRoleFor,
 import { ArenaEffects } from './arena/effects';
 import { ArenaHud } from './arena/hud';
 import { ENEMIES, ENEMY_DEFEAT_HIT_STOP_MS, ENEMY_HIT_STOP_MS, ENEMY_IDS, ENEMY_LABELS, ENEMY_SPAWN_ORDER, INITIAL_ENEMY_IDS, PLAYER_HIT_STOP_MS, STAGGERED_ENEMIES } from './game-data';
+import { PLAYER_DASH_DURATION_MS, PLAYER_DASH_SPEED_PX_PER_SECOND, PLAYER_ROLES, canDashAt, dashCooldownUntil, dashDirectionFor, type PlayerRoleId } from './player-data';
+import { selectNearbyPickup } from './pickups';
 import { AMMO_BOX_RESPAWN_MS, COMBAT_WAVE_DURATION_MS, REST_DURATION_MS, WEAPONS, advanceRunState, advanceSurvivalState, cancelReload, collectAmmoBox as collectAmmoBoxState, completeReload, createRunSchedule, currentRunPhase, damageEnemy, damagePlayer, defeatRun, droneLateralSpeedAt, enemySpeedMultiplierForPhase, fireWeapon, hiddenRecyclePathDistanceForPhase, isEnemyDefeated, recordEnemyDefeated, recordEnemyRecycled, recordEnemySpawned, remainingSurvivalMs, resolveDamage, respawnEnemy, retryCombat, retryRun, runDurationMs, selectWeapon, startReload, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type RunPhase, type RunSchedule, type RunState, type WeaponId } from './rules';
 
 const WIDTH = 800;
@@ -51,12 +53,20 @@ type AmmoBoxState = {
   respawnCount: number;
   seedOffset: number;
 };
+type PlayerDash = {
+  directionX: number;
+  directionY: number;
+  endsAt: number;
+};
 type Controls = Phaser.Types.Input.Keyboard.CursorKeys & {
   w: Phaser.Input.Keyboard.Key;
   a: Phaser.Input.Keyboard.Key;
   s: Phaser.Input.Keyboard.Key;
   d: Phaser.Input.Keyboard.Key;
   r: Phaser.Input.Keyboard.Key;
+  e: Phaser.Input.Keyboard.Key;
+  space: Phaser.Input.Keyboard.Key;
+  shift: Phaser.Input.Keyboard.Key;
 };
 
 function enemyRecord<T>(create: (id: EnemyInstanceId) => T): Record<EnemyInstanceId, T> {
@@ -158,6 +168,8 @@ class Arena extends Phaser.Scene {
   private meta = new Map<Phaser.Physics.Arcade.Sprite, BulletMeta>();
   private contactAt = enemyNumbers();
   private playerHitStopUntil = 0;
+  private playerDash: PlayerDash | undefined;
+  private playerDashCooldownUntil = 0;
   private enemyHitStopUntil = enemyNumbers();
   private knockbackUntil = enemyNumbers();
   private knockbackVelocity = enemyRecord(() => ({ x: 0, y: 0 }));
@@ -187,7 +199,6 @@ class Arena extends Phaser.Scene {
       .setCollideWorldBounds(true)
       .setBodySize(28, 28)
       .setDepth(3);
-    this.physics.add.overlap(this.player, this.ammoBoxes, (_player, box) => this.collectAmmoBox(box as Phaser.GameObjects.GameObject));
     this.visibilityMask = this.add.graphics().setDepth(2).setAlpha(0.25);
     this.enemies = {} as Record<EnemyInstanceId, Phaser.Physics.Arcade.Sprite>;
     this.silhouettes = {} as Record<EnemyInstanceId, Phaser.GameObjects.Image>;
@@ -208,15 +219,18 @@ class Arena extends Phaser.Scene {
     this.bullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Sprite, maxSize: BULLET_POOL_SIZE });
     this.physics.add.collider(this.bullets, this.walls, first => this.disableBullet(first as Phaser.Physics.Arcade.Sprite));
     ENEMY_IDS.forEach(id => this.physics.add.overlap(this.bullets, this.enemies[id], (first, second) => this.hitEnemy(first, second, id)));
-    this.keys = this.input.keyboard!.addKeys({ w: 'W', a: 'A', s: 'S', d: 'D', r: 'R', up: 'UP', down: 'DOWN', left: 'LEFT', right: 'RIGHT' }) as Controls;
+    this.keys = this.input.keyboard!.addKeys({ w: 'W', a: 'A', s: 'S', d: 'D', r: 'R', e: 'E', space: 'SPACE', shift: 'SHIFT', up: 'UP', down: 'DOWN', left: 'LEFT', right: 'RIGHT' }) as Controls;
     this.input.keyboard?.on('keydown-ONE', () => this.changeWeapon('rifle'));
     this.input.keyboard?.on('keydown-TWO', () => this.changeWeapon('shotgun'));
     this.input.keyboard?.on('keydown-R', () => this.reload());
+    this.input.keyboard?.on('keydown-E', () => this.collectNearbyAmmoBox());
+    this.input.keyboard?.on('keydown-SPACE', () => this.tryDash());
+    this.input.keyboard?.on('keydown-SHIFT', () => this.tryDash());
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       if (!WEAPONS[this.state.weapon].automatic)
         this.tryFire(pointer);
     });
-    this.input.keyboard?.addCapture(['W', 'A', 'S', 'D', 'R', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'ONE', 'TWO']);
+    this.input.keyboard?.addCapture(['W', 'A', 'S', 'D', 'R', 'E', 'SPACE', 'SHIFT', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'ONE', 'TWO']);
     this.reset(true);
   }
 
@@ -228,15 +242,9 @@ class Arena extends Phaser.Scene {
     this.updateSurvival();
     if (this.state.defeated || this.state.victory)
       return;
-    if (this.time.now < this.playerHitStopUntil) {
-      this.player.setVelocity(0, 0);
-    } else {
-      const x = Number(this.keys.d.isDown || this.keys.right.isDown) - Number(this.keys.a.isDown || this.keys.left.isDown);
-      const y = Number(this.keys.s.isDown || this.keys.down.isDown) - Number(this.keys.w.isDown || this.keys.up.isDown);
-      const length = Math.hypot(x, y) || 1;
-      this.player.setVelocity((x / length) * 210, (y / length) * 210);
-    }
+    this.updatePlayerMovement();
     this.updateTileHud();
+    this.updatePickupPrompt();
     this.updateVisibilityMask();
     this.updateReloadProgressHud();
     ENEMY_IDS.forEach(id => this.moveEnemy(id));
@@ -250,6 +258,63 @@ class Arena extends Phaser.Scene {
       if (bullet.active && data && Phaser.Math.Distance.Between(data.startX, data.startY, bullet.x, bullet.y) > data.range)
         this.disableBullet(bullet);
     });
+  }
+
+  private updatePlayerMovement(): void {
+    const dash = this.playerDash;
+    if (dash) {
+      if (this.time.now >= dash.endsAt || this.isPlayerDashBlocked(dash)) {
+        this.cancelPlayerDash();
+        return;
+      }
+      this.player.setVelocity(
+        dash.directionX * PLAYER_DASH_SPEED_PX_PER_SECOND,
+        dash.directionY * PLAYER_DASH_SPEED_PX_PER_SECOND,
+      );
+      return;
+    }
+    if (this.time.now < this.playerHitStopUntil) {
+      this.player.setVelocity(0, 0);
+      return;
+    }
+    const x = Number(this.keys.d.isDown || this.keys.right.isDown) - Number(this.keys.a.isDown || this.keys.left.isDown);
+    const y = Number(this.keys.s.isDown || this.keys.down.isDown) - Number(this.keys.w.isDown || this.keys.up.isDown);
+    const length = Math.hypot(x, y) || 1;
+    this.player.setVelocity((x / length) * 210, (y / length) * 210);
+  }
+
+  private tryDash(): void {
+    if (this.state.defeated || this.state.victory || this.playerDash || !canDashAt(this.time.now, this.playerDashCooldownUntil))
+      return;
+    const direction = dashDirectionFor(this.player, this.aimPoint());
+    if (!direction)
+      return;
+    this.playerDash = {
+      directionX: direction.x,
+      directionY: direction.y,
+      endsAt: this.time.now + PLAYER_DASH_DURATION_MS,
+    };
+    this.playerDashCooldownUntil = dashCooldownUntil(this.time.now);
+    this.player.setVelocity(
+      direction.x * PLAYER_DASH_SPEED_PX_PER_SECOND,
+      direction.y * PLAYER_DASH_SPEED_PX_PER_SECOND,
+    );
+    this.effects.playPlayerDash();
+  }
+
+  private isPlayerDashBlocked(dash: PlayerDash): boolean {
+    const body = this.player.body;
+    if (!body)
+      return false;
+    return (dash.directionX < 0 && body.blocked.left)
+      || (dash.directionX > 0 && body.blocked.right)
+      || (dash.directionY < 0 && body.blocked.up)
+      || (dash.directionY > 0 && body.blocked.down);
+  }
+
+  private cancelPlayerDash(): void {
+    this.playerDash = undefined;
+    this.player.setVelocity(0, 0);
   }
 
   public debugRespawnEnemy(id: EnemyInstanceId): void {
@@ -308,10 +373,12 @@ class Arena extends Phaser.Scene {
       throw new Error('debugMovePlayerToはDEV環境だけで使用できます。');
     if (!Number.isInteger(tile.x) || !Number.isInteger(tile.y) || this.map.tiles[tile.y]?.[tile.x] !== 'floor')
       throw new Error('debugMovePlayerToの移動先はfloor tileである必要があります。');
+    this.cancelPlayerDash();
     const point = this.world(tile);
     this.player.setPosition(point.x, point.y).setVelocity(0, 0);
     this.player.body?.reset(point.x, point.y);
     this.updateTileHud();
+    this.updatePickupPrompt();
     this.updateVisibilityMask(true);
     this.updateEnemyVisibility(true);
   }
@@ -343,6 +410,8 @@ class Arena extends Phaser.Scene {
     this.survivalStartedAt = this.time.now;
     this.contactAt = enemyNumbers();
     this.playerHitStopUntil = 0;
+    this.playerDash = undefined;
+    this.playerDashCooldownUntil = 0;
     this.enemyHitStopUntil = enemyNumbers();
     this.knockbackUntil = enemyNumbers();
     this.knockbackVelocity = enemyRecord(() => ({ x: 0, y: 0 }));
@@ -381,6 +450,7 @@ class Arena extends Phaser.Scene {
     camera.startFollow(this.player);
     camera.preRender();
     this.buildAmmoBoxes();
+    this.updatePickupPrompt();
     initialEnemyIds.forEach((id) => {
       if (!this.spawnEnemy(id, 'initial'))
         this.scheduleEnemySpawn(id, 'initial', 1000);
@@ -550,6 +620,38 @@ class Arena extends Phaser.Scene {
     return ids;
   }
 
+  private nearbyAmmoBox(): Phaser.GameObjects.GameObject | undefined {
+    const candidates = this.ammoBoxes.getChildren().flatMap((box) => {
+      if (!box.active)
+        return [];
+      const id = box.getData('boxId') as string | undefined;
+      const tile = box.getData('tile') as TilePosition | undefined;
+      return id && tile ? [{ id, tile, box }] : [];
+    });
+    return selectNearbyPickup(this.tile(this.player), this.muzzlePickupAnchor(), candidates)?.box;
+  }
+
+  private muzzlePickupAnchor(): { x: number; y: number } {
+    const direction = dashDirectionFor(this.player, this.aimPoint())
+      ?? { x: Math.cos(this.player.rotation), y: Math.sin(this.player.rotation) };
+    const distance = this.player.displayWidth / 2;
+    return {
+      x: (this.player.x + direction.x * distance) / TILE_SIZE,
+      y: (this.player.y + direction.y * distance) / TILE_SIZE,
+    };
+  }
+
+  private aimPoint(): { x: number; y: number } {
+    return {
+      x: this.input.activePointer.worldX,
+      y: this.input.activePointer.worldY,
+    };
+  }
+
+  private updatePickupPrompt(): void {
+    arenaHud.setPickupPrompt(this.nearbyAmmoBox() !== undefined);
+  }
+
   private startSurvivalTimer(): void {
     const generation = this.generation;
     this.survivalTimer = this.time.delayedCall(runDurationMs(this.runState.schedule), () => {
@@ -595,6 +697,7 @@ class Arena extends Phaser.Scene {
   }
 
   private stopRunTimers(): void {
+    this.cancelPlayerDash();
     this.survivalTimer?.remove(false);
     this.survivalTimer = undefined;
     this.cancelMapPaletteTransition();
@@ -1046,7 +1149,7 @@ class Arena extends Phaser.Scene {
   }
 
   private hitPlayer(id: EnemyInstanceId): void {
-    if (IS_DEV && this.debugPlayerInvulnerable)
+    if (this.playerDash || (IS_DEV && this.debugPlayerInvulnerable))
       return;
     if (this.state.defeated || this.state.victory || this.time.now - this.contactAt[id] < ENEMIES[id].cooldown)
       return;
@@ -1086,6 +1189,7 @@ class Arena extends Phaser.Scene {
     });
     this.disableAllBullets();
     this.physics.pause();
+    arenaHud.setPickupPrompt(false);
     arenaHud.showResult(result);
     this.refreshHud();
   }
@@ -1145,6 +1249,13 @@ class Arena extends Phaser.Scene {
     this.scheduleAmmoBoxRespawn(boxId);
     arenaHud.setFeedback('弾薬箱から補給しました');
     this.refreshHud();
+    this.updatePickupPrompt();
+  }
+
+  private collectNearbyAmmoBox(): void {
+    const box = this.nearbyAmmoBox();
+    if (box)
+      this.collectAmmoBox(box);
   }
 
   private disableBullet(bullet: Phaser.Physics.Arcade.Sprite): void {
@@ -1302,9 +1413,61 @@ class Arena extends Phaser.Scene {
     texture.refresh();
   }
 }
-new Phaser.Game({ type: Phaser.AUTO, parent: 'game', width: WIDTH, height: HEIGHT, backgroundColor: '#101827', physics: { default: 'arcade', arcade: { debug: false } }, scene: Arena });
+
+let arenaGame: Phaser.Game | undefined;
+
+function playerRoleFrom(value: string | undefined): PlayerRoleId | undefined {
+  return PLAYER_ROLES.some(role => role.id === value) ? value as PlayerRoleId : undefined;
+}
+
+function startArena(role: PlayerRoleId): void {
+  if (arenaGame)
+    return;
+  const gate = document.querySelector<HTMLElement>('#start-gate');
+  if (!gate)
+    throw new Error('開始ゲートが見つかりません。');
+  gate.hidden = true;
+  arenaHud.setPlayerRole(role);
+  arenaGame = new Phaser.Game({ type: Phaser.AUTO, parent: 'game', width: WIDTH, height: HEIGHT, backgroundColor: '#101827', physics: { default: 'arcade', arcade: { debug: false } }, scene: Arena });
+}
+
+function setupStartGate(): void {
+  const options = document.querySelector<HTMLElement>('#role-options');
+  const start = document.querySelector<HTMLButtonElement>('[data-testid="start"]');
+  if (!options || !start)
+    throw new Error('開始ゲートの操作要素が見つかりません。');
+  PLAYER_ROLES.forEach((role) => {
+    const label = document.createElement('label');
+    label.className = 'role-option';
+    label.style.setProperty('--role-accent', role.accent);
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = 'player-role';
+    input.value = role.id;
+    input.dataset.testid = `role-${role.id}`;
+    input.addEventListener('change', () => {
+      start.disabled = false;
+    });
+    const text = document.createElement('span');
+    text.textContent = `${role.label}（${role.color}）`;
+    label.append(input, text);
+    options.append(label);
+  });
+  start.addEventListener('click', () => {
+    const selected = document.querySelector<HTMLInputElement>('input[name="player-role"]:checked');
+    const role = playerRoleFrom(selected?.value);
+    if (role)
+      startArena(role);
+  });
+  if (IS_DEV && new URLSearchParams(window.location.search).get('start') === 'dev')
+    startArena(PLAYER_ROLES[0].id);
+}
+
 arenaHud.onRetry(() => resetArena?.());
+setupStartGate();
 window.addEventListener('keydown', (event) => {
-  if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ', 'w', 'a', 's', 'd', 'r', '1', '2'].includes(event.key.toLowerCase()))
+  if (!arenaGame)
+    return;
+  if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ', 'shift', 'w', 'a', 's', 'd', 'r', 'e', '1', '2'].includes(event.key.toLowerCase()))
     event.preventDefault();
 });

@@ -18,6 +18,47 @@ h1 {
   color: #7ee7ff;
 }
 
+#start-gate {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid #55728b;
+  border-radius: 12px;
+  background: #182639;
+}
+
+#start-gate h2,
+#start-gate p {
+  margin: 0;
+}
+
+#start-gate[hidden] {
+  display: none;
+}
+
+#role-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.role-option {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 10px;
+  border: 1px solid var(--role-accent, #55728b);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.role-option:has(input:checked) {
+  border-color: var(--role-accent, #7ee7ff);
+  background: #213b54;
+  color: var(--role-accent, #7ee7ff);
+}
+
 #game-shell {
   position: relative;
   width: 800px;
@@ -62,6 +103,24 @@ h1 {
 #ammo-panel {
   z-index: 1;
   pointer-events: none;
+}
+
+#pickup-prompt {
+  position: absolute;
+  bottom: 92px;
+  left: 50%;
+  padding: 6px 10px;
+  border: 1px solid #ffef76;
+  border-radius: 8px;
+  background: rgb(16 24 39 / 88%);
+  color: #ffef76;
+  transform: translateX(-50%);
+}
+
+#pickup-prompt kbd {
+  padding: 1px 5px;
+  border: 1px solid currentcolor;
+  border-radius: 3px;
 }
 
 #survival-panel {

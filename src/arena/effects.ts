@@ -13,6 +13,7 @@ import {
   type CameraShakeProfile,
   type SoundEffectProfile,
 } from '../game-data';
+import { PLAYER_DASH_SOUND } from '../player-data';
 import type { EnemyKind, WeaponId } from '../rules';
 
 export class ArenaEffects {
@@ -75,6 +76,10 @@ export class ArenaEffects {
   public playPlayerImpact(kind: EnemyKind): void {
     this.shakeCamera(PLAYER_HIT_SHAKE[kind]);
     this.playPlayerHitVignette(kind);
+  }
+
+  public playPlayerDash(): void {
+    this.playSoundEffect(PLAYER_DASH_SOUND);
   }
 
   private playSoundEffect(effect: SoundEffectProfile): void {
