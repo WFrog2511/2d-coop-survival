@@ -1,6 +1,6 @@
 import type { EnemyVisibility, SpawnDirection, TilePosition } from '../arena-map';
 import { DIRECTION_LABELS, ENEMY_IDS } from '../game-data';
-import { WEAPONS, type CombatState, type EnemyInstanceId } from '../rules';
+import { STABLE_ENEMY_SLOT_COUNT, WEAPONS, activeEnemyCount, currentRunPhase, currentWaveNumber, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, type CombatState, type EnemyInstanceId, type RunState } from '../rules';
 
 export type EnemyHudView = {
   stableId: string;
@@ -22,6 +22,7 @@ export type EnemyHudView = {
 
 export type ArenaHudView = {
   state: CombatState;
+  runState: RunState;
   ammoBoxCount: number;
   activeAmmoBoxTiles: readonly string[];
   activeAmmoBoxEntries: readonly string[];
@@ -70,6 +71,15 @@ export class ArenaHud {
   private readonly fps = element<HTMLOutputElement>('[data-testid="fps"]');
   public readonly playerHitVignette = element<HTMLElement>('#player-hit-vignette');
   private readonly survivalTimeHud = element<HTMLOutputElement>('[data-testid="survival-time"]');
+  private readonly runPanel = element<HTMLElement>('[data-testid="run-panel"]');
+  private readonly waveHud = element<HTMLOutputElement>('[data-testid="wave"]');
+  private readonly waveRemainingHud = element<HTMLOutputElement>('[data-testid="wave-remaining"]');
+  private readonly runPhaseHud = element<HTMLOutputElement>('[data-testid="run-phase"]');
+  private readonly phaseRemainingHud = element<HTMLOutputElement>('[data-testid="phase-remaining"]');
+  private readonly enemyCurrentHud = element<HTMLOutputElement>('[data-testid="enemy-current"]');
+  private readonly enemyGoalHud = element<HTMLOutputElement>('[data-testid="enemy-goal"]');
+  private readonly enemyRemainingHud = element<HTMLOutputElement>('[data-testid="enemy-remaining"]');
+  private readonly killsHud = element<HTMLOutputElement>('[data-testid="kills"]');
   private readonly spawnPhaseHud = element<HTMLOutputElement>('[data-testid="spawn-phase"]');
   private readonly primaryDirectionHud = element<HTMLOutputElement>('[data-testid="primary-direction"]');
   private readonly feedback = element<HTMLElement>('[data-testid="feedback"]');
@@ -79,8 +89,9 @@ export class ArenaHud {
   private readonly retry = element<HTMLButtonElement>('[data-testid="retry"]');
   private readonly enemyHp = enemyRecord(id => element<HTMLOutputElement>(`[data-testid="${id}-hp"]`));
 
-  constructor(spawnConfig: string) {
+  constructor(spawnConfig: string, runConfig: string) {
     this.spawnPhaseHud.dataset.spawnConfig = spawnConfig;
+    this.runPanel.dataset.runConfig = runConfig;
   }
 
   public onRetry(listener: () => void): void {
@@ -160,6 +171,7 @@ export class ArenaHud {
     this.reloadHud.value = view.state.reloading === null ? '待機' : `リロード中: ${WEAPONS[view.state.reloading].label}`;
     this.updateReloadProgress(view.reload);
     this.updateSurvival(view.remainingSurvivalMs);
+    this.updateRun(view.runState);
     this.updateSpawnPhase(view.spawnPhase, view.primaryDirection);
     this.mapSeedHud.value = String(view.mapSeed);
     this.updateTile(view.playerTile);
@@ -179,6 +191,21 @@ export class ArenaHud {
 
   public updateSurvival(remainingMs: number): void {
     this.survivalTimeHud.value = formatSurvivalTime(remainingMs);
+  }
+
+  public updateRun(state: RunState): void {
+    const phase = currentRunPhase(state);
+    this.waveHud.value = String(currentWaveNumber(state));
+    this.waveHud.dataset.state = state.status;
+    this.waveRemainingHud.value = formatSurvivalTime(remainingWaveMs(state));
+    this.runPanel.dataset.phase = phase;
+    this.runPhaseHud.value = phase === 'combat' ? '夜（戦闘）' : '昼（休憩）';
+    this.runPhaseHud.dataset.phase = phase;
+    this.phaseRemainingHud.value = formatSurvivalTime(remainingPhaseMs(state));
+    this.enemyCurrentHud.value = String(activeEnemyCount(state));
+    this.enemyGoalHud.value = String(STABLE_ENEMY_SLOT_COUNT);
+    this.enemyRemainingHud.value = String(remainingEnemyCount(state));
+    this.killsHud.value = String(state.kills);
   }
 
   public updateSpawnPhase(phase: number, primaryDirection: SpawnDirection): void {

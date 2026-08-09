@@ -17,6 +17,10 @@ now が startedAt + 180000 以上となる境界を含めてvictoryへ遷移す�
 
 retryCombatはvictory=false、defeated=false、HP100、武器別ammo/reserve、発射待ち、リロード、敵12個体を初期値として返す。敵の個体数と方向契約は[SPEC-DIRECTIONAL-SPAWN](directional-spawn-v1.md)が旧4個体の契約をsupersedeする。
 
+## Issue #58の限定移行
+
+[SPEC-WAVE-PROGRESSION](wave-progression-v1.md)は、本仕様の180000ms期限と各60000ms waveをdynamic RunState scheduleへsupersedeする。既定は3 combat wave各150000ms、wave 1/2後のrest各60000ms、総570000msである。この文書内の旧時間式、03:00 HUD、180000ms境界の期待値は履歴であり、現在の時間・phase・HUD仕様はSPEC-WAVE-PROGRESSIONを正本とする。victory state、terminal guard、retryCombat、ammo box規則は維持し、phase境界でenemy配置、HP、directional spawn metadataを変更しない。
+
 ## #21/#35既存契約との境界
 
 #21/#35のammo-supply-v1にある「同一run中は取得箱を再出現させない」は履歴契約として維持する。#34 follow-upが限定的にsupersedeするのはfield ammo box（map上のammo box）の再出現処理だけであり、既存の有限ammo契約、ammo/map配置文書、その他の#21/#35実装を変更しない。
@@ -69,4 +73,4 @@ victoryまたはdefeatへ入ったとき、reloadTimer、敵respawn、命中flas
 
 ## 対象外
 
-recovery item、enemy time scaling、multiplayer sync、persistence、inventory、wave/drop、map配置規則の変更、#21/#35の既存実装とammo/map配置文書の変更、新規DOCGEN transformは対象外とする。
+recovery item、enemy time scaling、multiplayer sync、persistence、inventory、wave固有の新敵、intermission、quota、報酬、drop、map配置規則の変更、#21/#35の既存実装とammo/map配置文書の変更、新規DOCGEN transformは対象外とする。

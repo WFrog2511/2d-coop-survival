@@ -16,6 +16,10 @@ specification: SPEC-DIRECTIONAL-SPAWN
 - 敵循環・balance・HUDは[Issue #38](https://github.com/WFrog2511/2d-coop-survival/issues/38)のfollow-upを適用する。
 - 既存のmap生成、enemy visibility、有限弾薬、3分勝利、弾薬箱respawnを維持し、方向付きspawnに必要な差分だけを加える。
 
+### Issue #58の時間契約移行
+
+[DESIGN-BASIC-WAVE-PROGRESSION](wave-progression-v1.md)（Issue #58）は、Issue #34由来の180000ms（3分）生存timerだけをdynamic scheduleへsupersedeする。既定は3 combat wave各150000msとwave 1/2後のrest各60000ms、総570000msである。本書中の3分勝利は履歴として残し、現在のrun時間・phase残り・victory境界はDESIGN-BASIC-WAVE-PROGRESSIONを正本とする。60000ms spawn phase、方向規則、terminal/retryのtimer停止とgeneration guard、ammo box respawn契約は維持する。
+
 ## 責務
 
 | 対象 | 責務 |

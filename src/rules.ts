@@ -22,8 +22,48 @@ export const ENEMY_INSTANCE_IDS = [
 ] as const;
 /** 安定した敵枠を表す個別識別子。 */
 export type EnemyInstanceId = (typeof ENEMY_INSTANCE_IDS)[number];
-export const SURVIVAL_LIMIT_MS = 180000;
+export const WAVE_COUNT = 3;
+export const COMBAT_WAVE_DURATION_MS = 150000;
+export const REST_DURATION_MS = 60000;
+export const WAVE_DURATION_MS = COMBAT_WAVE_DURATION_MS;
+export const SURVIVAL_LIMIT_MS = COMBAT_WAVE_DURATION_MS * WAVE_COUNT + REST_DURATION_MS * (WAVE_COUNT - 1);
+export const STABLE_ENEMY_SLOT_COUNT = ENEMY_INSTANCE_IDS.length;
 export const AMMO_BOX_RESPAWN_MS = 30000;
+
+/** runの継続中またはterminalの状態を表す。 */
+export type RunStatus = 'playing' | 'victory' | 'defeat';
+
+/** 現在のwave内で敵が通常行動するか、次wave前の休憩かを表す。 */
+export type RunPhase = 'combat' | 'rest';
+
+/** 3 combat waveと2 restを決めるrun時間設定。 */
+export type RunSchedule = {
+  combatWaveDurationMs: number;
+  restDurationMs: number;
+};
+
+/** URL未指定時に使う3 combat waveと2 restの時間設定。 */
+export const DEFAULT_RUN_SCHEDULE: RunSchedule = {
+  combatWaveDurationMs: COMBAT_WAVE_DURATION_MS,
+  restDurationMs: REST_DURATION_MS,
+};
+
+/** stableな敵枠がspawn、撃破、recycleのどの段階にあるかを表す。 */
+export type RunEnemySlotStatus = 'waiting' | 'active' | 'respawning' | 'recycling';
+
+/**
+ * 3 waveの時間進行と敵枠の観測値をまとめた純粋なrun状態。
+ *
+ * `enemySlots`は実際にspawn成功した枠だけを`active`にするため、
+ * strict spawnの再試行中もHUDの現在数とPhaser spriteを一致させられる。
+ */
+export type RunState = {
+  status: RunStatus;
+  schedule: RunSchedule;
+  elapsedMs: number;
+  kills: number;
+  enemySlots: Record<EnemyInstanceId, RunEnemySlotStatus>;
+};
 
 /** 発射、装弾、補給を決める武器の静的定義。 */
 export type WeaponDefinition = {
@@ -172,15 +212,260 @@ function cloneEnemies(enemies: Record<EnemyInstanceId, EnemyState>): Record<Enem
   return Object.fromEntries(ENEMY_INSTANCE_IDS.map(id => [id, { ...enemies[id] }])) as Record<EnemyInstanceId, EnemyState>;
 }
 
+function createWaitingEnemySlots(): Record<EnemyInstanceId, RunEnemySlotStatus> {
+  return Object.fromEntries(ENEMY_INSTANCE_IDS.map(id => [id, 'waiting'])) as Record<EnemyInstanceId, RunEnemySlotStatus>;
+}
+
+function withEnemySlot(
+  state: RunState,
+  enemyId: EnemyInstanceId,
+  status: RunEnemySlotStatus,
+): RunState {
+  return {
+    ...state,
+    enemySlots: { ...state.enemySlots, [enemyId]: status },
+  };
+}
+
+function normalizedRunDurationMs(value: number, fallback: number): number {
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
+/**
+ * run設定を正の安全な整数へ正規化する。
+ *
+ * @param combatWaveDurationMs 1 combat waveの時間。
+ * @param restDurationMs wave間restの時間。
+ * @returns 正規化済みのrun時間設定。
+ */
+export function createRunSchedule(
+  combatWaveDurationMs = COMBAT_WAVE_DURATION_MS,
+  restDurationMs = REST_DURATION_MS,
+): RunSchedule {
+  return {
+    combatWaveDurationMs: normalizedRunDurationMs(combatWaveDurationMs, COMBAT_WAVE_DURATION_MS),
+    restDurationMs: normalizedRunDurationMs(restDurationMs, REST_DURATION_MS),
+  };
+}
+
+/**
+ * 3 combat waveと間の2 restを含むrun総時間を返す。
+ *
+ * @param schedule 対象runの時間設定。
+ * @returns victory境界となる総ミリ秒。
+ */
+export function runDurationMs(schedule: RunSchedule): number {
+  return schedule.combatWaveDurationMs * WAVE_COUNT + schedule.restDurationMs * (WAVE_COUNT - 1);
+}
+
+function normalizedRunElapsedMs(elapsedMs: number, schedule: RunSchedule): number {
+  const value = Number.isNaN(elapsedMs) ? 0 : elapsedMs;
+  return Math.min(runDurationMs(schedule), Math.max(0, Math.floor(value)));
+}
+
+/**
+ * 新しいrunを未spawnの12 stable slotと時間設定とともに作成する。
+ *
+ * @param schedule combat/restの時間設定。
+ * @returns 初期化済みのrun状態。
+ */
+export function createRunState(schedule: RunSchedule = DEFAULT_RUN_SCHEDULE): RunState {
+  const normalizedSchedule = createRunSchedule(
+    schedule.combatWaveDurationMs,
+    schedule.restDurationMs,
+  );
+  return {
+    status: 'playing',
+    schedule: normalizedSchedule,
+    elapsedMs: 0,
+    kills: 0,
+    enemySlots: createWaitingEnemySlots(),
+  };
+}
+
+/**
+ * run開始からの絶対経過時間を使い、waveと勝利境界へ決定的に進める。
+ *
+ * @param state 現在のrun状態。
+ * @param elapsedMs run開始からの絶対経過ミリ秒。
+ * @returns 経過時間と必要な勝利状態を反映したrun状態。
+ */
+export function advanceRunState(state: RunState, elapsedMs: number): RunState {
+  if (state.status !== 'playing') return state;
+  const nextElapsedMs = Math.max(state.elapsedMs, normalizedRunElapsedMs(elapsedMs, state.schedule));
+  const status: RunStatus = nextElapsedMs >= runDurationMs(state.schedule) ? 'victory' : 'playing';
+  if (nextElapsedMs === state.elapsedMs && status === state.status)
+    return state;
+  return { ...state, elapsedMs: nextElapsedMs, status };
+}
+
+/**
+ * 現在のcombat waveまたはその直後のrestが属する1始まりのwave番号を返す。
+ *
+ * @param state 現在のrun状態。
+ * @returns 1から3の範囲に収めたwave番号。
+ */
+export function currentWaveNumber(state: RunState): number {
+  const cycleDuration = state.schedule.combatWaveDurationMs + state.schedule.restDurationMs;
+  return Math.min(WAVE_COUNT, Math.floor(state.elapsedMs / cycleDuration) + 1);
+}
+
+/**
+ * 現在のcombatまたはrest phaseを返す。
+ *
+ * @param state 現在のrun状態。
+ * @returns 現在のphase。
+ */
+export function currentRunPhase(state: RunState): RunPhase {
+  if (state.elapsedMs >= runDurationMs(state.schedule))
+    return 'combat';
+  const cycleElapsedMs = state.elapsedMs % (state.schedule.combatWaveDurationMs + state.schedule.restDurationMs);
+  return cycleElapsedMs < state.schedule.combatWaveDurationMs ? 'combat' : 'rest';
+}
+
+/**
+ * 現在のcombatまたはrest phaseが終わるまでの残り時間を返す。
+ *
+ * @param state 現在のrun状態。
+ * @returns 0から現在phaseの設定時間までの残りミリ秒。
+ */
+export function remainingPhaseMs(state: RunState): number {
+  if (state.elapsedMs >= runDurationMs(state.schedule))
+    return 0;
+  const cycleElapsedMs = state.elapsedMs % (state.schedule.combatWaveDurationMs + state.schedule.restDurationMs);
+  return currentRunPhase(state) === 'combat'
+    ? state.schedule.combatWaveDurationMs - cycleElapsedMs
+    : state.schedule.combatWaveDurationMs + state.schedule.restDurationMs - cycleElapsedMs;
+}
+
+/**
+ * 現在combat waveが終わるまでの残り時間を返す。
+ *
+ * rest中は次waveを開始するまで戦闘残り時間を0とし、既存HUDのdata-testidを維持する。
+ *
+ * @param state 現在のrun状態。
+ * @returns 0からcombat wave設定時間までの残りミリ秒。
+ */
+export function remainingWaveMs(state: RunState): number {
+  return currentRunPhase(state) === 'combat' ? remainingPhaseMs(state) : 0;
+}
+
+/**
+ * 通常移動へ一度だけ適用するphase別の敵速度倍率を返す。
+ *
+ * @param phase 現在のcombatまたはrest phase。
+ * @returns combatは1.5、restは0.75の速度倍率。
+ */
+export function enemySpeedMultiplierForPhase(phase: RunPhase): number {
+  return phase === 'combat' ? 1.5 : 0.75;
+}
+
+/**
+ * hidden recycleを許可する最小path距離をphase別に返す。
+ *
+ * @param phase 現在のcombatまたはrest phase。
+ * @returns combatは10、restは5 tileの最小距離。
+ */
+export function hiddenRecyclePathDistanceForPhase(phase: RunPhase): number {
+  return phase === 'combat' ? 10 : 5;
+}
+
+/**
+ * 現在Phaser上でactiveとして観測すべき敵枠数を返す。
+ *
+ * @param state 現在のrun状態。
+ * @returns activeなstable enemy slot数。
+ */
+export function activeEnemyCount(state: RunState): number {
+  return ENEMY_INSTANCE_IDS.filter(id => state.enemySlots[id] === 'active').length;
+}
+
+/**
+ * 現在activeかつ未撃破として残る敵数を返す。
+ *
+ * death eventは同時にslotを`respawning`へ移すため、ここで返す数は
+ * Phaser上のactive sprite数と同期する。これは撃破quotaではない。
+ *
+ * @param state 現在のrun状態。
+ * @returns activeかつ未撃破の敵枠数。
+ */
+export function remainingEnemyCount(state: RunState): number {
+  return activeEnemyCount(state);
+}
+
+/**
+ * Phaserの敵spawnが成功したとき、そのstable slotをactiveへ遷移する。
+ *
+ * @param state 現在のrun状態。
+ * @param enemyId spawnに成功したstable enemy slot。
+ * @returns spawn成功を反映したrun状態。
+ */
+export function recordEnemySpawned(state: RunState, enemyId: EnemyInstanceId): RunState {
+  if (state.status !== 'playing' || state.enemySlots[enemyId] === 'active')
+    return state;
+  return withEnemySlot(state, enemyId, 'active');
+}
+
+/**
+ * activeな敵が撃破されたとき、再出現待ちと撃破数を記録する。
+ *
+ * @param state 現在のrun状態。
+ * @param enemyId 撃破されたstable enemy slot。
+ * @returns deathを反映したrun状態。
+ */
+export function recordEnemyDefeated(state: RunState, enemyId: EnemyInstanceId): RunState {
+  if (state.status !== 'playing' || state.enemySlots[enemyId] !== 'active')
+    return state;
+  return { ...withEnemySlot(state, enemyId, 'respawning'), kills: state.kills + 1 };
+}
+
+/**
+ * hidden enemyをHP維持のままrecycle待ちへ遷移する。
+ *
+ * @param state 現在のrun状態。
+ * @param enemyId recycleするstable enemy slot。
+ * @returns recycle待ちを反映したrun状態。
+ */
+export function recordEnemyRecycled(state: RunState, enemyId: EnemyInstanceId): RunState {
+  if (state.status !== 'playing' || state.enemySlots[enemyId] !== 'active')
+    return state;
+  return withEnemySlot(state, enemyId, 'recycling');
+}
+
+/**
+ * player HPが0になったrunをdefeat terminalへ遷移する。
+ *
+ * @param state 現在のrun状態。
+ * @returns defeatを反映したrun状態。
+ */
+export function defeatRun(state: RunState): RunState {
+  return state.status === 'playing' ? { ...state, status: 'defeat' } : state;
+}
+
+/**
+ * terminal後の再挑戦用に、独立した初期run状態を作る。
+ *
+ * @param schedule 再挑戦後も使うcombat/restの時間設定。
+ * @returns elapsed、撃破数、敵枠を初期化したrun状態。
+ */
+export function retryRun(schedule: RunSchedule = DEFAULT_RUN_SCHEDULE): RunState {
+  return createRunState(schedule);
+}
+
 /**
  * 生存制限までの残り時間を範囲内に丸めて返す。
  *
  * @param startedAt 生存計測を開始した時刻。
  * @param now 現在時刻。
+ * @param survivalLimitMs 対象runの総時間。
  * @returns 0から生存制限までの残りミリ秒。
  */
-export function remainingSurvivalMs(startedAt: number, now: number): number {
-  return Math.min(SURVIVAL_LIMIT_MS, Math.max(0, startedAt + SURVIVAL_LIMIT_MS - now));
+export function remainingSurvivalMs(
+  startedAt: number,
+  now: number,
+  survivalLimitMs = SURVIVAL_LIMIT_MS,
+): number {
+  return Math.min(survivalLimitMs, Math.max(0, startedAt + survivalLimitMs - now));
 }
 
 /**
@@ -188,10 +473,15 @@ export function remainingSurvivalMs(startedAt: number, now: number): number {
  *
  * @param startedAt 生存計測を開始した時刻。
  * @param now 現在時刻。
+ * @param survivalLimitMs 対象runの総時間。
  * @returns 生存制限に到達していれば真。
  */
-export function hasReachedSurvivalLimit(startedAt: number, now: number): boolean {
-  return now >= startedAt + SURVIVAL_LIMIT_MS;
+export function hasReachedSurvivalLimit(
+  startedAt: number,
+  now: number,
+  survivalLimitMs = SURVIVAL_LIMIT_MS,
+): boolean {
+  return now >= startedAt + survivalLimitMs;
 }
 
 /**
@@ -200,10 +490,16 @@ export function hasReachedSurvivalLimit(startedAt: number, now: number): boolean
  * @param state 現在の戦闘状態。
  * @param startedAt 生存計測を開始した時刻。
  * @param now 現在時刻。
+ * @param survivalLimitMs 対象runの総時間。
  * @returns 勝利状態を反映した戦闘状態。
  */
-export function advanceSurvivalState(state: CombatState, startedAt: number, now: number): CombatState {
-  if (state.defeated || state.victory || !hasReachedSurvivalLimit(startedAt, now))
+export function advanceSurvivalState(
+  state: CombatState,
+  startedAt: number,
+  now: number,
+  survivalLimitMs = SURVIVAL_LIMIT_MS,
+): CombatState {
+  if (state.defeated || state.victory || !hasReachedSurvivalLimit(startedAt, now, survivalLimitMs))
     return state;
   return { ...state, victory: true, reloading: null };
 }

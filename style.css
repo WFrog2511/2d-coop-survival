@@ -73,11 +73,31 @@ h1 {
   padding: 6px 14px;
   border-radius: 10px;
   background: rgb(16 24 39 / 88%);
+  font-variant-numeric: tabular-nums;
   transform: translateX(-50%);
 }
 
+#run-panel {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  gap: 2px;
+  padding: 6px 10px;
+  border: 1px solid #55728b;
+  border-radius: 10px;
+  background: rgb(16 24 39 / 88%);
+  font-variant-numeric: tabular-nums;
+}
+
+#run-panel[data-phase='rest'] {
+  border-color: #e2bb78;
+  background: rgb(107 87 59 / 88%);
+}
+
 #survival-panel span,
-#hp-panel span {
+#hp-panel span,
+#run-panel span {
   font-size: 0.8rem;
   color: #c7f7ff;
 }

@@ -35,6 +35,10 @@ basic_design: DESIGN-BASIC-DIRECTIONAL-SPAWN
 
 基本敵はID固定でdirect/left/right各3体、stable seedのBFS tie-break、`TILE_SIZE`内の局所分離を使う。ドローンは既存直接経路と横移動を維持する。timerはCanvas上部中央、HP数値/progressは左下、ammoは右下へDOM overlayし、pointerを遮らない。stagger/retry/death/recycle TimerEventはgeneration/terminal guardを持ち、stop/reset/terminalですべてclearする。
 
+### Issue #58の時間契約移行
+
+[DESIGN-DETAIL-WAVE-PROGRESSION](wave-progression-v1.md)（Issue #58）は、Issue #34由来の180000ms（3分）生存期限をdynamic RunState scheduleへ時間契約だけsupersedeする。既定は3 combat wave各150000ms、wave 1/2後のrest各60000ms、総570000msである。本書の180000ms terminalと3分勝利の記述は履歴として残し、現在のrun時間・phase残り・victory境界はDESIGN-DETAIL-WAVE-PROGRESSIONを正本とする。60000ms spawn phase、主方向/反対方向の割り当て、strict spawn、terminal/retryのgeneration guard、ammo box respawn契約は維持する。
+
 ## 2. 対象範囲
 
 ### 対象
