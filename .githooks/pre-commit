@@ -1,4 +1,7 @@
-#!/usr/bin/env sh
+#!/bin/sh
+
+REPO_ROOT="$(git rev-parse --show-toplevel)" || exit $?
+cd "$REPO_ROOT" || exit $?
 
 if [ -x ".venv/Scripts/python.exe" ]; then
   PYTHON=".venv/Scripts/python.exe"
@@ -13,6 +16,14 @@ else
   exit 2
 fi
 
+if ! command -v corepack >/dev/null 2>&1; then
+  echo "Node.js 22のCorepackが見つからないため静的解析を実行できません。" >&2
+  exit 2
+fi
+
 git diff --cached --check || exit $?
 "$PYTHON" -X utf8 scripts/check_japanese_comments.py --staged || exit $?
+corepack pnpm exec node scripts/check_typescript_comments.mjs --staged || exit $?
 "$PYTHON" -X utf8 scripts/check_acceptance_matrix.py --staged || exit $?
+corepack pnpm lint || exit $?
+corepack pnpm typecheck || exit $?
