@@ -73,6 +73,7 @@ h1 {
   padding: 6px 14px;
   border-radius: 10px;
   background: rgb(16 24 39 / 88%);
+  font-variant-numeric: tabular-nums;
   transform: translateX(-50%);
 }
 

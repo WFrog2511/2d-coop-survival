@@ -369,7 +369,14 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   const hpBar = page.getByTestId('hp-bar');
   await expect(hpBar).toHaveAttribute('max', '100');
   await expect.poll(async () => hpBar.evaluate(element => (element as HTMLProgressElement).value)).toBe(100);
-  await expect(page.getByTestId('survival-time')).toHaveText(/^\d\d:\d\d$/);
+  const survivalPanel = page.locator('#survival-panel');
+  await expect(survivalPanel.getByTestId('wave')).toHaveText('1');
+  await expect(survivalPanel.getByTestId('run-phase')).toHaveText('夜（戦闘）');
+  await expect(survivalPanel.getByTestId('phase-remaining')).toHaveText(/^02:(?:[0-2]\d|30)$/);
+  await expect(page.getByTestId('survival-time')).toBeHidden();
+  await expect(page.getByTestId('enemy-current')).toBeHidden();
+  await expect(page.getByTestId('enemy-goal')).toBeHidden();
+  await expect(page.getByTestId('enemy-remaining')).toBeHidden();
   await expect(page.getByTestId('map-seed')).toHaveText('15');
   await expect(page.getByTestId('player-tile')).toHaveText(/\d+,\d+/);
   const map = generateArenaMap(Number(await page.getByTestId('map-seed').textContent()));
@@ -391,7 +398,7 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   if (!bounds) throw new Error('戦闘アリーナのcanvasが見つかりません。');
   expect(bounds).toEqual(initialCanvasBounds);
 
-  const timeBounds = await page.locator('#survival-panel').boundingBox();
+  const timeBounds = await survivalPanel.boundingBox();
   const hpBounds = await page.locator('#hp-panel').boundingBox();
   const panelBounds = await ammoPanel.boundingBox();
   if (!timeBounds || !hpBounds || !panelBounds) throw new Error('Canvas overlayの表示範囲を取得できません。');
@@ -492,7 +499,7 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expect(page.getByTestId('wave')).toHaveText('1');
   await expect(page.getByTestId('wave-remaining')).toHaveText('02:30');
   await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase', 'combat');
-  await expect(page.getByTestId('run-phase')).toHaveText('戦闘');
+  await expect(page.getByTestId('run-phase')).toHaveText('夜（戦闘）');
   await expect(page.getByTestId('phase-remaining')).toHaveText('02:30');
   await setArenaPhysics(page, 'pause');
   await expect(page.getByTestId('defeat')).toBeHidden();
@@ -554,7 +561,7 @@ test('初期8体を段階的に12体へ増やし、spawn phaseとcombat/rest境�
   await expect(page.getByTestId('wave')).toHaveText('1');
   await expect(page.getByTestId('wave-remaining')).toHaveText('02:30');
   await expect(runPanel).toHaveAttribute('data-phase', 'combat');
-  await expect(page.getByTestId('run-phase')).toHaveText('戦闘');
+  await expect(page.getByTestId('run-phase')).toHaveText('夜（戦闘）');
   await expect(page.getByTestId('phase-remaining')).toHaveText('02:30');
   await expect(page.getByTestId('enemy-current')).toHaveText(String(INITIAL_ACTIVE_IDS.length));
   await expect(page.getByTestId('enemy-goal')).toHaveText(String(ENEMY_INSTANCE_IDS.length));
@@ -650,7 +657,7 @@ test('初期8体を段階的に12体へ増やし、spawn phaseとcombat/rest境�
   await expect(page.getByTestId('wave')).toHaveText('1');
   await expect(page.getByTestId('wave-remaining')).toHaveText('00:00');
   await expect(runPanel).toHaveAttribute('data-phase', 'rest');
-  await expect(page.getByTestId('run-phase')).toHaveText('休憩');
+  await expect(page.getByTestId('run-phase')).toHaveText('昼（休憩）');
   await expect(page.getByTestId('phase-remaining')).toHaveText('01:00');
   expect(await runPanel.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe(combatPanelBackground);
   expect(await allEnemySpawnMetadata(page)).toEqual(phaseOne);
@@ -661,7 +668,7 @@ test('初期8体を段階的に12体へ増やし、spawn phaseとcombat/rest境�
   await expect(page.getByTestId('wave')).toHaveText('2');
   await expect(page.getByTestId('wave-remaining')).toHaveText('02:30');
   await expect(runPanel).toHaveAttribute('data-phase', 'combat');
-  await expect(page.getByTestId('run-phase')).toHaveText('戦闘');
+  await expect(page.getByTestId('run-phase')).toHaveText('夜（戦闘）');
   await expect(page.getByTestId('phase-remaining')).toHaveText('02:30');
   expect(await allEnemySpawnMetadata(page)).toEqual(phaseOne);
 
@@ -671,7 +678,7 @@ test('初期8体を段階的に12体へ増やし、spawn phaseとcombat/rest境�
   await expect(page.getByTestId('wave')).toHaveText('1');
   await expect(page.getByTestId('wave-remaining')).toHaveText('02:30');
   await expect(runPanel).toHaveAttribute('data-phase', 'combat');
-  await expect(page.getByTestId('run-phase')).toHaveText('戦闘');
+  await expect(page.getByTestId('run-phase')).toHaveText('夜（戦闘）');
   await expect(page.getByTestId('phase-remaining')).toHaveText('02:30');
   await expectEnemyHitPointsAndIds(page, 0);
   for (const id of INITIAL_ACTIVE_IDS)
@@ -704,7 +711,7 @@ test('DEV queryでspawnとcombat/rest scheduleを開始前に固定する', asyn
   await expect(page.getByTestId('wave')).toHaveText('1');
   await expect(page.getByTestId('wave-remaining')).toHaveText('00:01');
   await expect(runPanel).toHaveAttribute('data-phase', 'combat');
-  await expect(page.getByTestId('run-phase')).toHaveText('戦闘');
+  await expect(page.getByTestId('run-phase')).toHaveText('夜（戦闘）');
   await expect(page.getByTestId('phase-remaining')).toHaveText('00:01');
   await expect(page.getByTestId(`${ENEMY_SPAWN_ORDER[0]}-hp`)).toHaveAttribute('data-active', 'true');
   await expect(page.getByTestId(`${ENEMY_SPAWN_ORDER[0]}-hp`)).toHaveAttribute('data-spawn-reason', 'initial');
@@ -719,7 +726,7 @@ test('DEV queryでspawnとcombat/rest scheduleを開始前に固定する', asyn
   // frame更新の端数を越えてrestへ入り、境界ちょうどの表示競合を避ける。
   await page.clock.runFor(500);
   await expect(runPanel).toHaveAttribute('data-phase', 'rest');
-  await expect(page.getByTestId('run-phase')).toHaveText('休憩');
+  await expect(page.getByTestId('run-phase')).toHaveText('昼（休憩）');
   await expect(page.getByTestId('wave')).toHaveText('1');
   await expect(page.getByTestId('wave-remaining')).toHaveText('00:00');
   await expect(page.getByTestId('phase-remaining')).toHaveText('00:01');

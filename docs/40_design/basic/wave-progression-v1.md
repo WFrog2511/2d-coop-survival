@@ -17,9 +17,9 @@ specification: SPEC-WAVE-PROGRESSION
 | 対象 | 責務 |
 | --- | --- |
 | `src/rules.ts` | 3 combat/2 restのschedule、dynamic run総時間、RunState、12 stable slot、absolute elapsed、phase/wave/remaining、速度/recycle helper、spawn/death/recycle/defeat/retry遷移、current/remaining/kills helper |
-| `src/main.ts` | DEV queryを安全にscheduleへ解決する、Phaser時刻をRunStateへ渡す、敵通常velocityへphase倍率を一度だけ適用する、phase変更時だけmap graphicsを再描画する、terminal/retryでtimerとstateを同期する |
-| `src/arena/hud.ts` | RunStateをwave、visibleなphase/phase残り、互換用combat残り、敵current/goal/remaining、killsのoutputとrun panel datasetへ反映する |
-| `index.html` / `style.css` | 既存Canvas overlayを遮らないrun panel、phase output、combat/restのdata-phase CSSを提供する |
+| `src/main.ts` | DEV queryを安全にscheduleへ解決する、Phaser時刻をRunStateへ渡す、敵通常velocityへphase倍率を一度だけ適用する、phase変更時にmap graphicsを450msでcrossfadeする、terminal/retryでtimerとstateを同期する |
+| `src/arena/hud.ts` | RunStateを中央のwave、夜/昼、visibleなphase残り、hidden互換output、右上killsとrun panel datasetへ反映する |
+| `index.html` / `style.css` | 既存Canvas overlayを遮らない中央のwave/夜昼/phase残り、右上kills、combat/restのdata-phase CSSを提供する |
 | `tests/rules.test.ts` | schedule、phase境界、速度/recycle helper、純粋event遷移を検証する |
 | `e2e/prototype.spec.ts` | query、initial/stagger、combat/rest境界、palette/data-phase、rest recycle、death respawn、victory、defeat、retryの観測契約を検証する |
 
@@ -34,7 +34,7 @@ flowchart TD
   spawnSuccess -->|no| retrySpawn[既存1000ms retry]
   active --> stagger[既存3/6/9/12秒stagger]
   stagger --> time[毎frameでabsolute elapsedをadvance]
-  time --> phase[wave/phase HUDとpaletteを更新]
+  time --> phase[中央HUDと450ms palette fadeを更新]
   phase --> event{deathまたはrecycleか}
   event -->|death| respawning[slotをrespawning、killsを加算]
   event -->|recycle| recycling[slotをrecycling、killsは不変]
@@ -47,11 +47,11 @@ flowchart TD
 
 ## 時間、slot、HUDの整合
 
-`RunSchedule`はcombat時間とrest時間を持ち、`runDurationMs`は`3 * combat + 2 * rest`で求める。既定では0〜149999msがwave 1 combat、150000〜209999msがwave 1 rest、210000〜359999msがwave 2 combat、360000〜419999msがwave 2 rest、420000〜569999msがwave 3 combat、570000ms以上がvictoryとなる。rest中のwave番号は直前combat waveを維持し、`waveRemaining`は00:00、`phaseRemaining`だけをrest残りとして更新する。
+`RunSchedule`はcombat時間とrest時間を持ち、`runDurationMs`は`3 * combat + 2 * rest`で求める。既定では0〜149999msがwave 1 combat、150000〜209999msがwave 1 rest、210000〜359999msがwave 2 combat、360000〜419999msがwave 2 rest、420000〜569999msがwave 3 combat、570000ms以上がvictoryとなる。rest中のwave番号は直前combat waveを維持し、`waveRemaining`は00:00、`phaseRemaining`だけをrest残りとして更新する。中央HUDはwave、combat時の夜（戦闘）またはrest時の昼（休憩）、`phaseRemaining`だけをvisibleにし、合計run残りと敵数はhidden互換output、killsは右上のままとする。
 
 slotは実際のsprite成功を正本にする。initial/stagger/death/recycleのstrict spawn失敗時はslotをactiveへ変更しないので、HUDのcurrent/remainingが候補不足中のsprite数と一致する。deathはCombatStateのHPを0にした後、slotをrespawningへ移してkillsを1増やす。recycleはHPを維持してslotをrecyclingへ移すだけで、killsを増やさない。goalは固定12であり、remainingをgoal不足またはquotaに読み替えない。
 
-combatでは敵通常移動を1.5倍、restでは0.75倍にする。droneの前進と横移動は合成後の最終velocityへ一度だけ適用する。hit-stopとknockbackは既存のearly returnに残し、倍率を適用しない。hidden recycleのpath距離安全閾値はcombatが10 tile未満、restが5 tile未満である。
+combatでは敵通常移動を1.5倍、restでは0.75倍にする。droneの前進と横移動は合成後の最終velocityへ一度だけ適用する。hit-stopとknockbackは既存のearly returnに残し、倍率を適用しない。hidden recycleのpath距離安全閾値はcombatが10 tile未満、restが5 tile未満である。phase変更では既存graphicsを残して新しい寒色/暖色graphicsを450msでfade-inし、完了時に旧graphicsだけを破棄するため、static collisionを触らない。
 
 ## terminalとretry
 

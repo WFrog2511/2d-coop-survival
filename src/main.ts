@@ -21,6 +21,7 @@ const MIN_COMBAT_WAVE_DURATION_MS = 1000;
 const MAX_COMBAT_WAVE_DURATION_MS = 300000;
 const MIN_REST_DURATION_MS = 500;
 const MAX_REST_DURATION_MS = 120000;
+const MAP_PALETTE_FADE_MS = 450;
 type EnemySpawnReason = 'initial' | 'stagger' | 'death' | 'recycle' | 'debug';
 type EnemySpawnConfig = {
   initialCount: number;
@@ -142,6 +143,9 @@ class Arena extends Phaser.Scene {
   private survivalStartedAt = 0;
   private ground: Phaser.GameObjects.Graphics | undefined;
   private wallArt: Phaser.GameObjects.Graphics | undefined;
+  private fadingGround: Phaser.GameObjects.Graphics | undefined;
+  private fadingWallArt: Phaser.GameObjects.Graphics | undefined;
+  private mapPaletteTransition: Phaser.Tweens.Tween | undefined;
   private visibilityMask!: Phaser.GameObjects.Graphics;
   private visibilityMaskPlayerTile: TilePosition | undefined;
   private keys!: Controls;
@@ -391,14 +395,15 @@ class Arena extends Phaser.Scene {
   }
 
   private buildMap(): void {
+    this.cancelMapPaletteTransition();
     this.ground?.destroy();
     this.wallArt?.destroy();
+    this.ground = undefined;
+    this.wallArt = undefined;
     this.walls.clear(true, true);
     this.ammoBoxes.clear(true, true);
     this.ammoBoxStates.clear();
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
-    this.ground = this.add.graphics().setDepth(-2);
-    this.wallArt = this.add.graphics().setDepth(-1);
     for (let y = 0; y < this.map.height; y += 1)
       for (let x = 0; x < this.map.width; x += 1)
         if (this.map.tiles[y][x] === 'wall') {
@@ -417,19 +422,69 @@ class Arena extends Phaser.Scene {
     if (!force && this.mapPhase === phase)
       return;
     this.mapPhase = phase;
+    if (force || !this.ground || !this.wallArt) {
+      this.cancelMapPaletteTransition();
+      this.ground?.destroy();
+      this.wallArt?.destroy();
+      const palette = this.createMapPaletteGraphics(phase);
+      this.ground = palette.ground;
+      this.wallArt = palette.wallArt;
+      return;
+    }
+
+    this.cancelMapPaletteTransition();
+    const previousGround = this.ground;
+    const previousWallArt = this.wallArt;
+    const nextPalette = this.createMapPaletteGraphics(phase);
+    nextPalette.ground.setAlpha(0);
+    nextPalette.wallArt.setAlpha(0);
+    this.fadingGround = nextPalette.ground;
+    this.fadingWallArt = nextPalette.wallArt;
+    this.mapPaletteTransition = this.tweens.add({
+      targets: [nextPalette.ground, nextPalette.wallArt],
+      alpha: 1,
+      duration: MAP_PALETTE_FADE_MS,
+      ease: 'Linear',
+      onComplete: () => {
+        if (this.fadingGround !== nextPalette.ground || this.fadingWallArt !== nextPalette.wallArt)
+          return;
+        previousGround.destroy();
+        previousWallArt.destroy();
+        this.ground = nextPalette.ground;
+        this.wallArt = nextPalette.wallArt;
+        this.fadingGround = undefined;
+        this.fadingWallArt = undefined;
+        this.mapPaletteTransition = undefined;
+      },
+    });
+  }
+
+  private cancelMapPaletteTransition(): void {
+    this.mapPaletteTransition?.stop();
+    this.mapPaletteTransition = undefined;
+    this.fadingGround?.destroy();
+    this.fadingWallArt?.destroy();
+    this.fadingGround = undefined;
+    this.fadingWallArt = undefined;
+  }
+
+  private createMapPaletteGraphics(phase: RunPhase): { ground: Phaser.GameObjects.Graphics; wallArt: Phaser.GameObjects.Graphics } {
+    const ground = this.add.graphics().setDepth(-2);
+    const wallArt = this.add.graphics().setDepth(-1);
     const palette = phase === 'combat'
       ? { ground: 0x101827, grid: 0x31516b, wall: 0x26374a, wallEdge: 0x55728b }
       : { ground: 0x6b573b, grid: 0xae8a58, wall: 0x79573a, wallEdge: 0xe2bb78 };
-    this.ground?.clear().fillStyle(palette.ground, 1).fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT).lineStyle(1, palette.grid, 0.55);
+    ground.fillStyle(palette.ground, 1).fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT).lineStyle(1, palette.grid, 0.55);
     for (let x = 0; x <= WORLD_WIDTH; x += TILE_SIZE)
-      this.ground?.lineBetween(x, 0, x, WORLD_HEIGHT);
+      ground.lineBetween(x, 0, x, WORLD_HEIGHT);
     for (let y = 0; y <= WORLD_HEIGHT; y += TILE_SIZE)
-      this.ground?.lineBetween(0, y, WORLD_WIDTH, y);
-    this.wallArt?.clear().fillStyle(palette.wall, 1).lineStyle(1, palette.wallEdge, 1);
+      ground.lineBetween(0, y, WORLD_WIDTH, y);
+    wallArt.fillStyle(palette.wall, 1).lineStyle(1, palette.wallEdge, 1);
     for (let y = 0; y < this.map.height; y += 1)
       for (let x = 0; x < this.map.width; x += 1)
         if (this.map.tiles[y][x] === 'wall')
-          this.wallArt?.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE).strokeRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          wallArt.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE).strokeRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+    return { ground, wallArt };
   }
 
   private buildAmmoBoxes(): void {
@@ -542,6 +597,7 @@ class Arena extends Phaser.Scene {
   private stopRunTimers(): void {
     this.survivalTimer?.remove(false);
     this.survivalTimer = undefined;
+    this.cancelMapPaletteTransition();
     this.enemySpawnTimers.forEach(timer => timer.remove(false));
     this.ammoBoxRespawns.forEach(timer => timer.remove(false));
     this.enemySpawnTimers.clear();

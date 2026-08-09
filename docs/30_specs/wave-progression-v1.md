@@ -65,25 +65,27 @@ Arenaの毎frame更新とdynamicな`runDurationMs(schedule)` TimerEventはとも
 
 敵の通常移動はhit-stopとknockbackのearly return後にphase倍率を使う。basicは最終追跡velocityへ、droneは前進velocityと横移動velocityを合成した最終velocityへ一度だけ倍率を掛ける。player、射撃、spawn/stagger、death respawn、ammo/reload、victoryにはphaseによる停止や倍率を加えない。
 
-`updateMapPalette`はphaseが変わったときだけgroundとwall graphicsをclearしてcombatの既存暗い寒色またはrestの暖色で再描画する。wallのstatic physics groupはmap reset時だけ構築し、palette遷移では再利用する。wave/phase境界でspawn phase、主方向、active sprite、path、HP、CombatState、enemy metadataを変更しない。既存の`spawnPhaseAt`とdirectional spawnは次回のinitial/stagger/death/recycle/DEV spawnだけに使い、run phaseを入力にしない。
+`updateMapPalette`はphaseが変わったときだけ、現在のground/wall graphicsを残したままcombatの既存暗い寒色またはrestの暖色のgraphicsを450msでfade-inし、完了後に前のgraphicsを破棄する。wallのstatic physics groupはmap reset時だけ構築し、palette遷移では再利用する。wave/phase境界でspawn phase、主方向、active sprite、path、HP、CombatState、enemy metadataを変更しない。既存の`spawnPhaseAt`とdirectional spawnは次回のinitial/stagger/death/recycle/DEV spawnだけに使い、run phaseを入力にしない。
 
 ## HUD契約
 
-既存の`survival-time`、`spawn-phase`、`primary-direction`、HP、ammo、敵HP、result、retryのdata-testidを維持する。
+既存の`survival-time`、`spawn-phase`、`primary-direction`、HP、ammo、敵HP、result、retryのdata-testidを維持する。visibleな総survival残りと敵数は表示しない。
 
 | data-testid / 属性 | 表示値 | 補助属性 |
 | --- | --- | --- |
 | `wave` | 1始まりのwave番号。rest中は直前combat waveを維持 | `data-state`にplaying、victory、defeat |
+| `survival-panel` | 画面中央上のvisibleコンテナ。wave、夜/昼、phase残りを表示 | なし |
+| `survival-time` | 合計run残りの互換output | hidden |
 | `wave-remaining` | 既存観測契約を保つ互換用output。combatの`MM:SS`残り、restとterminalは00:00 | hidden。visible表示は`phase-remaining`に集約 |
-| `run-phase` | `戦闘`または`休憩` | `data-phase`にcombatまたはrest |
+| `run-phase` | combatは`夜（戦闘）`、restは`昼（休憩）` | `data-phase`にcombatまたはrest |
 | `phase-remaining` | 現phaseの`MM:SS`残り | なし |
-| `run-panel` | run HUDコンテナ | `data-phase`、`data-run-config` |
-| `enemy-current` | spawn成功済みactive slot数 | なし |
-| `enemy-goal` | 固定12 | なし |
-| `enemy-remaining` | activeかつ未撃破の敵数 | なし |
-| `kills` | run累積death数 | なし |
+| `run-panel` | 右上のkillsコンテナ | `data-phase`、`data-run-config` |
+| `enemy-current` | spawn成功済みactive slot数の互換output | hidden |
+| `enemy-goal` | 固定12の互換output | hidden |
+| `enemy-remaining` | activeかつ未撃破の敵数の互換output | hidden |
+| `kills` | 右上に表示するrun累積death数 | なし |
 
-`ArenaHud.refresh`と毎frameの時間更新は同じRunStateからHUDを更新する。initial、stagger、death、recycle、retry、terminalでRunStateを変更した経路は、既存のHUD refreshまたは時間更新で表示を同期する。visibleな残り時間は`phase-remaining`へ集約し、`run-panel[data-phase]`のCSSはcombat/rest配色を同期してcanvasのpaletteと同じphaseを示す。
+`ArenaHud.refresh`と毎frameの時間更新は同じRunStateからHUDを更新する。initial、stagger、death、recycle、retry、terminalでRunStateを変更した経路は、既存のHUD refreshまたは時間更新で表示を同期する。visibleな残り時間は中央の`phase-remaining`へ集約し、`run-panel[data-phase]`のCSSはcombat/rest配色を同期してcanvasのpaletteと同じphaseを示す。
 
 ## 既存仕様との移行と繰り延べ
 
@@ -96,6 +98,6 @@ wave固有の新敵、quota、報酬、drop、敵数12超過、balance scaling�
 - unit: 既定scheduleの150000/210000/360000/420000/570000msと短いcustom scheduleのwave、phase、remaining、terminalを確認する。過去時刻やterminal後のadvanceはstateを戻さない。
 - unit: combat/restの速度倍率とrecycle閾値、初期slot、spawn成功、death、recycle、候補不足相当の無操作、defeat、retryでcurrent、remaining、killsを確認する。
 - E2E: valid/invalid DEV schedule query、initial 8のstrict spawn成功後のactive 8、initial 8が全て成功済みの場合の3/6/9/12秒stagger成功後のactive 9/10/11/12、候補不足時の実数維持を確認する。
-- E2E: combat/rest境界でphase HUD、remaining、palette/data-phaseだけが変わり、active enemy metadataとHPを保持する。restではpath距離5 tile以上のhidden敵をrecycleでき、death respawn、victory/defeat/retry、有限ammo、reload、ammo box導線を回帰させない。
+- E2E: combat/rest境界で中央のwave・夜/昼・phase remaining、450ms palette fade、data-phaseだけが変わり、active enemy metadataとHPを保持する。合計survival残りと敵数はhiddenの互換outputに留め、killsは右上に表示する。restではpath距離5 tile以上のhidden敵をrecycleでき、death respawn、victory/defeat/retry、有限ammo、reload、ammo box導線を回帰させない。
 
 本仕様はTypeScript実装と手動で同期する。現行DOCGENはPython sourceだけを対象とするため、DOCGEN検査のPASSをTypeScript同期のPASSへ読み替えず、新しいtransformを追加しない。

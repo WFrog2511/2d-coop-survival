@@ -199,7 +199,7 @@ export class ArenaHud {
     this.waveHud.dataset.state = state.status;
     this.waveRemainingHud.value = formatSurvivalTime(remainingWaveMs(state));
     this.runPanel.dataset.phase = phase;
-    this.runPhaseHud.value = phase === 'combat' ? '戦闘' : '休憩';
+    this.runPhaseHud.value = phase === 'combat' ? '夜（戦闘）' : '昼（休憩）';
     this.runPhaseHud.dataset.phase = phase;
     this.phaseRemainingHud.value = formatSurvivalTime(remainingPhaseMs(state));
     this.enemyCurrentHud.value = String(activeEnemyCount(state));

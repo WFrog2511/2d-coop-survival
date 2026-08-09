@@ -10,7 +10,7 @@ specification: SPEC-WAVE-PROGRESSION
 
 | 項目 | 内容 |
 | --- | --- |
-| 対象機能 | 3 combat wave、2 rest、敵数、kills、phase HUD |
+| 対象機能 | 3 combat wave、2 rest、kills、phase HUD |
 | 対応する基本設計 | [DESIGN-BASIC-WAVE-PROGRESSION](../basic/wave-progression-v1.md) |
 | 対応する要件 | [REQ-WAVE-PROGRESSION](../../20_requirements/wave-progression-v1.md) |
 | 対応する仕様 | [SPEC-WAVE-PROGRESSION](../../30_specs/wave-progression-v1.md) |
@@ -20,7 +20,7 @@ specification: SPEC-WAVE-PROGRESSION
 
 ## 1. 目的
 
-既存の180000ms生存runと各60000ms waveを、3 combat wave各150000ms、wave 1/2後だけのrest各60000ms、既定570000ms runへ移行する。利用者はwave 1〜3、phase名、phase残り、現在敵数、固定goal、残敵数、run累積killsを観測できる。時間、enemy slot、terminalはPhaser spriteから切り離した純粋RunStateで扱い、unitでschedule境界とevent遷移を固定する。
+既存の180000ms生存runと各60000ms waveを、3 combat wave各150000ms、wave 1/2後だけのrest各60000ms、既定570000ms runへ移行する。利用者は中央上でwave 1〜3、夜（戦闘）/昼（休憩）、現在phase残りを、右上でrun累積killsを観測できる。総survival残りと敵数は互換用hidden outputに留める。時間、enemy slot、terminalはPhaser spriteから切り離した純粋RunStateで扱い、unitでschedule境界とevent遷移を固定する。
 
 この設計は[REQ-SURVIVAL-TIME-LIMIT](../../20_requirements/survival-time-limit-v1.md)の旧時間だけをsupersedeし、victory/defeat/retry、terminal停止、ammo box復活を維持する。[REQ-DIRECTIONAL-SPAWN](../../20_requirements/directional-spawn-v1.md)の60000ms directional spawn phaseをrun phaseへ一般化しない。
 
@@ -54,7 +54,7 @@ specification: SPEC-WAVE-PROGRESSION
 | BR-004 | current/remainingはactiveかつ未撃破の実数、killsはdeath累積とする | SPEC-WAVE-PROGRESSION | currentとremainingを将来も分けるか |
 | BR-005 | strict spawn候補不足はRunStateのcountを変えず、既存1000ms retryを使う | SPEC-WAVE-PROGRESSION | なし |
 | BR-006 | combat/restの敵通常移動倍率は1.5/0.75、recycle安全閾値は10/5 tile未満とする | REQ-WAVE-PROGRESSION | balance測定は別Issue |
-| BR-007 | phase変更時だけground/wall graphicsを寒色/暖色に再描画し、static collisionを再利用する | REQ-WAVE-PROGRESSION | なし |
+| BR-007 | phase変更時だけground/wall graphicsを寒色/暖色へ450msでcrossfadeし、static collisionを再利用する | REQ-WAVE-PROGRESSION | なし |
 | BR-008 | terminal後は時間進行・enemy eventを拒否し、retryはscheduleを保って全RunStateを初期化する | REQ-WAVE-PROGRESSION | なし |
 
 ## 5. 利用者導線・操作フロー
@@ -68,9 +68,9 @@ flowchart TD
   retrySpawn --> spawn
   hud1 --> stagger[既存staggerとenemy event]
   stagger --> state[spawn成功、death、recycleをRunStateへ記録]
-  state --> hud2[current/goal/remaining/killsを更新]
+  state --> hud2[hidden互換enemy outputと右上killsを更新]
   hud2 --> time[absolute elapsedを毎frame進める]
-  time --> phase[combat/rest、残り、paletteを更新]
+  time --> phase[combat/rest、中央HUD、450ms palette fadeを更新]
   phase --> terminal{dynamic run時間またはHP 0か}
   terminal -->|no| spawn
   terminal -->|yes| result[既存result表示とtimer停止]
@@ -80,10 +80,10 @@ flowchart TD
 
 | ステップ | 操作者 | 入力 | システム処理 | 出力 |
 | ---: | --- | --- | --- | --- |
-| 1 | player | run開始または再挑戦 | CombatStateとRunStateを初期化し、既存initial 8のstrict spawnを予約する | elapsed 0、wave 1 combat、既定なら02:30/09:30、成功済みspawnの実数/12、kills 0 |
+| 1 | player | run開始または再挑戦 | CombatStateとRunStateを初期化し、既存initial 8のstrict spawnを予約する | 中央にwave 1、夜（戦闘）、既定ならphase残り02:30、右上kills 0、hidden互換outputに09:30と成功済みspawnの実数/12 |
 | 2 | system | initialまたはstagger spawn成功 | 対象slotをactiveへ遷移する | current/remainingは成功ごとに1増加。initial 8全成功後は8、そこから各stagger成功後は9→10→11→12 |
 | 2a | system | strict候補不足 | slotとcurrent/remainingを変更しない | 同じstrict条件で1000ms後に再試行 |
-| 3 | system | phase境界 | wave、phase、残り、速度、recycle閾値、paletteを更新する | active enemyの配置・HP・metadataは不変 |
+| 3 | system | phase境界 | wave、夜/昼、phase残り、速度、recycle閾値、450ms palette fadeを更新する | active enemyの配置・HP・metadataは不変 |
 | 4 | player/system | enemy deathまたはhidden recycle | slotとkillsを規則どおり更新し、既存timerを予約する | current/remainingとkillsを同期する |
 | 5 | player | defeatまたはdynamic run終了後に再挑戦 | terminalを停止し新generationを開始する | 同じscheduleの初期HUDと既存導線へ戻る |
 
@@ -144,7 +144,7 @@ DEV queryはArena作成時に一度だけ既存の安全な整数readerで解決
 | 通常移動 | `Arena.moveEnemy` | `currentRunPhase` | final velocityへ倍率を一度だけ適用 |
 | defeat | `Arena.enterTerminal` | `defeatRun` | timer停止、physics pause、result表示 |
 
-`ArenaHud`はRunStateからwave、phase、phase残り、current、goal、remaining、killsをvisibleに更新し、`wave-remaining`は既存観測契約用のhidden outputとして維持する。run panelの`data-phase`はcanvas paletteと同じphaseである。map paletteはphase変化だけで`ground`と`wallArt`を再描画し、static wall collisionを変更しない。spawn phaseとprimary directionは引き続きdirectional spawnの観測値であり、RunStateのwaveと混在させない。
+`ArenaHud`はRunStateから中央のwave、夜（戦闘）/昼（休憩）、phase残りと右上killsをvisibleに更新する。`survival-time`、`wave-remaining`、current、goal、remainingは既存観測契約用のhidden outputとして維持する。run panelの`data-phase`はcanvas paletteと同じphaseである。map paletteはphase変化だけで、既存`ground`と`wallArt`を残しつつ新しいgraphicsを450ms fade-inしてから入れ替え、static wall collisionを変更しない。spawn phaseとprimary directionは引き続きdirectional spawnの観測値であり、RunStateのwaveと混在させない。
 
 ## 9. 失敗時動作
 
@@ -155,7 +155,7 @@ DEV queryはArena作成時に一度だけ既存の安全な整数readerで解決
 | 同じslotの重複death/recycle | pure関数は同じstateを返す | Sceneが既存timerを維持 |
 | terminal後のadvance/spawn/death/recycle | pure関数は同じstateを返す | retryだけを受け付ける |
 | 旧generation callback | Scene guardで副作用なし | 新runのstate/HUDを維持 |
-| phase境界 | HUD、速度、recycle閾値、paletteだけ更新 | active enemyの配置・HP・metadataを維持 |
+| phase境界 | 中央HUD、速度、recycle閾値、450ms palette fadeだけ更新 | active enemyの配置・HP・metadataを維持 |
 
 認証、認可、PII、監査ログ、外部APIはこのローカルprototypeの対象外である。
 
@@ -170,7 +170,7 @@ DEV queryはArena作成時に一度だけ既存の安全な整数readerで解決
 | unit | terminal/retry | terminal後は無副作用、retryはscheduleを保って0ms/0 kills/waiting slot |
 | E2E | DEV query | valid値をHUD datasetへ反映し、無効値は既定へ戻す |
 | E2E | initial/stagger | initial 8全成功後に8。初期8全成功時、各3/6/9/12秒stagger成功後に9→10→11→12。候補不足時は実数を維持して1000ms再試行 |
-| E2E | phase/palette | combat/rest境界でremaining、data-phase、CSS/paletteが変わり、existing metadataとHPを保持 |
+| E2E | phase/palette/HUD | combat/rest境界で中央のwave・夜/昼・phase残り、data-phase、450ms palette fadeが変わり、総残り/敵数はhidden、killsは右上のまま、existing metadataとHPを保持 |
 | E2E | recycle/death | restではpath距離5 tile以上のhidden敵もrecycleでき、death respawn後もkillsを保持 |
 | E2E | victory/defeat/retry | dynamic terminal、result、停止、schedule維持、既存ammo/reload導線を維持 |
 

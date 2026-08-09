@@ -36,9 +36,9 @@ run開始からの絶対経過時間、schedule、terminal、敵slot、累積撃
 - `current`はspawn成功済みでactiveなstable enemy slotの実数、`goal`は固定12、`remaining`はactiveかつ未撃破の実数、`kills`はrun内death event累積値とする。
 - hidden recycleはHPを維持する再投入であり、`kills`を増やさない。combatではpath距離が10 tile未満、restでは5 tile未満のhidden敵をrecycle対象にする。
 - spawn候補不足中はactive数、remaining数、killsを変更せず、既存の1000ms retryで成功を待つ。spawn成功したときだけactiveへ遷移する。
-- HUDは既存の残り時間、HP、ammo、spawn phase、result、data-testidを維持し、visibleにはwave番号、phase名、phase残り、`current/goal/remaining`、killsを表示する。互換用の`wave-remaining`はcombat残りを保持するが、restで誤解を招く二重表示にしない。run panelは`data-phase="combat"|"rest"`を同期する。
+- HUDは既存のHP、ammo、spawn phase、result、data-testidを維持する。画面中央上のvisible表示はwave番号、夜（combat）/昼（rest）、現在phase残りだけへ集約し、合計survival残りと`current/goal/remaining`は互換用のhidden outputとする。killsは従来の右上位置に表示し、run panelは`data-phase="combat"|"rest"`を同期する。
 
-phaseにより敵の通常移動だけを倍率変更する。combatは1.5倍、restは0.75倍とし、player操作、射撃、spawn/stagger、death respawn、ammo/reload、victoryは継続する。droneは前進と横移動を合成した最終velocityへ一度だけ倍率を掛ける。hit-stopとknockbackの既存経路は倍率変更しない。mapはcombatで既存の暗い寒色、restで昼寄りの暖色へ切り替え、ground/wall graphicsだけをphase遷移時に再描画する。static collisionは再生成しない。
+phaseにより敵の通常移動だけを倍率変更する。combatは1.5倍、restは0.75倍とし、player操作、射撃、spawn/stagger、death respawn、ammo/reload、victoryは継続する。droneは前進と横移動を合成した最終velocityへ一度だけ倍率を掛ける。hit-stopとknockbackの既存経路は倍率変更しない。mapはcombatで既存の暗い寒色、restで昼寄りの暖色へ切り替え、ground/wall graphicsだけをphase遷移時に450msのクロスフェードで再描画する。static collisionは再生成しない。
 
 ## 既存sliceからの移行境界
 
@@ -54,9 +54,9 @@ victoryまたはdefeatでは既存の敵spawn、death、recycle、reload、ammo 
 
 ## 受け入れ条件
 
-1. 起動直後およびretry直後は、採用済みscheduleでelapsed 0、wave 1、combat、phase残り02:30、既定なら生存残り09:30、goal 12、kills 0を表示する。互換用`wave-remaining`もcombat中は02:30となる。active、current、remainingは成功済みspawnの実数であり、initial 8のstrict spawnが全て成功した時点で8となる。候補不足時はその実数を維持して1000ms再試行する。
+1. 起動直後およびretry直後は、採用済みscheduleでelapsed 0、wave 1、combat、phase残り02:30、kills 0となる。画面中央上には`Wave 1`、`夜（戦闘）`、phase残り02:30を表示し、既定なら09:30の合計survival残り、goal 12、current、remainingはhiddenの互換outputで保持する。互換用`wave-remaining`もcombat中は02:30となる。active、current、remainingは成功済みspawnの実数であり、initial 8のstrict spawnが全て成功した時点で8となる。候補不足時はその実数を維持して1000ms再試行する。
 2. 既存の3000/6000/9000/12000msの各stagger spawnが成功するたびに、active、current、remainingはその時点の実数から1だけ増える。initial 8が全て成功済みの場合に限り、各成功後は8→9→10→11→12へ到達する。候補不足時はgoalまたはkillsを変えず、その時点の実数を維持する。
-3. 既定scheduleでは150000msでwave 1 rest、210000msでwave 2 combat、360000msでwave 2 rest、420000msでwave 3 combatへ進む。境界でactive enemyの位置、HP、stable ID、spawn metadataを変更しない。combat/restで敵通常速度、map配色、hidden recycle閾値だけを切り替える。
+3. 既定scheduleでは150000msでwave 1 rest、210000msでwave 2 combat、360000msでwave 2 rest、420000msでwave 3 combatへ進む。境界でactive enemyの位置、HP、stable ID、spawn metadataを変更しない。combat/restで敵通常速度、hidden recycle閾値、450msでクロスフェードするmap配色だけを切り替える。
 4. hidden recycle中は対象slotだけが一時的にcurrent/remainingから外れ、re-entry成功後に戻る。recycle前後でkillsは不変とする。combatはpath距離10 tile未満、restは5 tile未満を安全閾値とする。
 5. 敵撃破時は対象slotがcurrent/remainingから外れ、killsが1だけ増える。death respawn成功時はHPを回復してcurrent/remainingへ戻し、killsは維持する。
 6. 有効なDEV queryは採用時間、dynamic総時間、phase境界、HUDの`data-run-config`へ反映する。無効なqueryは既定の150000/60000msへ戻る。
@@ -71,5 +71,5 @@ TypeScriptの設計同期は手動reviewと対象unit/E2Eで行う。現行DOCGE
 ## 検証
 
 - rules unitでschedule、combat/rest境界、動的terminal、速度/recycle helper、spawn/death/recycle、current/remaining/kills、defeat、retryの純粋遷移を確認する。
-- Playwright ChromiumでDEV query、初期状態、stagger、phase境界、palette/data-phase、rest recycle、death respawn、victory、defeat、retryのHUD/data-testidを確認する。
+- Playwright ChromiumでDEV query、初期状態、stagger、phase境界のpalette fade/data-phase、中央のwave・夜/昼・phase残り、hidden互換output、右上kills、rest recycle、death respawn、victory、defeat、retryのHUD/data-testidを確認する。
 - 文書変更後はdocs link検査を実行する。
