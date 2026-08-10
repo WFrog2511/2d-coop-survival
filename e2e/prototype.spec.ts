@@ -29,6 +29,8 @@ type EnemySpawnMetadata = {
 type ArenaDebugScene = {
   physics: { pause: () => void; resume: () => void };
   cameras: { main: { worldView: { left: number; top: number; right: number; bottom: number } } };
+  player: { x: number; y: number; tintTopLeft: number };
+  textures: { get: (key: string) => { getSourceImage: () => HTMLCanvasElement } };
   debugRespawnEnemy: (id: EnemyId) => void;
   debugSetHiddenRecycleEnabled: (enabled: boolean) => void;
   debugSetPlayerInvulnerable: (enabled: boolean) => void;
@@ -43,6 +45,21 @@ function devStartUrl(path: string): string {
 async function currentAmmo(page: import('@playwright/test').Page): Promise<number> {
   const text = await page.getByTestId('ammo').textContent();
   return Number(text?.split('/')[0]);
+}
+
+async function textureIsGrayscale(page: import('@playwright/test').Page, key: string): Promise<boolean> {
+  return page.evaluate((textureKey) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    const source = scene.textures.get(textureKey).getSourceImage();
+    const context = source.getContext('2d');
+    if (!context) throw new Error(`${textureKey} textureの2D contextがありません。`);
+    const pixels = context.getImageData(0, 0, source.width, source.height).data;
+    for (let index = 0; index < pixels.length; index += 4)
+      if (pixels[index] !== pixels[index + 1] || pixels[index + 1] !== pixels[index + 2])
+        return false;
+    return true;
+  }, key);
 }
 
 async function documentBounds(locator: import('@playwright/test').Locator): Promise<{
@@ -405,6 +422,13 @@ test('開始前のSpace選択を保ち、開始後のキーボード移動を受
   await expect(page.locator('#game canvas')).toBeVisible();
   await expect(page.getByTestId('role')).toHaveText('スナイパー（紫）');
   await expect(page.getByTestId('role')).toHaveAttribute('data-role', 'sniper');
+  const playerTint = await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    return scene.player.tintTopLeft;
+  });
+  expect(playerTint).toBe(0xa88cff);
+  expect(await Promise.all(['player', 'basic', 'drone', 'enemy-silhouette'].map(key => textureIsGrayscale(page, key)))).toEqual([true, true, true, true]);
   const playerTile = page.getByTestId('player-tile');
   const initialPlayerTile = await playerTile.textContent();
   await page.keyboard.down('d');
