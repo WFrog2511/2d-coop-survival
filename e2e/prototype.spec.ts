@@ -387,7 +387,7 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test('役職を選択してから開始し、選択値をHUDへ表示する', async ({ page }) => {
+test('開始前のSpace選択を保ち、開始後のキーボード移動を受け付ける', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByTestId('start-gate')).toBeVisible();
   await expect(page.locator('#game canvas')).toHaveCount(0);
@@ -405,6 +405,14 @@ test('役職を選択してから開始し、選択値をHUDへ表示する', as
   await expect(page.locator('#game canvas')).toBeVisible();
   await expect(page.getByTestId('role')).toHaveText('スナイパー（紫）');
   await expect(page.getByTestId('role')).toHaveAttribute('data-role', 'sniper');
+  const playerTile = page.getByTestId('player-tile');
+  const initialPlayerTile = await playerTile.textContent();
+  await page.keyboard.down('d');
+  try {
+    await expect(playerTile).not.toHaveText(initialPlayerTile ?? '', { timeout: 2_000 });
+  } finally {
+    await page.keyboard.up('d');
+  }
 });
 
 test('SpaceとShiftで照準方向へ回避し、クールダウン中は再発動しない', async ({ page }) => {

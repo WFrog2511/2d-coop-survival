@@ -1465,9 +1465,3 @@ function setupStartGate(): void {
 
 arenaHud.onRetry(() => resetArena?.());
 setupStartGate();
-window.addEventListener('keydown', (event) => {
-  if (!arenaGame)
-    return;
-  if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ', 'shift', 'w', 'a', 's', 'd', 'r', 'e', '1', '2'].includes(event.key.toLowerCase()))
-    event.preventDefault();
-});
