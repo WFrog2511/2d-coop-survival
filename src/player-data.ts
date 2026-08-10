@@ -1,6 +1,6 @@
 export const PLAYER_DASH_DISTANCE_PX = 80;
 
-export const PLAYER_DASH_COOLDOWN_MS = 2_000;
+export const PLAYER_DASH_COOLDOWN_MS = 1_000;
 
 export const PLAYER_DASH_DURATION_MS = 160;
 

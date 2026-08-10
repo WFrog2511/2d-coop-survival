@@ -10,9 +10,9 @@ describe('プレイヤー行動データ', () => {
   test('cooldown境界で再使用可否を決める', () => {
     const cooldownUntil = dashCooldownUntil(1_000);
 
-    expect(cooldownUntil).toBe(3_000);
-    expect(canDashAt(2_999, cooldownUntil)).toBe(false);
-    expect(canDashAt(3_000, cooldownUntil)).toBe(true);
+    expect(cooldownUntil).toBe(2_000);
+    expect(canDashAt(1_999, cooldownUntil)).toBe(false);
+    expect(canDashAt(2_000, cooldownUntil)).toBe(true);
   });
 
   test('5役職は承認済みの表示色とPhaser用tintを使う', () => {

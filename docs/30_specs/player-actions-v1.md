@@ -14,7 +14,7 @@ requirements: REQ-PLAYER-ACTIONS
 
 ## 回避
 
-- SpaceとShiftは同じ回避開始処理を呼ぶ。純粋な`dashDirectionFor`でポインタからプレイヤーへ向く照準ベクトルを正規化し、`canDashAt`と`dashCooldownUntil`で2000msの再使用待ちを判定する。`PLAYER_DASH_DISTANCE_PX`、`PLAYER_DASH_DURATION_MS`、`PLAYER_DASH_COOLDOWN_MS`は80px、160ms、2000msを定義する。
+- SpaceとShiftは同じ回避開始処理を呼ぶ。純粋な`dashDirectionFor`でポインタからプレイヤーへ向く照準ベクトルを正規化し、`canDashAt`と`dashCooldownUntil`で1000msの再使用待ちを判定する。`PLAYER_DASH_DISTANCE_PX`、`PLAYER_DASH_DURATION_MS`、`PLAYER_DASH_COOLDOWN_MS`は80px、160ms、1000msを定義する。
 - 回避中は移動入力より回避速度を優先し、対象方向の壁へ衝突した時点または160ms経過時点で停止する。回避中だけ`hitPlayer`は無副作用で終了する。
 - terminalとretryは回避状態と速度を解除する。retryはcooldownも初期化する。装甲敵の固有判定は実装しない。
 

@@ -475,7 +475,7 @@ test('SpaceとShiftで照準方向へ回避し、クールダウン中は再発�
   await page.keyboard.press('Shift');
   await page.waitForTimeout(300);
   expect(playerTile(await page.getByTestId('player-tile').textContent())).toEqual(afterSpace);
-  await page.waitForTimeout(1_800);
+  await page.waitForTimeout(500);
   await aimPlayer(page, lane.direction);
   await page.keyboard.press('Shift');
   await page.waitForTimeout(300);
