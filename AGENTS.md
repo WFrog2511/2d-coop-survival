@@ -78,8 +78,8 @@ Prototype standardでmatrix、release-readiness、evidenceを作成・更新す�
 
 `.codex/config.toml`と`.codex/agents/`はtrusted projectだけで有効になる。変更後は新しいtrusted taskを開始し、`terra_max_planner_reviewer`と`terra_max_writer`が使えることを確認してから依存する。最大sub-agent数は3とし、将来のproject sub-agentは`gpt-5.6-terra` / `max`を使う。SOL root orchestrator（`gpt-5.6-sol`）はtask / Issue / Git / GitHub / agent orchestrationを担当し、Terra Max planner/reviewerとsole writerはplan / write / review / unitを担当する。`gpt-5.6-terra`が使えない場合の別モデルへのfallbackはユーザー確認後だけ行う。
 
-- `terra_max_planner_reviewer`はread-onlyで、実装前のplanと最終diff reviewを一つのcheckpointとして担当する。workspace、GitHub、Gitの書換えはしない。
-- `terra_max_writer`はworkspace-writeの唯一のwriterであり、writeと対象unitを担当する。同じtaskで他のwriterを並行起動せず、stage・commitは親が品質gate後に自動で行い、writer自身は行わない。push、merge、顧客承認は親の明示権限なしに行わない。
+- `terra_max_planner_reviewer`は実行時互換性のため`workspace-write`で起動するが、developer promptにより振る舞い上はread-onlyの実装前plan・最終diff review checkpointとして動作する。これはsandboxによるセキュリティ境界ではなく、workspace、GitHub、Gitを書き換える権限を与えるものでもない。
+- `terra_max_writer`は唯一の実装writerであり、writeと対象unitを担当する。同じtaskで他のwriterを並行起動せず、stage・commitは親が品質gate後に自動で行い、writer自身は行わない。push、merge、顧客承認は親の明示権限なしに行わない。
 - Prototype standardの標準コード変更は、Terra Max planner/reviewerのplan → Terra Max sole writerのwriteと対象unit → Terra Max planner/reviewerのfinal diff reviewを原則とする。軽微なfinding修正後は変更箇所だけを再reviewし、厳格変更、重大finding、Definition of Delivery変更後は独立reviewを広げる。Publish-onlyではsub-agentを使わない。
 - handoffにはIssue / Definition of Delivery、対象ファイル、現在diff、直近gate結果、停止条件だけを渡す。長い履歴やraw logを複製しない。
 - 通常の`apply_patch`が一度実際に書込み失敗したと確認した場合だけ、対象パスを検証したcandidate、SHA-256、backup、原子的置換を使う。helperを先回りして追加せず、backupは検証とreviewが終わるまで保持する。
