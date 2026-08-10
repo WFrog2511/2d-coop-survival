@@ -30,7 +30,7 @@ type ArenaDebugScene = {
   physics: { pause: () => void; resume: () => void };
   cameras: { main: { worldView: { left: number; top: number; right: number; bottom: number } } };
   children: { getChildren: () => readonly { fillColor?: number }[] };
-  player: { x: number; y: number; tintTopLeft: number };
+  player: { x: number; y: number; rotation: number; tintTopLeft: number };
   textures: { get: (key: string) => { getSourceImage: () => HTMLCanvasElement } };
   debugRespawnEnemy: (id: EnemyId) => void;
   debugSetHiddenRecycleEnabled: (enabled: boolean) => void;
@@ -441,6 +441,11 @@ test('開始前のSpace選択を保ち、開始後のキーボード移動を受
   });
   expect(enemyHitColor).toBe(0xa88cff);
   expect(await Promise.all(['player', 'basic', 'drone', 'enemy-silhouette'].map(key => textureIsGrayscale(page, key)))).toEqual([true, true, true, true]);
+  const initialRotation = await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    return scene.player.rotation;
+  });
   const playerTile = page.getByTestId('player-tile');
   const initialPlayerTile = await playerTile.textContent();
   await page.keyboard.down('d');
@@ -449,6 +454,20 @@ test('開始前のSpace選択を保ち、開始後のキーボード移動を受
   } finally {
     await page.keyboard.up('d');
   }
+  const movedRotation = await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    return scene.player.rotation;
+  });
+  expect(movedRotation).toBeCloseTo(initialRotation, 6);
+  await aimPlayer(page, { x: 1, y: 0 });
+  await page.waitForTimeout(100);
+  const aimedRotation = await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    return scene.player.rotation;
+  });
+  expect(aimedRotation).toBeCloseTo(0, 1);
 });
 
 test('SpaceとShiftで照準方向へ回避し、クールダウン中は再発動しない', async ({ page }) => {

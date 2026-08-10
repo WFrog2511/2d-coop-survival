@@ -3,7 +3,7 @@ import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, basicApproachRoleFor,
 import { ArenaEffects } from './arena/effects';
 import { ArenaHud } from './arena/hud';
 import { ENEMIES, ENEMY_DEFEAT_HIT_STOP_MS, ENEMY_HIT_STOP_MS, ENEMY_IDS, ENEMY_LABELS, ENEMY_SPAWN_ORDER, INITIAL_ENEMY_IDS, PLAYER_HIT_STOP_MS, STAGGERED_ENEMIES } from './game-data';
-import { PLAYER_DASH_DURATION_MS, PLAYER_DASH_SPEED_PX_PER_SECOND, PLAYER_ROLES, canDashAt, dashCooldownUntil, dashDirectionFor, type PlayerRole } from './player-data';
+import { PLAYER_DASH_DURATION_MS, PLAYER_DASH_SPEED_PX_PER_SECOND, PLAYER_ROLES, canDashAt, dashCooldownUntil, dashDirectionFor, type DashDirection, type PlayerRole } from './player-data';
 import { selectNearbyPickup } from './pickups';
 import { AMMO_BOX_RESPAWN_MS, COMBAT_WAVE_DURATION_MS, REST_DURATION_MS, WEAPONS, advanceRunState, advanceSurvivalState, cancelReload, collectAmmoBox as collectAmmoBoxState, completeReload, createRunSchedule, currentRunPhase, damageEnemy, damagePlayer, defeatRun, droneLateralSpeedAt, enemySpeedMultiplierForPhase, fireWeapon, hiddenRecyclePathDistanceForPhase, isEnemyDefeated, recordEnemyDefeated, recordEnemyRecycled, recordEnemySpawned, remainingSurvivalMs, resolveDamage, respawnEnemy, retryCombat, retryRun, runDurationMs, selectWeapon, startReload, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type RunPhase, type RunSchedule, type RunState, type WeaponId } from './rules';
 
@@ -170,6 +170,7 @@ class Arena extends Phaser.Scene {
   private playerHitStopUntil = 0;
   private playerDash: PlayerDash | undefined;
   private playerDashCooldownUntil = 0;
+  private aimDirection: DashDirection | undefined;
   private enemyHitStopUntil = enemyNumbers();
   private knockbackUntil = enemyNumbers();
   private knockbackVelocity = enemyRecord(() => ({ x: 0, y: 0 }));
@@ -227,9 +228,11 @@ class Arena extends Phaser.Scene {
     this.input.keyboard?.on('keydown-E', () => this.collectNearbyAmmoBox());
     this.input.keyboard?.on('keydown-SPACE', () => this.tryDash());
     this.input.keyboard?.on('keydown-SHIFT', () => this.tryDash());
+    this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => this.updateAimDirection(pointer));
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      this.updateAimDirection(pointer);
       if (!WEAPONS[this.state.weapon].automatic)
-        this.tryFire(pointer);
+        this.tryFire();
     });
     this.input.keyboard?.addCapture(['W', 'A', 'S', 'D', 'R', 'E', 'SPACE', 'SHIFT', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'ONE', 'TWO']);
     this.reset(true);
@@ -250,9 +253,12 @@ class Arena extends Phaser.Scene {
     this.updateReloadProgressHud();
     ENEMY_IDS.forEach(id => this.moveEnemy(id));
     this.updateEnemyVisibility();
-    this.player.rotation = Phaser.Math.Angle.Between(this.player.x, this.player.y, this.input.activePointer.worldX, this.input.activePointer.worldY);
+    if (this.aimDirection) {
+      const aim = this.aimPoint();
+      this.player.rotation = Phaser.Math.Angle.Between(this.player.x, this.player.y, aim.x, aim.y);
+    }
     if (WEAPONS[this.state.weapon].automatic && this.input.activePointer.isDown)
-      this.tryFire(this.input.activePointer);
+      this.tryFire();
     this.bullets.getChildren().forEach((child) => {
       const bullet = child as Phaser.Physics.Arcade.Sprite;
       const data = this.meta.get(bullet);
@@ -642,10 +648,17 @@ class Arena extends Phaser.Scene {
     };
   }
 
+  private updateAimDirection(pointer: Phaser.Input.Pointer): void {
+    const direction = dashDirectionFor(this.player, { x: pointer.worldX, y: pointer.worldY });
+    if (direction)
+      this.aimDirection = direction;
+  }
+
   private aimPoint(): { x: number; y: number } {
+    const direction = this.aimDirection ?? { x: Math.cos(this.player.rotation), y: Math.sin(this.player.rotation) };
     return {
-      x: this.input.activePointer.worldX,
-      y: this.input.activePointer.worldY,
+      x: this.player.x + direction.x * TILE_SIZE,
+      y: this.player.y + direction.y * TILE_SIZE,
     };
   }
 
@@ -1071,7 +1084,7 @@ class Arena extends Phaser.Scene {
     this.state = cancelReload(this.state);
   }
 
-  private tryFire(pointer: Phaser.Input.Pointer): void {
+  private tryFire(): void {
     if (this.state.defeated || this.state.victory)
       return;
     const weaponId = this.state.weapon;
@@ -1091,7 +1104,8 @@ class Arena extends Phaser.Scene {
         arenaHud.setFeedback('弾切れ: Rでリロード');
       return;
     }
-    const base = Phaser.Math.Angle.Between(this.player.x, this.player.y, pointer.worldX, pointer.worldY);
+    const aim = this.aimPoint();
+    const base = Phaser.Math.Angle.Between(this.player.x, this.player.y, aim.x, aim.y);
     this.effects.playWeaponFire(this.player, weaponId, base);
     for (let index = 0; index < weapon.pellets; index += 1) {
       const bullet = this.bullets.get(this.player.x, this.player.y, `bullet-${this.state.weapon}`) as Phaser.Physics.Arcade.Sprite | null;
@@ -1333,7 +1347,7 @@ class Arena extends Phaser.Scene {
 
   private createTextures(): void {
     this.texture('player', 50, 38, (context) => {
-      context.fillStyle = '#9a9a9a';
+      context.fillStyle = '#c8c8c8';
       context.beginPath();
       context.moveTo(48, 19);
       context.lineTo(30, 3);
@@ -1343,7 +1357,7 @@ class Arena extends Phaser.Scene {
       context.lineTo(30, 35);
       context.closePath();
       context.fill();
-      context.fillStyle = '#e6e6e6';
+      context.fillStyle = '#ffffff';
       context.fillRect(28, 14, 13, 10);
     });
     this.texture('basic', 46, 46, (context) => {
