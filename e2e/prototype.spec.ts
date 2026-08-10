@@ -29,6 +29,9 @@ type EnemySpawnMetadata = {
 type ArenaDebugScene = {
   physics: { pause: () => void; resume: () => void };
   cameras: { main: { worldView: { left: number; top: number; right: number; bottom: number } } };
+  children: { getChildren: () => readonly { fillColor?: number }[] };
+  player: { x: number; y: number; rotation: number; tintTopLeft: number };
+  textures: { get: (key: string) => { getSourceImage: () => HTMLCanvasElement } };
   debugRespawnEnemy: (id: EnemyId) => void;
   debugSetHiddenRecycleEnabled: (enabled: boolean) => void;
   debugSetPlayerInvulnerable: (enabled: boolean) => void;
@@ -43,6 +46,21 @@ function devStartUrl(path: string): string {
 async function currentAmmo(page: import('@playwright/test').Page): Promise<number> {
   const text = await page.getByTestId('ammo').textContent();
   return Number(text?.split('/')[0]);
+}
+
+async function textureIsGrayscale(page: import('@playwright/test').Page, key: string): Promise<boolean> {
+  return page.evaluate((textureKey) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    const source = scene.textures.get(textureKey).getSourceImage();
+    const context = source.getContext('2d');
+    if (!context) throw new Error(`${textureKey} textureの2D contextがありません。`);
+    const pixels = context.getImageData(0, 0, source.width, source.height).data;
+    for (let index = 0; index < pixels.length; index += 4)
+      if (pixels[index] !== pixels[index + 1] || pixels[index + 1] !== pixels[index + 2])
+        return false;
+    return true;
+  }, key);
 }
 
 async function documentBounds(locator: import('@playwright/test').Locator): Promise<{
@@ -405,6 +423,29 @@ test('開始前のSpace選択を保ち、開始後のキーボード移動を受
   await expect(page.locator('#game canvas')).toBeVisible();
   await expect(page.getByTestId('role')).toHaveText('スナイパー（紫）');
   await expect(page.getByTestId('role')).toHaveAttribute('data-role', 'sniper');
+  const playerTint = await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    return scene.player.tintTopLeft;
+  });
+  expect(playerTint).toBe(0xa88cff);
+  const enemyHitColor = await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    const before = new Set(scene.children.getChildren());
+    scene.debugDamageEnemy('basic-1', 1);
+    const hit = scene.children.getChildren().find(child => !before.has(child));
+    if (!hit || typeof hit.fillColor !== 'number')
+      throw new Error('基本敵への着弾エフェクトが見つかりません。');
+    return hit.fillColor;
+  });
+  expect(enemyHitColor).toBe(0xa88cff);
+  expect(await Promise.all(['player', 'basic', 'drone', 'enemy-silhouette'].map(key => textureIsGrayscale(page, key)))).toEqual([true, true, true, true]);
+  const initialRotation = await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    return scene.player.rotation;
+  });
   const playerTile = page.getByTestId('player-tile');
   const initialPlayerTile = await playerTile.textContent();
   await page.keyboard.down('d');
@@ -413,6 +454,20 @@ test('開始前のSpace選択を保ち、開始後のキーボード移動を受
   } finally {
     await page.keyboard.up('d');
   }
+  const movedRotation = await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    return scene.player.rotation;
+  });
+  expect(movedRotation).toBeCloseTo(initialRotation, 6);
+  await aimPlayer(page, { x: 1, y: 0 });
+  await page.waitForTimeout(100);
+  const aimedRotation = await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    return scene.player.rotation;
+  });
+  expect(aimedRotation).toBeCloseTo(0, 1);
 });
 
 test('SpaceとShiftで照準方向へ回避し、クールダウン中は再発動しない', async ({ page }) => {
@@ -439,7 +494,7 @@ test('SpaceとShiftで照準方向へ回避し、クールダウン中は再発�
   await page.keyboard.press('Shift');
   await page.waitForTimeout(300);
   expect(playerTile(await page.getByTestId('player-tile').textContent())).toEqual(afterSpace);
-  await page.waitForTimeout(1_800);
+  await page.waitForTimeout(500);
   await aimPlayer(page, lane.direction);
   await page.keyboard.press('Shift');
   await page.waitForTimeout(300);

@@ -15,6 +15,7 @@ export default tseslint.config(
       '**/generated/**',
       '**/node_modules/**',
       '**/third_party/**',
+      '**/.worktrees/**',
     ],
   },
   js.configs.recommended,

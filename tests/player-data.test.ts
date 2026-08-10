@@ -10,18 +10,18 @@ describe('プレイヤー行動データ', () => {
   test('cooldown境界で再使用可否を決める', () => {
     const cooldownUntil = dashCooldownUntil(1_000);
 
-    expect(cooldownUntil).toBe(3_000);
-    expect(canDashAt(2_999, cooldownUntil)).toBe(false);
-    expect(canDashAt(3_000, cooldownUntil)).toBe(true);
+    expect(cooldownUntil).toBe(2_000);
+    expect(canDashAt(1_999, cooldownUntil)).toBe(false);
+    expect(canDashAt(2_000, cooldownUntil)).toBe(true);
   });
 
-  test('5役職は承認済みの表示色を使う', () => {
-    expect(PLAYER_ROLES.map(role => ({ id: role.id, color: role.color }))).toEqual([
-      { id: 'gunner', color: '青' },
-      { id: 'sniper', color: '紫' },
-      { id: 'gunslinger', color: '赤' },
-      { id: 'bulwark', color: 'オレンジ' },
-      { id: 'quartermaster', color: '緑' },
+  test('5役職は承認済みの表示色とPhaser用tintを使う', () => {
+    expect(PLAYER_ROLES.map(role => ({ id: role.id, color: role.color, tint: role.tint }))).toEqual([
+      { id: 'gunner', color: '青', tint: 0x55d6ff },
+      { id: 'sniper', color: '紫', tint: 0xa88cff },
+      { id: 'gunslinger', color: '赤', tint: 0xff7b7b },
+      { id: 'bulwark', color: 'オレンジ', tint: 0xffb45f },
+      { id: 'quartermaster', color: '緑', tint: 0x7dffb2 },
     ]);
   });
 });
