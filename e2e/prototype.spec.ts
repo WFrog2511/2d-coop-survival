@@ -29,6 +29,7 @@ type EnemySpawnMetadata = {
 type ArenaDebugScene = {
   physics: { pause: () => void; resume: () => void };
   cameras: { main: { worldView: { left: number; top: number; right: number; bottom: number } } };
+  children: { getChildren: () => readonly { fillColor?: number }[] };
   player: { x: number; y: number; tintTopLeft: number };
   textures: { get: (key: string) => { getSourceImage: () => HTMLCanvasElement } };
   debugRespawnEnemy: (id: EnemyId) => void;
@@ -428,6 +429,17 @@ test('開始前のSpace選択を保ち、開始後のキーボード移動を受
     return scene.player.tintTopLeft;
   });
   expect(playerTint).toBe(0xa88cff);
+  const enemyHitColor = await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    const before = new Set(scene.children.getChildren());
+    scene.debugDamageEnemy('basic-1', 1);
+    const hit = scene.children.getChildren().find(child => !before.has(child));
+    if (!hit || typeof hit.fillColor !== 'number')
+      throw new Error('基本敵への着弾エフェクトが見つかりません。');
+    return hit.fillColor;
+  });
+  expect(enemyHitColor).toBe(0xa88cff);
   expect(await Promise.all(['player', 'basic', 'drone', 'enemy-silhouette'].map(key => textureIsGrayscale(page, key)))).toEqual([true, true, true, true]);
   const playerTile = page.getByTestId('player-tile');
   const initialPlayerTile = await playerTile.textContent();

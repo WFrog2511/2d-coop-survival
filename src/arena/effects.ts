@@ -24,6 +24,7 @@ export class ArenaEffects {
   constructor(
     private readonly scene: Phaser.Scene,
     private readonly playerHitVignette: HTMLElement,
+    private readonly playerRoleTint: number,
   ) {}
 
   public reset(): void {
@@ -154,10 +155,10 @@ export class ArenaEffects {
   private playEnemyHitEffect(enemy: Phaser.Physics.Arcade.Sprite, kind: EnemyKind): void {
     const effect = ENEMY_HIT_EFFECT[kind];
     const hit = effect.shape === 'circle'
-      ? this.scene.add.circle(enemy.x, enemy.y, effect.radius, effect.color, 0.25)
-      : this.scene.add.star(enemy.x, enemy.y, effect.points, effect.innerRadius, effect.outerRadius, effect.color, 0.25);
+      ? this.scene.add.circle(enemy.x, enemy.y, effect.radius, this.playerRoleTint, 0.25)
+      : this.scene.add.star(enemy.x, enemy.y, effect.points, effect.innerRadius, effect.outerRadius, this.playerRoleTint, 0.25);
     hit
-      .setStrokeStyle(2, effect.color, 0.9)
+      .setStrokeStyle(2, this.playerRoleTint, 0.9)
       .setDepth(4);
     this.scene.tweens.add({
       targets: hit,

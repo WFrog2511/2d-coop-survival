@@ -9,7 +9,7 @@ requirements: REQ-PLAYER-ACTIONS
 
 - `PLAYER_ROLES`は5役職のID、表示名、色名、CSS表示用`accent`、Phaser描画用の数値`tint`を保持する。選択前の開始ボタンは無効で、選択した役職だけが開始できる。
 - 通常ページでは開始操作まで`Phaser.Game`を生成しない。DEVの`?start=dev`だけは既存E2E用にガンナーを選択して開始する明示経路とする。
-- `startArena`は選択済み役職を`Arena` Scene instanceへ明示的に渡す。プレイヤーのbase textureはグレースケールとし、生成時に選択済み役職の`PlayerRole.tint`を適用する。`basic`、`drone`、`enemy-silhouette` textureはグレースケールとし、既存の命中feedbackは変更しない。
+- `startArena`は選択済み役職を`Arena` Scene instanceへ明示的に渡す。プレイヤーのbase textureはグレースケールとし、生成時に選択済み役職の`PlayerRole.tint`を適用する。`basic`、`drone`、`enemy-silhouette` textureはグレースケールとする。`ArenaEffects`は選択済み`PlayerRole.tint`を使って敵への着弾effectを描画し、敵種別ごとのshape、duration、scaleは`ENEMY_HIT_EFFECT`で維持する。
 - 選択済み役職はHUDの`data-testid="role"`へ表示し、`data-role`へIDを設定する。能力、補正、装備は変更しない。
 
 ## 回避
@@ -28,4 +28,4 @@ requirements: REQ-PLAYER-ACTIONS
 
 - `tests/pickups.test.ts`: 3x3境界、muzzle anchorの方向優先、同距離の決定性、候補なし。
 - `tests/player-data.test.ts`: 回避方向の正規化、照準なし、cooldown境界、5役職の表示色と数値tint。
-- `e2e/prototype.spec.ts`: 役職選択後の開始とスナイパーtint、生成textureのグレースケール、DEV明示開始経路、Space/Shift回避中の無敵・壁停止・cooldown、接触だけでは弾薬箱が消えず、E案内とE取得で消費されること。
+- `e2e/prototype.spec.ts`: 役職選択後の開始、スナイパーtint、スナイパー色の敵着弾effect、生成textureのグレースケール、DEV明示開始経路、Space/Shift回避中の無敵・壁停止・cooldown、接触だけでは弾薬箱が消えず、E案内とE取得で消費されること。

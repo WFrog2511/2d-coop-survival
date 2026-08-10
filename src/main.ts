@@ -191,7 +191,7 @@ class Arena extends Phaser.Scene {
   create(): void {
     resetArena = () => this.reset();
     this.createTextures();
-    this.effects = new ArenaEffects(this, arenaHud.playerHitVignette);
+    this.effects = new ArenaEffects(this, arenaHud.playerHitVignette, this.playerRole.tint);
     this.walls = this.physics.add.staticGroup();
     this.ammoBoxes = this.physics.add.staticGroup();
     this.player = this.physics.add

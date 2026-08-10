@@ -36,8 +36,8 @@ export type MuzzleFlashProfile = {
 };
 
 export type EnemyHitEffectProfile
-  = { shape: 'circle'; duration: number; radius: number; color: number; scale: number }
-    | { shape: 'star'; duration: number; points: number; innerRadius: number; outerRadius: number; color: number; scale: number };
+  = { shape: 'circle'; duration: number; radius: number; scale: number }
+    | { shape: 'star'; duration: number; points: number; innerRadius: number; outerRadius: number; scale: number };
 
 export type StaggeredEnemy = { id: EnemyInstanceId; delay: number };
 
@@ -120,8 +120,8 @@ export const MUZZLE_FLASH: Record<WeaponId, MuzzleFlashProfile> = {
 };
 
 export const ENEMY_HIT_EFFECT: Record<EnemyKind, EnemyHitEffectProfile> = {
-  basic: { shape: 'circle', duration: 85, radius: 12, color: 0xff7b7b, scale: 1.8 },
-  drone: { shape: 'star', duration: 110, points: 6, innerRadius: 8, outerRadius: 17, color: 0x6d4cff, scale: 2.1 },
+  basic: { shape: 'circle', duration: 85, radius: 12, scale: 1.8 },
+  drone: { shape: 'star', duration: 110, points: 6, innerRadius: 8, outerRadius: 17, scale: 2.1 },
 };
 
 export const ENEMY_DEFEAT_SHAKE: Record<EnemyKind, CameraShakeProfile> = {
