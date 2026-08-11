@@ -530,19 +530,20 @@ test('SpaceとShiftで照準方向へ回避し、クールダウン中は再発�
 
 test('ガンスリンガーは回避中の敵を一度だけブーツナイフで通過し、コンボと速度buffを更新する', async ({ page }) => {
   test.setTimeout(30_000);
-  await page.goto('/');
+  await page.clock.install({ time: 1 });
+  await page.clock.pauseAt(1);
+  await page.goto('/?combatWaveDurationMs=1000&restDurationMs=500');
   await page.getByTestId('role-gunslinger').check();
   await page.getByTestId('start').click();
   await expect(page.locator('#game canvas')).toBeVisible();
   const combo = page.getByTestId('gunslinger-combo');
+  const basicEnemyHp = page.getByTestId('basic-1-hp');
   await expect(page.getByTestId('gunslinger-combo-panel')).toBeVisible();
   await expect(combo).toHaveText('0');
   await expect(combo).toHaveAttribute('data-active', 'true');
-  await expect(page.getByTestId('drone-1-hp')).toHaveAttribute('data-active', 'true');
+  await expect(basicEnemyHp).toHaveAttribute('data-active', 'true');
   await setPlayerInvulnerable(page, true);
   await setHiddenRecycle(page, false);
-  await debugDamageEnemy(page, 'drone-1', 2);
-  await expect(combo).toHaveText('1');
 
   const mapSeed = Number(await page.getByTestId('map-seed').textContent());
   const lane = findDashLane(generateArenaMap(mapSeed));
@@ -557,11 +558,41 @@ test('ガンスリンガーは回避中の敵を一度だけブーツナイフ�
   });
   await aimPlayer(page, lane.direction);
   await page.keyboard.press('Space');
-  await expect(page.getByTestId('basic-1-hp')).toHaveText('2');
-  await expect(combo).toHaveText('2');
+  await page.clock.runFor(300);
+  await expect(basicEnemyHp).toHaveText('2');
+  await expect(combo).toHaveText('1');
   await expect(combo).toHaveAttribute('data-speed-multiplier', '1.2');
-  await page.waitForTimeout(300);
-  await expect(page.getByTestId('basic-1-hp')).toHaveText('2');
+
+  await page.clock.fastForward(4_000);
+  await expect(page.getByTestId('victory')).toBeVisible();
+  await page.getByTestId('retry').click();
+  await expect(page.getByTestId('victory')).toBeHidden();
+  await expect(combo).toHaveText('0');
+  await expect(combo).toHaveAttribute('data-speed-multiplier', '1');
+  await expect(basicEnemyHp).toHaveText('4');
+  await expect(basicEnemyHp).toHaveAttribute('data-active', 'true');
+  await setPlayerInvulnerable(page, true);
+  await setHiddenRecycle(page, false);
+  const retryMapSeed = Number(await page.getByTestId('map-seed').textContent());
+  const retryLane = findDashLane(generateArenaMap(retryMapSeed));
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, retryLane.origin);
+  await moveEnemyToTile(page, 'basic-1', {
+    x: retryLane.origin.x + retryLane.direction.x,
+    y: retryLane.origin.y + retryLane.direction.y,
+  });
+  await aimPlayer(page, retryLane.direction);
+  await page.keyboard.press('Space');
+  await page.clock.runFor(300);
+  await expect(basicEnemyHp).toHaveText('2');
+  await expect(combo).toHaveText('1');
+  await expect(combo).toHaveAttribute('data-speed-multiplier', '1.2');
+
+  await expect(page.getByTestId('drone-1-hp')).toHaveAttribute('data-active', 'true');
+  await debugDamageEnemy(page, 'drone-1', 2);
   await expect(combo).toHaveText('2');
 });
 
