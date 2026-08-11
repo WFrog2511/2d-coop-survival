@@ -3,7 +3,7 @@ import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, basicApproachRoleFor,
 import { ArenaEffects } from './arena/effects';
 import { ArenaHud } from './arena/hud';
 import { ENEMIES, ENEMY_DEFEAT_HIT_STOP_MS, ENEMY_HIT_STOP_MS, ENEMY_IDS, ENEMY_LABELS, ENEMY_SPAWN_ORDER, INITIAL_ENEMY_IDS, PLAYER_HIT_STOP_MS, STAGGERED_ENEMIES } from './game-data';
-import { PLAYER_DASH_DURATION_MS, PLAYER_DASH_SPEED_PX_PER_SECOND, PLAYER_ROLES, canDashAt, dashCooldownUntil, dashDirectionFor, type DashDirection, type PlayerRole } from './player-data';
+import { GUNSLINGER_BOOT_KNIFE_DAMAGE, PLAYER_DASH_DURATION_MS, PLAYER_DASH_SPEED_PX_PER_SECOND, PLAYER_ROLES, canDashAt, dashCooldownUntil, dashDirectionFor, gunslingerComboAfterEvent, gunslingerSpeedBuffUntil, gunslingerSpeedMultiplierAt, type DashDirection, type PlayerRole } from './player-data';
 import { selectNearbyPickup } from './pickups';
 import { AMMO_BOX_RESPAWN_MS, COMBAT_WAVE_DURATION_MS, REST_DURATION_MS, WEAPONS, advanceRunState, advanceSurvivalState, cancelReload, collectAmmoBox as collectAmmoBoxState, completeReload, createRunSchedule, currentRunPhase, damageEnemy, damagePlayer, defeatRun, droneLateralSpeedAt, enemySpeedMultiplierForPhase, fireWeapon, hiddenRecyclePathDistanceForPhase, isEnemyDefeated, recordEnemyDefeated, recordEnemyRecycled, recordEnemySpawned, remainingSurvivalMs, resolveDamage, respawnEnemy, retryCombat, retryRun, runDurationMs, selectWeapon, startReload, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type RunPhase, type RunSchedule, type RunState, type WeaponId } from './rules';
 
@@ -170,6 +170,9 @@ class Arena extends Phaser.Scene {
   private playerHitStopUntil = 0;
   private playerDash: PlayerDash | undefined;
   private playerDashCooldownUntil = 0;
+  private gunslingerCombo = 0;
+  private gunslingerSpeedBuffUntil = 0;
+  private gunslingerDashEnemyIds = new Set<EnemyInstanceId>();
   private aimDirection: DashDirection | undefined;
   private enemyHitStopUntil = enemyNumbers();
   private knockbackUntil = enemyNumbers();
@@ -215,7 +218,7 @@ class Arena extends Phaser.Scene {
       this.enemies[id].disableBody(true, true);
       this.silhouettes[id] = this.add.image(0, 0, 'enemy-silhouette').setDepth(1).setVisible(false);
       this.physics.add.collider(this.enemies[id], this.walls);
-      this.physics.add.overlap(this.player, this.enemies[id], () => this.hitPlayer(id));
+      this.physics.add.overlap(this.player, this.enemies[id], () => this.handlePlayerEnemyOverlap(id));
     });
     this.physics.add.collider(this.player, this.walls);
     this.bullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Sprite, maxSize: BULLET_POOL_SIZE });
@@ -268,6 +271,8 @@ class Arena extends Phaser.Scene {
   }
 
   private updatePlayerMovement(): void {
+    const speedMultiplier = this.gunslingerSpeedMultiplier();
+    arenaHud.updateGunslinger(this.gunslingerCombo, speedMultiplier, this.playerRole.id === 'gunslinger');
     const dash = this.playerDash;
     if (dash) {
       if (this.time.now >= dash.endsAt || this.isPlayerDashBlocked(dash)) {
@@ -287,7 +292,7 @@ class Arena extends Phaser.Scene {
     const x = Number(this.keys.d.isDown || this.keys.right.isDown) - Number(this.keys.a.isDown || this.keys.left.isDown);
     const y = Number(this.keys.s.isDown || this.keys.down.isDown) - Number(this.keys.w.isDown || this.keys.up.isDown);
     const length = Math.hypot(x, y) || 1;
-    this.player.setVelocity((x / length) * 210, (y / length) * 210);
+    this.player.setVelocity((x / length) * 210 * speedMultiplier, (y / length) * 210 * speedMultiplier);
   }
 
   private tryDash(): void {
@@ -301,6 +306,7 @@ class Arena extends Phaser.Scene {
       directionY: direction.y,
       endsAt: this.time.now + PLAYER_DASH_DURATION_MS,
     };
+    this.gunslingerDashEnemyIds.clear();
     this.playerDashCooldownUntil = dashCooldownUntil(this.time.now);
     this.player.setVelocity(
       direction.x * PLAYER_DASH_SPEED_PX_PER_SECOND,
@@ -321,7 +327,20 @@ class Arena extends Phaser.Scene {
 
   private cancelPlayerDash(): void {
     this.playerDash = undefined;
+    this.gunslingerDashEnemyIds.clear();
     this.player.setVelocity(0, 0);
+  }
+
+  private gunslingerSpeedMultiplier(): number {
+    return this.playerRole.id === 'gunslinger'
+      ? gunslingerSpeedMultiplierAt(this.time.now, this.gunslingerSpeedBuffUntil)
+      : 1;
+  }
+
+  private resetGunslingerState(): void {
+    this.gunslingerCombo = 0;
+    this.gunslingerSpeedBuffUntil = 0;
+    this.gunslingerDashEnemyIds.clear();
   }
 
   public debugRespawnEnemy(id: EnemyInstanceId): void {
@@ -419,6 +438,7 @@ class Arena extends Phaser.Scene {
     this.playerHitStopUntil = 0;
     this.playerDash = undefined;
     this.playerDashCooldownUntil = 0;
+    this.resetGunslingerState();
     this.enemyHitStopUntil = enemyNumbers();
     this.knockbackUntil = enemyNumbers();
     this.knockbackVelocity = enemyRecord(() => ({ x: 0, y: 0 }));
@@ -1148,6 +1168,8 @@ class Arena extends Phaser.Scene {
 
   private scheduleDefeatedEnemy(id: EnemyInstanceId): void {
     const enemy = this.enemies[id];
+    if (this.playerRole.id === 'gunslinger')
+      this.gunslingerCombo = gunslingerComboAfterEvent(this.gunslingerCombo);
     this.runState = recordEnemyDefeated(this.runState, id);
     enemy.disableBody(true, false);
     this.hideEnemyVisuals(id);
@@ -1161,6 +1183,37 @@ class Arena extends Phaser.Scene {
       enemy.setVisible(true);
       this.syncEnemyHud(id, 'normal');
     }
+  }
+
+  private handlePlayerEnemyOverlap(id: EnemyInstanceId): void {
+    if (this.playerRole.id === 'gunslinger' && this.playerDash) {
+      this.bootKnifeEnemy(id);
+      return;
+    }
+    this.hitPlayer(id);
+  }
+
+  private bootKnifeEnemy(id: EnemyInstanceId): void {
+    const enemy = this.enemies[id];
+    if (
+      !this.playerDash
+      || !enemy.active
+      || this.gunslingerDashEnemyIds.has(id)
+      || this.state.defeated
+      || this.state.victory
+    )
+      return;
+    this.gunslingerDashEnemyIds.add(id);
+    this.lastHitAt[id] = this.time.now;
+    this.state = damageEnemy(this.state, id, GUNSLINGER_BOOT_KNIFE_DAMAGE);
+    const defeated = isEnemyDefeated(this.state, id);
+    this.startEnemyImpact(id, 'rifle', defeated);
+    this.effects.flashEnemy(enemy);
+    arenaHud.setFeedback(`ブーツナイフ: ${ENEMY_LABELS[id]}`);
+    if (defeated) this.scheduleDefeatedEnemy(id);
+    this.gunslingerCombo = gunslingerComboAfterEvent(this.gunslingerCombo);
+    this.gunslingerSpeedBuffUntil = gunslingerSpeedBuffUntil(this.time.now);
+    this.refreshHud();
   }
 
   private hitPlayer(id: EnemyInstanceId): void {
@@ -1197,6 +1250,7 @@ class Arena extends Phaser.Scene {
       : advanceRunState(this.runState, runDurationMs(this.runState.schedule));
     this.stopRunTimers();
     this.state = cancelReload(this.state);
+    this.resetGunslingerState();
     this.player.setVelocity(0, 0);
     ENEMY_IDS.forEach((enemyId) => {
       this.enemies[enemyId].setVelocity(0, 0);
@@ -1328,6 +1382,9 @@ class Arena extends Phaser.Scene {
       offscreenAmmoBoxIds: this.offscreenAmmoBoxIds(),
       pendingAmmoBoxIds: pendingBoxIds,
       pendingAmmoBoxOriginTiles,
+      gunslingerCombo: this.gunslingerCombo,
+      gunslingerSpeedMultiplier: this.gunslingerSpeedMultiplier(),
+      isGunslinger: this.playerRole.id === 'gunslinger',
       reload: {
         active: isReloading,
         progress: isReloading ? Phaser.Math.Clamp(this.reloadTimer!.getProgress(), 0, 1) : 0,

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { SPAWN_PHASE_MS, enemyVisibility, findPath, generateArenaMap, hasLineOfSight, hiddenRecycleThresholdFor, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, spawnDirectionForSlot, type SpawnDirection, type TilePosition, viewportTileRect } from '../src/arena-map';
+import { SPAWN_PHASE_MS, TILE_SIZE, enemyVisibility, findPath, generateArenaMap, hasLineOfSight, hiddenRecycleThresholdFor, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, spawnDirectionForSlot, type SpawnDirection, type TilePosition, viewportTileRect } from '../src/arena-map';
 import { AMMO_BOX_RESPAWN_MS, COMBAT_WAVE_DURATION_MS, ENEMY_INSTANCE_IDS, REST_DURATION_MS } from '../src/rules';
 
 type EnemyId = (typeof ENEMY_INSTANCE_IDS)[number];
@@ -26,11 +26,18 @@ type EnemySpawnMetadata = {
   visibility: string;
   recycleCount: string;
 };
+type ArenaDebugEnemy = {
+  active: boolean;
+  body?: { reset: (x: number, y: number) => void };
+  setPosition: (x: number, y: number) => ArenaDebugEnemy;
+  setVelocity: (x: number, y: number) => ArenaDebugEnemy;
+};
 type ArenaDebugScene = {
   physics: { pause: () => void; resume: () => void };
   cameras: { main: { worldView: { left: number; top: number; right: number; bottom: number } } };
   children: { getChildren: () => readonly { fillColor?: number }[] };
   player: { x: number; y: number; rotation: number; tintTopLeft: number };
+  enemies: Record<EnemyId, ArenaDebugEnemy>;
   textures: { get: (key: string) => { getSourceImage: () => HTMLCanvasElement } };
   debugRespawnEnemy: (id: EnemyId) => void;
   debugSetHiddenRecycleEnabled: (enabled: boolean) => void;
@@ -134,6 +141,23 @@ async function moveToTile(
     }
   }
   throw new Error('弾薬箱までの移動が上限を超えました。');
+}
+
+async function moveEnemyToTile(
+  page: import('@playwright/test').Page,
+  id: EnemyId,
+  target: TilePosition,
+): Promise<void> {
+  await page.evaluate(({ enemyId, targetTile, tileSize }) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    const enemy = scene.enemies[enemyId];
+    if (!enemy.active) throw new Error(`${enemyId}がactiveではありません。`);
+    const x = targetTile.x * tileSize + tileSize / 2;
+    const y = targetTile.y * tileSize + tileSize / 2;
+    enemy.setPosition(x, y).setVelocity(0, 0);
+    enemy.body?.reset(x, y);
+  }, { enemyId: id, targetTile: target, tileSize: TILE_SIZE });
 }
 
 async function collectAmmoBoxWithClock(
@@ -502,6 +526,43 @@ test('SpaceとShiftで照準方向へ回避し、クールダウン中は再発�
     x: lane.origin.x + lane.direction.x * 4,
     y: lane.origin.y + lane.direction.y * 4,
   });
+});
+
+test('ガンスリンガーは回避中の敵を一度だけブーツナイフで通過し、コンボと速度buffを更新する', async ({ page }) => {
+  test.setTimeout(30_000);
+  await page.goto('/');
+  await page.getByTestId('role-gunslinger').check();
+  await page.getByTestId('start').click();
+  await expect(page.locator('#game canvas')).toBeVisible();
+  const combo = page.getByTestId('gunslinger-combo');
+  await expect(page.getByTestId('gunslinger-combo-panel')).toBeVisible();
+  await expect(combo).toHaveText('0');
+  await expect(combo).toHaveAttribute('data-active', 'true');
+  await expect(page.getByTestId('drone-1-hp')).toHaveAttribute('data-active', 'true');
+  await setPlayerInvulnerable(page, true);
+  await setHiddenRecycle(page, false);
+  await debugDamageEnemy(page, 'drone-1', 2);
+  await expect(combo).toHaveText('1');
+
+  const mapSeed = Number(await page.getByTestId('map-seed').textContent());
+  const lane = findDashLane(generateArenaMap(mapSeed));
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, lane.origin);
+  await moveEnemyToTile(page, 'basic-1', {
+    x: lane.origin.x + lane.direction.x,
+    y: lane.origin.y + lane.direction.y,
+  });
+  await aimPlayer(page, lane.direction);
+  await page.keyboard.press('Space');
+  await expect(page.getByTestId('basic-1-hp')).toHaveText('2');
+  await expect(combo).toHaveText('2');
+  await expect(combo).toHaveAttribute('data-speed-multiplier', '1.2');
+  await page.waitForTimeout(300);
+  await expect(page.getByTestId('basic-1-hp')).toHaveText('2');
+  await expect(combo).toHaveText('2');
 });
 
 test('自動射撃、ショットガンの発射待ち、リロード、視界遮蔽と再挑戦を確認できる', async ({ page }) => {
