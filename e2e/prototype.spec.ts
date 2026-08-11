@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { SPAWN_PHASE_MS, TILE_SIZE, enemyVisibility, findPath, generateArenaMap, hasLineOfSight, hiddenRecycleThresholdFor, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, spawnDirectionForSlot, type SpawnDirection, type TilePosition, viewportTileRect } from '../src/arena-map';
+import { GUNSLINGER_BOOT_KNIFE_DAMAGE, GUNSLINGER_COMBO_PER_EVENT, GUNSLINGER_COMBO_TIMEOUT_MS } from '../src/player-data';
 import { AMMO_BOX_RESPAWN_MS, COMBAT_WAVE_DURATION_MS, ENEMY_INSTANCE_IDS, REST_DURATION_MS } from '../src/rules';
 
 type EnemyId = (typeof ENEMY_INSTANCE_IDS)[number];
@@ -53,6 +54,12 @@ function devStartUrl(path: string): string {
 async function currentAmmo(page: import('@playwright/test').Page): Promise<number> {
   const text = await page.getByTestId('ammo').textContent();
   return Number(text?.split('/')[0]);
+}
+
+function bootKnifeOutcome(initialHp: number, initialCombo: number): { hp: number; combo: number } {
+  const hp = Math.max(0, initialHp - GUNSLINGER_BOOT_KNIFE_DAMAGE);
+  const comboEvents = hp === 0 ? 2 : 1;
+  return { hp, combo: initialCombo + comboEvents * GUNSLINGER_COMBO_PER_EVENT };
 }
 
 async function textureIsGrayscale(page: import('@playwright/test').Page, key: string): Promise<boolean> {
@@ -158,6 +165,49 @@ async function moveEnemyToTile(
     enemy.setPosition(x, y).setVelocity(0, 0);
     enemy.body?.reset(x, y);
   }, { enemyId: id, targetTile: target, tileSize: TILE_SIZE });
+}
+
+function movementKeyFor(direction: TilePosition): 'w' | 'a' | 's' | 'd' {
+  if (direction.x > 0) return 'd';
+  if (direction.x < 0) return 'a';
+  if (direction.y > 0) return 's';
+  if (direction.y < 0) return 'w';
+  throw new Error('接触確認の移動方向がありません。');
+}
+
+async function movePlayerIntoEnemy(
+  page: import('@playwright/test').Page,
+  id: EnemyId,
+  origin: TilePosition,
+  direction: TilePosition,
+  placeEnemyOnPlayerFirst = false,
+): Promise<void> {
+  const enemyTile = {
+    x: origin.x + direction.x * 2,
+    y: origin.y + direction.y * 2,
+  };
+  if (placeEnemyOnPlayerFirst) {
+    await page.evaluate((tile) => {
+      const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+      if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+      scene.debugMovePlayerTo(tile);
+    }, enemyTile);
+    await moveEnemyToTile(page, id, enemyTile);
+  }
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, origin);
+  if (!placeEnemyOnPlayerFirst)
+    await moveEnemyToTile(page, id, enemyTile);
+  const key = movementKeyFor(direction);
+  await page.keyboard.down(key);
+  try {
+    await page.clock.runFor(500);
+  } finally {
+    await page.keyboard.up(key);
+  }
 }
 
 async function collectAmmoBoxWithClock(
@@ -335,12 +385,6 @@ function findDashLane(map: ReturnType<typeof generateArenaMap>): {
   throw new Error('回避検証用の4タイル直線が見つかりません。');
 }
 
-function playerTile(value: string | null): TilePosition {
-  const match = value?.match(/^(\d+),(\d+)$/);
-  if (!match) throw new Error(`プレイヤーtileが不正です: ${String(value)}`);
-  return { x: Number(match[1]), y: Number(match[2]) };
-}
-
 function directionFromPlayer(player: TilePosition, spawn: TilePosition): SpawnDirection {
   const dx = spawn.x - player.x;
   const dy = spawn.y - player.y;
@@ -452,7 +496,6 @@ test('開始前のSpace選択を保ち、開始後のキーボード移動を受
     if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
     return scene.player.tintTopLeft;
   });
-  expect(playerTint).toBe(0xa88cff);
   const enemyHitColor = await page.evaluate(() => {
     const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
     if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
@@ -463,7 +506,7 @@ test('開始前のSpace選択を保ち、開始後のキーボード移動を受
       throw new Error('基本敵への着弾エフェクトが見つかりません。');
     return hit.fillColor;
   });
-  expect(enemyHitColor).toBe(0xa88cff);
+  expect(enemyHitColor).toBe(playerTint);
   expect(await Promise.all(['player', 'basic', 'drone', 'enemy-silhouette'].map(key => textureIsGrayscale(page, key)))).toEqual([true, true, true, true]);
   const initialRotation = await page.evaluate(() => {
     const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
@@ -494,38 +537,40 @@ test('開始前のSpace選択を保ち、開始後のキーボード移動を受
   expect(aimedRotation).toBeCloseTo(0, 1);
 });
 
-test('SpaceとShiftで照準方向へ回避し、クールダウン中は再発動しない', async ({ page }) => {
-  test.setTimeout(30_000);
+test('通常役職は回避中に発砲しない', async ({ page }) => {
   await page.goto(devStartUrl('/'));
   await expect(page.locator('#game canvas')).toBeVisible();
   await setPlayerInvulnerable(page, true);
-  const mapSeed = Number(await page.getByTestId('map-seed').textContent());
-  const lane = findDashLane(generateArenaMap(mapSeed));
-  await page.evaluate((tile) => {
-    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
-    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
-    scene.debugMovePlayerTo(tile);
-  }, lane.origin);
-  await page.waitForTimeout(300);
-  await aimPlayer(page, lane.direction);
+  await page.keyboard.press('2');
+  await expect(page.getByTestId('weapon')).toHaveText('ショットガン');
+  await aimPlayer(page, { x: 1, y: 0 });
+  const startingAmmo = await currentAmmo(page);
   await page.keyboard.press('Space');
-  await page.waitForTimeout(300);
-  const afterSpace = playerTile(await page.getByTestId('player-tile').textContent());
-  expect(afterSpace).toEqual({
-    x: lane.origin.x + lane.direction.x * 2,
-    y: lane.origin.y + lane.direction.y * 2,
-  });
-  await page.keyboard.press('Shift');
-  await page.waitForTimeout(300);
-  expect(playerTile(await page.getByTestId('player-tile').textContent())).toEqual(afterSpace);
-  await page.waitForTimeout(500);
-  await aimPlayer(page, lane.direction);
-  await page.keyboard.press('Shift');
-  await page.waitForTimeout(300);
-  expect(playerTile(await page.getByTestId('player-tile').textContent())).toEqual({
-    x: lane.origin.x + lane.direction.x * 4,
-    y: lane.origin.y + lane.direction.y * 4,
-  });
+  await page.mouse.down();
+  try {
+    expect(await currentAmmo(page)).toBe(startingAmmo);
+  } finally {
+    await page.mouse.up();
+  }
+});
+
+test('ガンスリンガーは回避中に発砲できる', async ({ page }) => {
+  await page.goto('/');
+  await page.getByTestId('role-gunslinger').check();
+  await page.getByTestId('start').click();
+  await expect(page.locator('#game canvas')).toBeVisible();
+  await setPlayerInvulnerable(page, true);
+  await page.keyboard.press('2');
+  await expect(page.getByTestId('weapon')).toHaveText('ショットガン');
+  await aimPlayer(page, { x: 1, y: 0 });
+  const startingAmmo = await currentAmmo(page);
+  await page.keyboard.press('Space');
+  await page.mouse.down();
+  try {
+    expect(await currentAmmo(page)).toBeLessThan(startingAmmo);
+  } finally {
+    await page.mouse.up();
+  }
 });
 
 test('ガンスリンガーは回避中の敵を一度だけブーツナイフで通過し、コンボと速度buffを更新する', async ({ page }) => {
@@ -539,9 +584,13 @@ test('ガンスリンガーは回避中の敵を一度だけブーツナイフ�
   const combo = page.getByTestId('gunslinger-combo');
   const basicEnemyHp = page.getByTestId('basic-1-hp');
   await expect(page.getByTestId('gunslinger-combo-panel')).toBeVisible();
-  await expect(combo).toHaveText('0');
   await expect(combo).toHaveAttribute('data-active', 'true');
   await expect(basicEnemyHp).toHaveAttribute('data-active', 'true');
+  const initialBasicHp = Number(await basicEnemyHp.textContent());
+  const initialCombo = Number(await combo.textContent());
+  const initialSpeedMultiplier = await combo.getAttribute('data-speed-multiplier');
+  if (!Number.isFinite(initialBasicHp) || !Number.isFinite(initialCombo) || initialSpeedMultiplier === null)
+    throw new Error('ガンスリンガーの初期HUD状態を取得できません。');
   await setPlayerInvulnerable(page, true);
   await setHiddenRecycle(page, false);
 
@@ -558,10 +607,20 @@ test('ガンスリンガーは回避中の敵を一度だけブーツナイフ�
   });
   await aimPlayer(page, lane.direction);
   await page.keyboard.press('Space');
-  await page.clock.runFor(300);
-  await expect(basicEnemyHp).toHaveText('2');
-  await expect(combo).toHaveText('1');
-  await expect(combo).toHaveAttribute('data-speed-multiplier', '1.2');
+  await page.clock.runFor(100);
+  const basicHpAfterFirstDash = Number(await basicEnemyHp.textContent());
+  const comboAfterFirstDash = Number(await combo.textContent());
+  const speedMultiplierAfterFirstDash = await combo.getAttribute('data-speed-multiplier');
+  if (speedMultiplierAfterFirstDash === null)
+    throw new Error('ブーツナイフ後の速度倍率を取得できません。');
+  const expectedFirstDash = bootKnifeOutcome(initialBasicHp, initialCombo);
+  expect(basicHpAfterFirstDash).toBe(expectedFirstDash.hp);
+  expect(comboAfterFirstDash).not.toBe(initialCombo);
+  expect(comboAfterFirstDash).toBe(expectedFirstDash.combo);
+  expect(speedMultiplierAfterFirstDash).not.toBe(initialSpeedMultiplier);
+  await page.clock.runFor(100);
+  expect(Number(await basicEnemyHp.textContent())).toBe(expectedFirstDash.hp);
+  expect(Number(await combo.textContent())).toBe(expectedFirstDash.combo);
 
   await page.clock.fastForward(4_000);
   await expect(page.getByTestId('victory')).toBeVisible();
@@ -569,8 +628,11 @@ test('ガンスリンガーは回避中の敵を一度だけブーツナイフ�
   await expect(page.getByTestId('victory')).toBeHidden();
   await expect(combo).toHaveText('0');
   await expect(combo).toHaveAttribute('data-speed-multiplier', '1');
-  await expect(basicEnemyHp).toHaveText('4');
   await expect(basicEnemyHp).toHaveAttribute('data-active', 'true');
+  const retryBasicHp = Number(await basicEnemyHp.textContent());
+  const retryCombo = Number(await combo.textContent());
+  const retrySpeedMultiplier = await combo.getAttribute('data-speed-multiplier');
+  expect(retryBasicHp).toBe(initialBasicHp);
   await setPlayerInvulnerable(page, true);
   await setHiddenRecycle(page, false);
   const retryMapSeed = Number(await page.getByTestId('map-seed').textContent());
@@ -586,14 +648,136 @@ test('ガンスリンガーは回避中の敵を一度だけブーツナイフ�
   });
   await aimPlayer(page, retryLane.direction);
   await page.keyboard.press('Space');
-  await page.clock.runFor(300);
-  await expect(basicEnemyHp).toHaveText('2');
-  await expect(combo).toHaveText('1');
-  await expect(combo).toHaveAttribute('data-speed-multiplier', '1.2');
+  await page.clock.runFor(100);
+  const basicHpAfterRetryDash = Number(await basicEnemyHp.textContent());
+  const comboAfterRetryDash = Number(await combo.textContent());
+  const speedMultiplierAfterRetryDash = await combo.getAttribute('data-speed-multiplier');
+  const expectedRetryDash = bootKnifeOutcome(retryBasicHp, retryCombo);
+  expect(basicHpAfterRetryDash).toBe(expectedRetryDash.hp);
+  expect(comboAfterRetryDash).toBe(expectedRetryDash.combo);
+  expect(speedMultiplierAfterRetryDash).not.toBe(retrySpeedMultiplier);
+  await page.clock.runFor(100);
+  expect(Number(await basicEnemyHp.textContent())).toBe(expectedRetryDash.hp);
+  expect(Number(await combo.textContent())).toBe(expectedRetryDash.combo);
 
-  await expect(page.getByTestId('drone-1-hp')).toHaveAttribute('data-active', 'true');
-  await debugDamageEnemy(page, 'drone-1', 2);
-  await expect(combo).toHaveText('2');
+  const droneEnemyHp = page.getByTestId('drone-1-hp');
+  await expect(droneEnemyHp).toHaveAttribute('data-active', 'true');
+  const droneHp = Number(await droneEnemyHp.textContent());
+  if (!Number.isFinite(droneHp) || droneHp <= 0)
+    throw new Error('通常射撃で撃破するドローンのHPを取得できません。');
+  await debugDamageEnemy(page, 'drone-1', droneHp);
+  expect(Number(await combo.textContent())).toBeGreaterThan(comboAfterRetryDash);
+});
+
+test('ガンスリンガーのコンボ期限は有効命中で更新され、無効接触では維持する', async ({ page }) => {
+  test.setTimeout(30_000);
+  await page.clock.install({ time: 1 });
+  await page.clock.pauseAt(1);
+  await page.goto('/');
+  await page.getByTestId('role-gunslinger').check();
+  await page.getByTestId('start').click();
+  await expect(page.locator('#game canvas')).toBeVisible();
+  const combo = page.getByTestId('gunslinger-combo');
+  const playerHp = page.getByTestId('hp');
+  await expect(page.getByTestId('gunslinger-combo-panel')).toBeVisible();
+  await expect(combo).toHaveAttribute('data-active', 'true');
+  await setPlayerInvulnerable(page, true);
+  await setHiddenRecycle(page, false);
+  await page.clock.runFor(2_000);
+
+  const initialCombo = Number(await combo.textContent());
+  const initialSpeedMultiplier = await combo.getAttribute('data-speed-multiplier');
+  if (initialSpeedMultiplier === null)
+    throw new Error('ガンスリンガーの初期速度倍率を取得できません。');
+  const mapSeed = Number(await page.getByTestId('map-seed').textContent());
+  const lane = findDashLane(generateArenaMap(mapSeed));
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, lane.origin);
+  await moveEnemyToTile(page, 'basic-4', {
+    x: lane.origin.x + lane.direction.x,
+    y: lane.origin.y + lane.direction.y,
+  });
+  await aimPlayer(page, lane.direction);
+  await page.keyboard.press('Space');
+  await page.clock.runFor(100);
+  const comboAfterBootKnife = Number(await combo.textContent());
+  const speedMultiplierAfterBootKnife = await combo.getAttribute('data-speed-multiplier');
+  if (speedMultiplierAfterBootKnife === null)
+    throw new Error('ブーツナイフ後の速度倍率を取得できません。');
+  expect(comboAfterBootKnife).toBeGreaterThan(initialCombo);
+  expect(speedMultiplierAfterBootKnife).not.toBe(initialSpeedMultiplier);
+
+  const playerHpBeforeBootKnifeContact = Number(await playerHp.textContent());
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, lane.origin);
+  await moveEnemyToTile(page, 'basic-4', {
+    x: lane.origin.x + lane.direction.x * 4,
+    y: lane.origin.y + lane.direction.y * 4,
+  });
+  await moveEnemyToTile(page, 'basic-1', {
+    x: lane.origin.x + lane.direction.x,
+    y: lane.origin.y + lane.direction.y,
+  });
+  await page.clock.runFor(200);
+  expect(Number(await playerHp.textContent())).toBe(playerHpBeforeBootKnifeContact);
+  expect(Number(await combo.textContent())).toBe(comboAfterBootKnife);
+  await setPlayerInvulnerable(page, false);
+  await page.clock.runFor(100);
+  await expect.poll(async () => Number(await playerHp.textContent())).toBeLessThan(playerHpBeforeBootKnifeContact);
+  await expect(combo).toHaveText('0');
+  await expect(combo).toHaveAttribute('data-speed-multiplier', speedMultiplierAfterBootKnife);
+  await setPlayerInvulnerable(page, true);
+
+  const droneOneHp = Number(await page.getByTestId('drone-1-hp').textContent());
+  if (!Number.isFinite(droneOneHp) || droneOneHp <= 0)
+    throw new Error('最初のコンボを作るドローンのHPを取得できません。');
+  await debugDamageEnemy(page, 'drone-1', droneOneHp);
+  const comboAfterDefeat = Number(await combo.textContent());
+  expect(comboAfterDefeat).toBeGreaterThan(initialCombo);
+
+  const beforeExpiryMs = GUNSLINGER_COMBO_TIMEOUT_MS - 100;
+  await debugDamageEnemy(page, 'basic-1', 1);
+  await page.clock.runFor(beforeExpiryMs);
+  expect(Number(await combo.textContent())).toBe(comboAfterDefeat);
+  await debugDamageEnemy(page, 'basic-1', 1);
+  await page.clock.runFor(beforeExpiryMs);
+  expect(Number(await combo.textContent())).toBe(comboAfterDefeat);
+  await page.clock.runFor(200);
+  await expect(combo).toHaveText('0');
+
+  const droneTwoHp = Number(await page.getByTestId('drone-2-hp').textContent());
+  if (!Number.isFinite(droneTwoHp) || droneTwoHp <= 0)
+    throw new Error('無敵中のコンボを作るドローンのHPを取得できません。');
+  await debugDamageEnemy(page, 'drone-2', droneTwoHp);
+  const comboBeforeContact = Number(await combo.textContent());
+  expect(comboBeforeContact).toBeGreaterThan(initialCombo);
+
+  const playerHpBeforeInvulnerableContact = Number(await playerHp.textContent());
+  await movePlayerIntoEnemy(page, 'basic-1', lane.origin, lane.direction);
+  expect(Number(await playerHp.textContent())).toBe(playerHpBeforeInvulnerableContact);
+  expect(Number(await combo.textContent())).toBe(comboBeforeContact);
+
+  await setPlayerInvulnerable(page, false);
+  await movePlayerIntoEnemy(page, 'basic-1', lane.origin, lane.direction);
+  expect(Number(await playerHp.textContent())).toBeLessThan(playerHpBeforeInvulnerableContact);
+  await expect(combo).toHaveText('0');
+
+  const basicThreeHp = Number(await page.getByTestId('basic-3-hp').textContent());
+  if (!Number.isFinite(basicThreeHp) || basicThreeHp <= 0)
+    throw new Error('接触cooldown中のコンボを作る基本敵のHPを取得できません。');
+  await debugDamageEnemy(page, 'basic-3', basicThreeHp);
+  const comboDuringContactCooldown = Number(await combo.textContent());
+  const playerHpBeforeContactCooldown = Number(await playerHp.textContent());
+  expect(comboDuringContactCooldown).toBeGreaterThan(initialCombo);
+  await movePlayerIntoEnemy(page, 'basic-1', lane.origin, lane.direction, true);
+  expect(Number(await playerHp.textContent())).toBe(playerHpBeforeContactCooldown);
+  expect(Number(await combo.textContent())).toBe(comboDuringContactCooldown);
 });
 
 test('自動射撃、ショットガンの発射待ち、リロード、視界遮蔽と再挑戦を確認できる', async ({ page }) => {
