@@ -23,7 +23,7 @@ requirements: REQ-PLAYER-ACTIONS
 
 - `selectNearbyPickup(player, anchor, candidates)`はプレイヤータイルとの差分がx/yともに1以下の3x3近傍だけを候補にする純粋関数である。`anchor`はtile空間の小数座標で表したmuzzle位置とし、複数候補はanchor距離、プレイヤータイル距離、y、x、ID順で決定的に1件選ぶ。
 - `main.ts`は照準方向のmuzzle anchorとactiveな既存弾薬箱をこの関数へ渡す。物理overlapは取得を起動しない。候補がある間は`data-testid="pickup-prompt"`へ`E: 拾う`を表示し、`E`で選択された1箱だけへ既存`collectAmmoBox`状態遷移を適用する。
-- 弾薬箱以外のpickup状態は作らない。既存の`boxId`、30秒respawn、terminal/retryのtimer解除はそのまま使う。
+- weapon・materialを含むpickup状態は[SPEC-INVENTORY-V1](inventory-v1.md)が追加する。既存の弾薬箱`boxId`、30秒respawn、terminal/retryのtimer解除はそのまま使う。
 
 ## 検証対象
 

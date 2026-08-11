@@ -50,9 +50,17 @@
             <progress class="ammo-panel-reload" data-testid="reload-progress" max="1" value="0" hidden aria-label="リロード進捗"></progress>
             <output data-testid="ammo-box-count" hidden>4</output>
           </aside>
+          <aside id="inventory-panel" data-testid="inventory-panel" aria-label="武器スロットと素材">
+            <span class="inventory-panel-caption">武器スロット</span>
+            <output data-testid="weapon-slot-rifle" data-key="1" data-weapon="rifle" data-owned="true" data-selected="true">1 アサルトライフル: 所持（選択中）</output>
+            <output data-testid="weapon-slot-shotgun" data-key="2" data-weapon="shotgun" data-owned="false" data-selected="false">2 ショットガン: 未所持</output>
+            <span class="inventory-panel-caption">素材</span>
+            <output data-testid="scrap" data-count="0">スクラップ 0</output>
+            <output data-testid="world-item-count" data-world-items="" hidden>1</output>
+          </aside>
         </div>
         <p>
-          移動: WASD / 矢印　武器: 1 ライフル / 2 ショットガン　照準: マウス移動　射撃: マウス左ボタン　リロード: R
+          移動: WASD / 矢印　武器: 1 ライフル / 2 ショットガン　拾う: E　照準: マウス移動　射撃: マウス左ボタン　リロード: R
         </p>
         <p data-testid="hud">
           武器: <output data-testid="weapon">アサルトライフル</output>

@@ -1,7 +1,7 @@
 import type { EnemyVisibility, SpawnDirection, TilePosition } from '../arena-map';
 import { DIRECTION_LABELS, ENEMY_IDS } from '../game-data';
 import { PLAYER_ROLES, type PlayerRoleId } from '../player-data';
-import { STABLE_ENEMY_SLOT_COUNT, WEAPONS, activeEnemyCount, currentRunPhase, currentWaveNumber, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, type CombatState, type EnemyInstanceId, type RunState } from '../rules';
+import { STABLE_ENEMY_SLOT_COUNT, WEAPONS, activeEnemyCount, currentRunPhase, currentWaveNumber, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, type CombatState, type EnemyInstanceId, type RunState, type WeaponId } from '../rules';
 
 export type EnemyHudView = {
   stableId: string;
@@ -27,6 +27,7 @@ export type ArenaHudView = {
   ammoBoxCount: number;
   activeAmmoBoxTiles: readonly string[];
   activeAmmoBoxEntries: readonly string[];
+  activeWorldItemEntries: readonly string[];
   offscreenAmmoBoxIds: readonly string[];
   pendingAmmoBoxIds: readonly string[];
   pendingAmmoBoxOriginTiles: readonly string[];
@@ -66,6 +67,13 @@ export class ArenaHud {
   private readonly ammoHud = element<HTMLOutputElement>('[data-testid="ammo"]');
   private readonly ammoPanelWeaponHud = element<HTMLOutputElement>('[data-testid="ammo-panel-weapon"]');
   private readonly reserveHud = element<HTMLOutputElement>('[data-testid="ammo-reserve"]');
+  private readonly weaponSlots: Record<WeaponId, HTMLOutputElement> = {
+    rifle: element<HTMLOutputElement>('[data-testid="weapon-slot-rifle"]'),
+    shotgun: element<HTMLOutputElement>('[data-testid="weapon-slot-shotgun"]'),
+  };
+
+  private readonly scrapHud = element<HTMLOutputElement>('[data-testid="scrap"]');
+  private readonly worldItemCountHud = element<HTMLOutputElement>('[data-testid="world-item-count"]');
   private readonly ammoBoxCountHud = element<HTMLOutputElement>('[data-testid="ammo-box-count"]');
   private readonly playerRoleHud = element<HTMLOutputElement>('[data-testid="role"]');
   private readonly pickupPrompt = element<HTMLElement>('[data-testid="pickup-prompt"]');
@@ -183,6 +191,9 @@ export class ArenaHud {
     this.ammoHud.dataset.magazineCapacity = String(weapon.magazineSize);
     this.reserveHud.dataset.reserve = String(view.state.reserve[view.state.weapon]);
     this.reserveHud.dataset.reserveCapacity = String(weapon.reserveMax);
+    this.updateInventory(view.state);
+    this.worldItemCountHud.value = String(view.activeWorldItemEntries.length);
+    this.worldItemCountHud.dataset.worldItems = view.activeWorldItemEntries.join('|');
     this.ammoBoxCountHud.value = String(view.ammoBoxCount);
     this.ammoBoxCountHud.dataset.activeTiles = view.activeAmmoBoxTiles.join('|');
     this.ammoBoxCountHud.dataset.activeBoxes = view.activeAmmoBoxEntries.join('|');
@@ -197,6 +208,22 @@ export class ArenaHud {
     this.updateSpawnPhase(view.spawnPhase, view.primaryDirection);
     this.mapSeedHud.value = String(view.mapSeed);
     this.updateTile(view.playerTile);
+  }
+
+  private updateInventory(state: CombatState): void {
+    const keys: Record<WeaponId, string> = { rifle: '1', shotgun: '2' };
+    (Object.keys(WEAPONS) as WeaponId[]).forEach((weapon) => {
+      const slot = this.weaponSlots[weapon];
+      const owned = state.inventory.ownedWeapons[weapon];
+      const selected = state.weapon === weapon;
+      slot.value = `${keys[weapon]} ${WEAPONS[weapon].label}: ${owned ? '所持' : '未所持'}${selected ? '（選択中）' : ''}`;
+      slot.dataset.key = keys[weapon];
+      slot.dataset.weapon = weapon;
+      slot.dataset.owned = String(owned);
+      slot.dataset.selected = String(selected);
+    });
+    this.scrapHud.value = `スクラップ ${state.inventory.materials.scrap}`;
+    this.scrapHud.dataset.count = String(state.inventory.materials.scrap);
   }
 
   public updateReloadProgress(reload: { active: boolean; progress: number }): void {

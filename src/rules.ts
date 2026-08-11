@@ -1,6 +1,15 @@
 /** プレイヤーが選択できる武器の識別子。 */
 export type WeaponId = 'rifle' | 'shotgun';
 
+/** 最小インベントリで扱う素材の識別子。 */
+export type MaterialId = 'scrap';
+
+/** 所持武器と素材数だけを保持する最小インベントリ状態。 */
+export type InventoryState = {
+  ownedWeapons: Record<WeaponId, boolean>;
+  materials: Record<MaterialId, number>;
+};
+
 /** 戦闘中の敵の基本種別。 */
 export type EnemyKind = 'basic' | 'drone';
 
@@ -98,6 +107,7 @@ export type CombatState = {
   defeated: boolean;
   victory: boolean;
   weapon: WeaponId;
+  inventory: InventoryState;
   ammo: Record<WeaponId, number>;
   reserve: Record<WeaponId, number>;
   nextFireAt: Record<WeaponId, number>;
@@ -196,11 +206,17 @@ function createInitialEnemies(): Record<EnemyInstanceId, EnemyState> {
 
 const INITIAL_ENEMIES = createInitialEnemies();
 
+const INITIAL_INVENTORY: InventoryState = {
+  ownedWeapons: { rifle: true, shotgun: false },
+  materials: { scrap: 0 },
+};
+
 export const INITIAL_STATE: CombatState = {
   playerHp: 100,
   defeated: false,
   victory: false,
   weapon: 'rifle',
+  inventory: INITIAL_INVENTORY,
   ammo: { rifle: WEAPONS.rifle.magazineSize, shotgun: WEAPONS.shotgun.magazineSize },
   reserve: { rifle: WEAPONS.rifle.reserveInitial, shotgun: WEAPONS.shotgun.reserveInitial },
   nextFireAt: { rifle: 0, shotgun: 0 },
@@ -526,9 +542,48 @@ export function damagePlayer(state: CombatState, amount: number): CombatState {
  * @returns 武器選択と必要なリロード中断を反映した戦闘状態。
  */
 export function selectWeapon(state: CombatState, weapon: WeaponId): CombatState {
-  if (state.defeated || state.victory)
+  if (state.defeated || state.victory || !state.inventory.ownedWeapons[weapon])
     return state;
   return { ...state, weapon, reloading: weapon === state.weapon ? state.reloading : null };
+}
+
+/**
+ * 未所持の武器を所持品へ追加する。
+ *
+ * @param state 現在の戦闘状態。
+ * @param weapon 取得する武器。
+ * @returns 取得結果を反映した戦闘状態。
+ */
+export function collectWeapon(state: CombatState, weapon: WeaponId): CombatState {
+  if (state.defeated || state.victory || state.inventory.ownedWeapons[weapon])
+    return state;
+  return {
+    ...state,
+    inventory: {
+      ...state.inventory,
+      ownedWeapons: { ...state.inventory.ownedWeapons, [weapon]: true },
+    },
+  };
+}
+
+/**
+ * 指定素材を正の個数だけ所持品へ加算する。
+ *
+ * @param state 現在の戦闘状態。
+ * @param material 加算する素材。
+ * @param amount 加算する正の安全な整数。
+ * @returns 素材数を反映した戦闘状態。
+ */
+export function collectMaterial(state: CombatState, material: MaterialId, amount: number): CombatState {
+  if (state.defeated || state.victory || !Number.isSafeInteger(amount) || amount <= 0)
+    return state;
+  return {
+    ...state,
+    inventory: {
+      ...state.inventory,
+      materials: { ...state.inventory.materials, [material]: state.inventory.materials[material] + amount },
+    },
+  };
 }
 
 /**
@@ -695,6 +750,10 @@ export function respawnEnemy(state: CombatState, enemyId: EnemyInstanceId): Comb
 export function retryCombat(): CombatState {
   return {
     ...INITIAL_STATE,
+    inventory: {
+      ownedWeapons: { ...INITIAL_STATE.inventory.ownedWeapons },
+      materials: { ...INITIAL_STATE.inventory.materials },
+    },
     ammo: { ...INITIAL_STATE.ammo },
     reserve: { ...INITIAL_STATE.reserve },
     nextFireAt: { ...INITIAL_STATE.nextFireAt },

@@ -3,6 +3,7 @@ export const ARENA_WIDTH_TILES = 80;
 export const ARENA_HEIGHT_TILES = 50;
 export const AMMO_BOX_COUNT = 4;
 export const SPAWN_PHASE_MS = 60_000;
+const INITIAL_WEAPON_PICKUP_MAX_PATH_DISTANCE = 4;
 export const SPAWN_DIRECTIONS = ['up', 'right', 'down', 'left'] as const;
 
 const NORMAL_ROOM_COUNT = 14;
@@ -321,6 +322,35 @@ export function selectAmmoBoxTiles(
       return leftRank - rightRank || left.y - right.y || left.x - right.x;
     })
     .slice(0, Math.max(0, count));
+}
+
+/**
+ * 開始位置から到達できる近い初期武器pickupのtileを決定的に選ぶ。
+ *
+ * @param map 選択対象のアリーナ地形。
+ * @param occupied 弾薬箱など、同一または近傍を避けるtile座標。
+ * @returns 選択したtile座標。候補がなければnull。
+ */
+export function selectInitialWeaponPickupTile(
+  map: ArenaMap,
+  occupied: readonly TilePosition[] = [],
+): TilePosition | null {
+  const occupiedKeys = new Set([positionKey(map.start), ...occupied.map(positionKey)]);
+  const distances = pathDistances(map, map.start);
+  const candidates = floorTiles(map).flatMap((position) => {
+    const distance = distances.get(positionKey(position));
+    const nearOccupied = occupied.some(other => Math.abs(other.x - position.x) <= 1 && Math.abs(other.y - position.y) <= 1);
+    return distance === undefined || distance === 0 || occupiedKeys.has(positionKey(position)) || nearOccupied
+      ? []
+      : [{ position, distance }];
+  });
+  const nearby = candidates.filter(candidate => candidate.distance <= INITIAL_WEAPON_PICKUP_MAX_PATH_DISTANCE);
+  const pool = nearby.length > 0 ? nearby : candidates;
+  return pool.sort((left, right) => {
+    const rank = mixSeed(map.seed, 'initial-weapon:' + positionKey(left.position))
+      - mixSeed(map.seed, 'initial-weapon:' + positionKey(right.position));
+    return left.distance - right.distance || rank || left.position.y - right.position.y || left.position.x - right.position.x;
+  })[0]?.position ?? null;
 }
 
 /**

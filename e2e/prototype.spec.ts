@@ -5,6 +5,13 @@ import { AMMO_BOX_RESPAWN_MS, COMBAT_WAVE_DURATION_MS, ENEMY_INSTANCE_IDS, REST_
 
 type EnemyId = (typeof ENEMY_INSTANCE_IDS)[number];
 type EnemyPresentation = 'normal' | 'boundary' | 'hidden';
+type WorldItemEntry = {
+  id: string;
+  kind: 'weapon' | 'material';
+  item: string;
+  tile: TilePosition;
+  quantity: number;
+};
 const INITIAL_ACTIVE_IDS: readonly EnemyId[] = ['basic-1', 'basic-2', 'basic-3', 'basic-4', 'basic-5', 'basic-6', 'drone-1', 'drone-2'];
 const STAGGERED_ENEMIES: readonly { id: EnemyId; delay: number }[] = [
   { id: 'basic-7', delay: 3000 },
@@ -110,6 +117,38 @@ async function expectOutputValue(
 
 function tileKeysFromAttribute(value: string | null): string[] {
   return value ? value.split('|').filter(key => key.length > 0) : [];
+}
+
+async function activeWorldItems(page: import('@playwright/test').Page): Promise<WorldItemEntry[]> {
+  const value = await page.getByTestId('world-item-count').getAttribute('data-world-items');
+  return tileKeysFromAttribute(value).map((entry) => {
+    const [id, kind, item, tile, quantity] = entry.split(':');
+    const [x, y] = tile?.split(',').map(Number) ?? [];
+    if (
+      !id
+      || (kind !== 'weapon' && kind !== 'material')
+      || !item
+      || !Number.isInteger(x)
+      || !Number.isInteger(y)
+      || !Number.isSafeInteger(Number(quantity))
+    ) throw new Error(`world itemの観測値が不正です: ${entry}`);
+    return { id, kind, item, tile: { x, y }, quantity: Number(quantity) };
+  });
+}
+
+async function collectShotgunPickup(page: import('@playwright/test').Page): Promise<WorldItemEntry> {
+  const shotgun = (await activeWorldItems(page)).find(item => item.kind === 'weapon' && item.item === 'shotgun');
+  if (!shotgun)
+    throw new Error('初期ショットガンpickupが必要です。');
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, shotgun.tile);
+  await expect(page.getByTestId('pickup-prompt')).toBeVisible();
+  await page.keyboard.press('e');
+  await expect(page.getByTestId('weapon-slot-shotgun')).toHaveAttribute('data-owned', 'true');
+  return shotgun;
 }
 
 function expectedObscuredTileCount(
@@ -541,6 +580,7 @@ test('通常役職は回避中に発砲しない', async ({ page }) => {
   await page.goto(devStartUrl('/'));
   await expect(page.locator('#game canvas')).toBeVisible();
   await setPlayerInvulnerable(page, true);
+  await collectShotgunPickup(page);
   await page.keyboard.press('2');
   await expect(page.getByTestId('weapon')).toHaveText('ショットガン');
   await aimPlayer(page, { x: 1, y: 0 });
@@ -560,6 +600,7 @@ test('ガンスリンガーは回避中に発砲できる', async ({ page }) => 
   await page.getByTestId('start').click();
   await expect(page.locator('#game canvas')).toBeVisible();
   await setPlayerInvulnerable(page, true);
+  await collectShotgunPickup(page);
   await page.keyboard.press('2');
   await expect(page.getByTestId('weapon')).toHaveText('ショットガン');
   await aimPlayer(page, { x: 1, y: 0 });
@@ -571,6 +612,126 @@ test('ガンスリンガーは回避中に発砲できる', async ({ page }) => 
   } finally {
     await page.mouse.up();
   }
+});
+
+test('武器pickupと同tileスクラップを一件ずつEで取得できる', async ({ page }) => {
+  test.setTimeout(45_000);
+  await page.clock.install({ time: 15 });
+  await page.clock.pauseAt(15);
+  await page.goto(devStartUrl('/?enemyInitialCount=1&enemyStaggerIntervalMs=30000&combatWaveDurationMs=15000&restDurationMs=1000'));
+  await setArenaPhysics(page, 'pause');
+  const rifleSlot = page.getByTestId('weapon-slot-rifle');
+  const shotgunSlot = page.getByTestId('weapon-slot-shotgun');
+  await expect(rifleSlot).toHaveAttribute('data-key', '1');
+  await expect(rifleSlot).toHaveAttribute('data-weapon', 'rifle');
+  await expect(rifleSlot).toHaveAttribute('data-owned', 'true');
+  await expect(rifleSlot).toHaveAttribute('data-selected', 'true');
+  await expect(shotgunSlot).toHaveAttribute('data-key', '2');
+  await expect(shotgunSlot).toHaveAttribute('data-weapon', 'shotgun');
+  await expect(shotgunSlot).toHaveAttribute('data-owned', 'false');
+  await expect(shotgunSlot).toHaveAttribute('data-selected', 'false');
+  await page.keyboard.press('2');
+  await expect(rifleSlot).toHaveAttribute('data-selected', 'true');
+
+  const shotgun = await collectShotgunPickup(page);
+  await expect(shotgunSlot).toHaveAttribute('data-owned', 'true');
+  await page.keyboard.press('2');
+  await expect(shotgunSlot).toHaveAttribute('data-selected', 'true');
+  await expect(rifleSlot).toHaveAttribute('data-selected', 'false');
+
+  await moveEnemyToTile(page, 'basic-1', shotgun.tile);
+  const enemyHp = Number(await page.getByTestId('basic-1-hp').textContent());
+  await debugDamageEnemy(page, 'basic-1', enemyHp);
+  const firstScrap = (await activeWorldItems(page)).find(item => item.kind === 'material' && item.tile.x === shotgun.tile.x && item.tile.y === shotgun.tile.y);
+  if (!firstScrap) throw new Error('最初のスクラップpickupが必要です。');
+  const mapSeed = Number(await page.getByTestId('map-seed').textContent());
+  await page.clock.runFor(respawnDelayFor('basic', 'basic-1', 1, mapSeed) + 100);
+  await expect(page.getByTestId('basic-1-hp')).toHaveAttribute('data-active', 'true');
+  await moveEnemyToTile(page, 'basic-1', shotgun.tile);
+  await debugDamageEnemy(page, 'basic-1', Number(await page.getByTestId('basic-1-hp').textContent()));
+  const scrapItems = (await activeWorldItems(page)).filter(item => item.kind === 'material' && item.tile.x === shotgun.tile.x && item.tile.y === shotgun.tile.y);
+  expect(scrapItems).toHaveLength(1);
+  const secondScrap = scrapItems[0];
+  if (!secondScrap) throw new Error('集約後のスクラップpickupが必要です。');
+  expect(secondScrap.quantity).toBeGreaterThan(firstScrap.quantity);
+
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, shotgun.tile);
+  await expect(page.getByTestId('pickup-prompt')).toBeVisible();
+  await page.keyboard.press('e');
+  await expect(page.getByTestId('scrap')).toHaveAttribute('data-count', /[1-9]/);
+  expect((await activeWorldItems(page)).filter(item => item.id === secondScrap.id)).toHaveLength(0);
+});
+
+test('満タン弾薬箱と同tileのスクラップをEで取得できる', async ({ page }) => {
+  await page.clock.install({ time: 15 });
+  await page.clock.pauseAt(15);
+  await page.goto(devStartUrl('/?enemyInitialCount=1&enemyStaggerIntervalMs=30000&combatWaveDurationMs=15000&restDurationMs=1000'));
+  await setArenaPhysics(page, 'pause');
+  const mapSeed = Number(await page.getByTestId('map-seed').textContent());
+  const [refillBox, targetBox] = selectAmmoBoxTiles(generateArenaMap(mapSeed));
+  if (!refillBox || !targetBox)
+    throw new Error('満タン確認用と競合確認用の弾薬箱が必要です。');
+  const ammoBoxCount = page.getByTestId('ammo-box-count');
+  const targetBoxKey = `${targetBox.x},${targetBox.y}`;
+
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, refillBox);
+  await page.keyboard.press('e');
+  await page.clock.runFor(100);
+  await expect.poll(async () => tileKeysFromAttribute(await ammoBoxCount.getAttribute('data-active-tiles'))).not.toContain(`${refillBox.x},${refillBox.y}`);
+  await expect.poll(async () => tileKeysFromAttribute(await ammoBoxCount.getAttribute('data-active-tiles'))).toContain(targetBoxKey);
+
+  await moveEnemyToTile(page, 'basic-1', targetBox);
+  await debugDamageEnemy(page, 'basic-1', Number(await page.getByTestId('basic-1-hp').textContent()));
+  const scrap = (await activeWorldItems(page)).find(item => item.kind === 'material' && item.tile.x === targetBox.x && item.tile.y === targetBox.y);
+  if (!scrap) throw new Error('弾薬箱と同tileのスクラップpickupが必要です。');
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, targetBox);
+  await expect(page.getByTestId('pickup-prompt')).toBeVisible();
+  await page.keyboard.press('e');
+  await expect(page.getByTestId('scrap')).toHaveAttribute('data-count', /[1-9]/);
+  expect((await activeWorldItems(page)).some(item => item.id === scrap.id)).toBe(false);
+  await expect.poll(async () => tileKeysFromAttribute(await ammoBoxCount.getAttribute('data-active-tiles'))).toContain(targetBoxKey);
+});
+
+test('terminal中はpickupを止め、retryで所持品とworld itemを初期化する', async ({ page }) => {
+  await page.clock.install({ time: 15 });
+  await page.clock.pauseAt(15);
+  await page.goto(devStartUrl('/?combatWaveDurationMs=1000&restDurationMs=500'));
+  await setPlayerInvulnerable(page, true);
+  const shotgun = (await activeWorldItems(page)).find(item => item.kind === 'weapon' && item.item === 'shotgun');
+  if (!shotgun) throw new Error('terminal確認用のショットガンpickupが必要です。');
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, shotgun.tile);
+  await expect(page.getByTestId('pickup-prompt')).toBeVisible();
+  await page.clock.fastForward(4000);
+  await expect(page.getByTestId('victory')).toBeVisible();
+  await expect(page.getByTestId('pickup-prompt')).toBeHidden();
+  await page.keyboard.press('e');
+  await expect(page.getByTestId('weapon-slot-shotgun')).toHaveAttribute('data-owned', 'false');
+  expect((await activeWorldItems(page)).find(item => item.id === shotgun.id)).toEqual(shotgun);
+
+  await page.getByTestId('retry').click();
+  await expect(page.getByTestId('weapon-slot-rifle')).toHaveAttribute('data-owned', 'true');
+  await expect(page.getByTestId('weapon-slot-rifle')).toHaveAttribute('data-selected', 'true');
+  await expect(page.getByTestId('weapon-slot-shotgun')).toHaveAttribute('data-owned', 'false');
+  await expect(page.getByTestId('scrap')).toHaveAttribute('data-count', '0');
+  const retriedItems = await activeWorldItems(page);
+  expect(retriedItems.filter(item => item.kind === 'weapon' && item.item === 'shotgun')).toHaveLength(1);
+  expect(retriedItems.filter(item => item.kind === 'material')).toHaveLength(0);
 });
 
 test('ガンスリンガーは回避中の敵を一度だけブーツナイフで通過し、コンボと速度buffを更新する', async ({ page }) => {
@@ -908,6 +1069,7 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expect(page.getByTestId('ammo-reserve')).toHaveAttribute('data-reserve', '60');
 
   await setArenaPhysics(page, 'pause');
+  await collectShotgunPickup(page);
   await page.keyboard.press('2');
   await expect(page.getByTestId('weapon')).toHaveText('ショットガン');
   await expect(page.getByTestId('ammo')).toHaveText('4/4');

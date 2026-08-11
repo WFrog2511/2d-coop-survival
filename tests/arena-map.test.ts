@@ -19,6 +19,7 @@ import {
   recycleDelayFor,
   respawnDelayFor,
   selectEnemySpawnTile,
+  selectInitialWeaponPickupTile,
   selectSpawnTile,
   selectAmmoBoxTiles,
   spawnDirectionForSlot,
@@ -170,6 +171,17 @@ describe('自動生成アリーナ', () => {
     expect(boxes.every(position => findPath(map, map.start, position).length > 0)).toBe(true);
     expect(selectAmmoBoxTiles(map)).toEqual(boxes);
     expect(selectAmmoBoxTiles(map, [boxes[0]])).not.toContainEqual(boxes[0]);
+  });
+
+  test('初期武器pickupは弾薬箱と重ならない到達可能tileを決定的に選ぶ', () => {
+    const map = generateArenaMap(seed);
+    const boxes = selectAmmoBoxTiles(map);
+    const pickup = selectInitialWeaponPickupTile(map, boxes);
+    if (!pickup) throw new Error('初期武器pickupのtileが必要です。');
+    expect(selectInitialWeaponPickupTile(map, boxes)).toEqual(pickup);
+    expect(pickup).not.toEqual(map.start);
+    expect(boxes).not.toContainEqual(pickup);
+    expect(findPath(map, map.start, pickup).length).toBeGreaterThan(0);
   });
 
   test('12体の初期spawnは到達可能floorを使い、player、弾薬箱、他の敵と重複しない', () => {

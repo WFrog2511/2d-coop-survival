@@ -100,7 +100,8 @@ h1 {
 }
 
 .game-overlay,
-#ammo-panel {
+#ammo-panel,
+#inventory-panel {
   z-index: 1;
   pointer-events: none;
 }
@@ -203,6 +204,33 @@ h1 {
   border-radius: 10px;
   background: rgb(16 24 39 / 88%);
   box-sizing: border-box;
+}
+
+#inventory-panel {
+  position: absolute;
+  right: 12px;
+  bottom: 142px;
+  display: grid;
+  gap: 3px;
+  min-width: 190px;
+  padding: 8px 10px;
+  border: 1px solid #9e8cff;
+  border-radius: 10px;
+  background: rgb(16 24 39 / 88%);
+  box-sizing: border-box;
+}
+
+.inventory-panel-caption {
+  font-size: 0.75rem;
+  color: #c7f7ff;
+}
+
+#inventory-panel output[data-owned='false'] {
+  color: #9ba9b4;
+}
+
+#inventory-panel output[data-selected='true'] {
+  color: #ffef76;
 }
 
 .ammo-panel-caption,

@@ -16,6 +16,8 @@ import {
   advanceSurvivalState,
   canFireAt,
   collectAmmoBox,
+  collectMaterial,
+  collectWeapon,
   completeReload,
   createRunSchedule,
   createRunState,
@@ -241,6 +243,8 @@ describe('戦闘ルール', () => {
     expect(damageEnemy(victory, 'basic-1', 100)).toBe(victory);
     expect(respawnEnemy(victory, 'basic-1')).toBe(victory);
     expect(collectAmmoBox(victory)).toEqual({ state: victory, collected: false });
+    expect(collectWeapon(victory, 'shotgun')).toBe(victory);
+    expect(collectMaterial(victory, 'scrap', 1)).toBe(victory);
   });
 
   it('ライフルは発射時に1発消費し、境界時だけ次弾を許可する', () => {
@@ -252,7 +256,7 @@ describe('戦闘ルール', () => {
   });
 
   it('ショットガンの発射待ち時間は武器切替後も維持する', () => {
-    const shotgun = selectWeapon(INITIAL_STATE, 'shotgun');
+    const shotgun = selectWeapon(collectWeapon(INITIAL_STATE, 'shotgun'), 'shotgun');
     const first = fireWeapon(shotgun, 100);
     const switched = selectWeapon(first.state, 'rifle');
     expect(first.state.ammo.shotgun).toBe(3);
@@ -301,7 +305,7 @@ describe('戦闘ルール', () => {
   });
 
   it('武器切替はリロードを中断し、残弾を保持する', () => {
-    const fired = fireWeapon(selectWeapon(INITIAL_STATE, 'shotgun'), 0).state;
+    const fired = fireWeapon(selectWeapon(collectWeapon(INITIAL_STATE, 'shotgun'), 'shotgun'), 0).state;
     const reloading = startReload(fired);
     const switched = selectWeapon(reloading, 'rifle');
     expect(switched.reloading).toBeNull();
@@ -329,15 +333,35 @@ describe('戦闘ルール', () => {
     expect(damagePlayer(INITIAL_STATE, 120)).toMatchObject({ playerHp: 0, defeated: true });
   });
 
-  it('再挑戦は武器別残弾、発射待ち、リロード、敵12個体を初期化する', () => {
+  it('未所持武器を選択せず、武器と素材の取得だけを所持品へ反映する', () => {
+    expect(INITIAL_STATE.inventory).toEqual({
+      ownedWeapons: { rifle: true, shotgun: false },
+      materials: { scrap: 0 },
+    });
+    expect(selectWeapon(INITIAL_STATE, 'shotgun')).toBe(INITIAL_STATE);
+    const collected = collectWeapon(INITIAL_STATE, 'shotgun');
+    expect(collected.inventory.ownedWeapons.shotgun).toBe(true);
+    expect(collectWeapon(collected, 'shotgun')).toBe(collected);
+    const selected = selectWeapon(collected, 'shotgun');
+    expect(selected.weapon).toBe('shotgun');
+    const first = collectMaterial(selected, 'scrap', 1);
+    const second = collectMaterial(first, 'scrap', 1);
+    expect(second.inventory.materials.scrap).toBeGreaterThan(first.inventory.materials.scrap);
+    expect(collectMaterial(second, 'scrap', 0)).toBe(second);
+  });
+
+  it('再挑戦は所持品、武器別残弾、発射待ち、リロード、敵12個体を初期化する', () => {
     const changed = {
-      ...fireWeapon(selectWeapon(INITIAL_STATE, 'shotgun'), 100).state,
+      ...fireWeapon(selectWeapon(collectWeapon(INITIAL_STATE, 'shotgun'), 'shotgun'), 100).state,
       reloading: 'shotgun' as const,
     };
     const retried = retryCombat();
     expect(changed).not.toEqual(retried);
     expect(retried).toEqual(INITIAL_STATE);
     expect(retried.victory).toBe(false);
+    expect(retried.inventory).not.toBe(INITIAL_STATE.inventory);
+    expect(retried.inventory.ownedWeapons).not.toBe(INITIAL_STATE.inventory.ownedWeapons);
+    expect(retried.inventory.materials).not.toBe(INITIAL_STATE.inventory.materials);
     expect(retried.ammo).not.toBe(INITIAL_STATE.ammo);
     expect(retried.nextFireAt).not.toBe(INITIAL_STATE.nextFireAt);
     expect(retried.enemies).not.toBe(INITIAL_STATE.enemies);

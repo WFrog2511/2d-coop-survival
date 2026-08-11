@@ -95,6 +95,8 @@ export const ENEMY_DEFEAT_HIT_STOP_MS: Record<WeaponId, number> = { rifle: 24, s
 
 export const PLAYER_HIT_STOP_MS: Record<EnemyKind, number> = { basic: 30, drone: 45 };
 
+export const SCRAP_DROP_AMOUNTS: Record<EnemyKind, number> = { basic: 1, drone: 1 };
+
 export const CAMERA_SHAKE_COOLDOWN_MS = 70;
 
 export const SHOTGUN_SHAKE: CameraShakeProfile = { duration: 70, intensity: 0.0016 };
