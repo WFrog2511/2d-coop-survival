@@ -30,6 +30,9 @@ export type ArenaHudView = {
   offscreenAmmoBoxIds: readonly string[];
   pendingAmmoBoxIds: readonly string[];
   pendingAmmoBoxOriginTiles: readonly string[];
+  gunslingerCombo: number;
+  gunslingerSpeedMultiplier: number;
+  isGunslinger: boolean;
   reload: { active: boolean; progress: number };
   remainingSurvivalMs: number;
   spawnPhase: number;
@@ -83,6 +86,8 @@ export class ArenaHud {
   private readonly enemyGoalHud = element<HTMLOutputElement>('[data-testid="enemy-goal"]');
   private readonly enemyRemainingHud = element<HTMLOutputElement>('[data-testid="enemy-remaining"]');
   private readonly killsHud = element<HTMLOutputElement>('[data-testid="kills"]');
+  private readonly gunslingerComboPanel = element<HTMLElement>('[data-testid="gunslinger-combo-panel"]');
+  private readonly gunslingerComboHud = element<HTMLOutputElement>('[data-testid="gunslinger-combo"]');
   private readonly spawnPhaseHud = element<HTMLOutputElement>('[data-testid="spawn-phase"]');
   private readonly primaryDirectionHud = element<HTMLOutputElement>('[data-testid="primary-direction"]');
   private readonly feedback = element<HTMLElement>('[data-testid="feedback"]');
@@ -184,6 +189,7 @@ export class ArenaHud {
     this.ammoBoxCountHud.dataset.offscreenBoxes = view.offscreenAmmoBoxIds.join('|');
     this.ammoBoxCountHud.dataset.respawnBoxes = view.pendingAmmoBoxIds.join('|');
     this.ammoBoxCountHud.dataset.respawnTiles = view.pendingAmmoBoxOriginTiles.join('|');
+    this.updateGunslinger(view.gunslingerCombo, view.gunslingerSpeedMultiplier, view.isGunslinger);
     this.reloadHud.value = view.state.reloading === null ? '待機' : `リロード中: ${WEAPONS[view.state.reloading].label}`;
     this.updateReloadProgress(view.reload);
     this.updateSurvival(view.remainingSurvivalMs);
@@ -222,6 +228,13 @@ export class ArenaHud {
     this.enemyGoalHud.value = String(STABLE_ENEMY_SLOT_COUNT);
     this.enemyRemainingHud.value = String(remainingEnemyCount(state));
     this.killsHud.value = String(state.kills);
+  }
+
+  public updateGunslinger(combo: number, speedMultiplier: number, isGunslinger: boolean): void {
+    this.gunslingerComboPanel.hidden = !isGunslinger;
+    this.gunslingerComboHud.value = String(combo);
+    this.gunslingerComboHud.dataset.active = String(isGunslinger);
+    this.gunslingerComboHud.dataset.speedMultiplier = String(speedMultiplier);
   }
 
   public updateSpawnPhase(phase: number, primaryDirection: SpawnDirection): void {

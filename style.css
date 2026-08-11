@@ -154,6 +154,11 @@ h1 {
   background: rgb(107 87 59 / 88%);
 }
 
+.gunslinger-combo {
+  color: #ffb4b4;
+  font-variant-numeric: tabular-nums;
+}
+
 #survival-panel span,
 #hp-panel span,
 #run-panel span {

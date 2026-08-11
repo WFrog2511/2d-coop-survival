@@ -14,7 +14,8 @@ requirements: REQ-PLAYER-ACTIONS
 
 ## 回避
 
-- pointermoveとpointerdownは純粋な`dashDirectionFor`でポインタからプレイヤーへ向く照準ベクトルを正規化して保持する。更新時以外はplayerのrotationを変えず、`aimPoint`は保持方向または現在rotationから`TILE_SIZE`先を算出する。SpaceとShiftは同じ回避開始処理を呼び、回避と自動射撃はこの`aimPoint`を使う。pointerdownは照準を更新してから単発射撃を開始する。`canDashAt`と`dashCooldownUntil`で1000msの再使用待ちを判定する。`PLAYER_DASH_DISTANCE_PX`、`PLAYER_DASH_DURATION_MS`、`PLAYER_DASH_COOLDOWN_MS`は80px、160ms、1000msを定義する。
+- pointermoveとpointerdownは純粋な`dashDirectionFor`でポインタからプレイヤーへ向く照準ベクトルを正規化して保持する。更新時以外はplayerのrotationを変えず、`aimPoint`は保持方向または現在rotationから`TILE_SIZE`先を算出する。SpaceとShiftは同じ回避開始処理を呼び、回避と自動射撃はこの`aimPoint`を使う。pointerdownは照準を更新してから単発射撃を開始する。`canDashAt`と`dashCooldownUntil`で役職別の再使用待ちを判定する。
+- `PLAYER_DASH_DISTANCE_PX`、`PLAYER_DASH_DURATION_MS`、`PLAYER_DASH_COOLDOWN_MS`、`GUNSLINGER_DASH_COOLDOWN_MS`は80px、160ms、667ms、400msを定義する。`dashDistanceFor`と`dashSpeedFor`はガンスリンガーだけ120px・750px/s、ほかの役職は80px・500px/sを返す。`dashCooldownUntil(now, roleId)`はガンスリンガーに400ms、ほかの役職に667msを適用する。`canFireWhileDashing`はガンスリンガーだけ`true`であり、`tryFire`は非ガンスリンガーの回避中に無副作用で終了する。
 - 回避中は移動入力より回避速度を優先し、対象方向の壁へ衝突した時点または160ms経過時点で停止する。回避中だけ`hitPlayer`は無副作用で終了する。
 - terminalとretryは回避状態と速度を解除する。retryはcooldownも初期化する。装甲敵の固有判定は実装しない。
 
@@ -27,5 +28,6 @@ requirements: REQ-PLAYER-ACTIONS
 ## 検証対象
 
 - `tests/pickups.test.ts`: 3x3境界、muzzle anchorの方向優先、同距離の決定性、候補なし。
-- `tests/player-data.test.ts`: 回避方向の正規化、照準なし、cooldown境界、5役職の表示色と数値tint。
-- `e2e/prototype.spec.ts`: 役職選択後の開始、スナイパーtint、スナイパー色の敵着弾effect、生成textureのグレースケール、マウス未移動中のrotation維持とpointermove後の更新、DEV明示開始経路、Space/Shift回避中の無敵・壁停止・cooldown、接触だけでは弾薬箱が消えず、E案内とE取得で消費されること。
+- `tests/player-data.test.ts`: 回避方向の正規化、照準なし、任意deadlineのcooldown境界、役職別のdash中発砲可否、コンボと速度buffの状態遷移。
+- `e2e/prototype.spec.ts`: 役職選択後の開始、player tintと敵着弾effect色の一致、生成textureのグレースケール、マウス未移動中のrotation維持とpointermove後の更新、DEV明示開始経路、ガンスリンガー選択時のcombo panel可視と値更新、非ガンスリンガーのdash中無発砲、ガンスリンガーのdash中発砲、接触だけでは弾薬箱が消えず、E案内とE取得で消費されること。
+- 距離、速度、cooldown、弾薬量、役職色の調整値そのものは自動assertせず手動確認する。

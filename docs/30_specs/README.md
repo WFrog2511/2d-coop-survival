@@ -6,3 +6,4 @@
 
 - [wave-progression-v1 仕様](wave-progression-v1.md): RunState schedule、combat/rest境界、enemy event、HUD/data-testidの検証契約。
 - [player-actions-v1 仕様](player-actions-v1.md): 回避、近傍pickup selector、開始ゲート、DEV E2E経路の検証契約。
+- [gunslinger-v1 仕様](gunslinger-v1.md): 調整定数、回避overlap、共通撃破経路、combo/buff HUDの検証契約。

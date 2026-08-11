@@ -1,10 +1,24 @@
 export const PLAYER_DASH_DISTANCE_PX = 80;
 
-export const PLAYER_DASH_COOLDOWN_MS = 1_000;
+export const GUNSLINGER_DASH_DISTANCE_PX = 120;
+
+export const PLAYER_DASH_COOLDOWN_MS = 667;
+
+export const GUNSLINGER_DASH_COOLDOWN_MS = 400;
 
 export const PLAYER_DASH_DURATION_MS = 160;
 
 export const PLAYER_DASH_SPEED_PX_PER_SECOND = PLAYER_DASH_DISTANCE_PX / (PLAYER_DASH_DURATION_MS / 1_000);
+
+export const GUNSLINGER_BOOT_KNIFE_DAMAGE = 2;
+
+export const GUNSLINGER_COMBO_PER_EVENT = 1;
+
+export const GUNSLINGER_SPEED_MULTIPLIER = 1.2;
+
+export const GUNSLINGER_SPEED_BUFF_DURATION_MS = 3_000;
+
+export const GUNSLINGER_COMBO_TIMEOUT_MS = 3_000;
 
 export type DashPoint = { x: number; y: number };
 
@@ -23,8 +37,16 @@ export function canDashAt(now: number, cooldownUntil: number): boolean {
   return now >= cooldownUntil;
 }
 
-export function dashCooldownUntil(now: number): number {
-  return now + PLAYER_DASH_COOLDOWN_MS;
+export function gunslingerComboAfterEvent(combo: number): number {
+  return combo + GUNSLINGER_COMBO_PER_EVENT;
+}
+
+export function gunslingerSpeedBuffUntil(now: number): number {
+  return now + GUNSLINGER_SPEED_BUFF_DURATION_MS;
+}
+
+export function gunslingerSpeedMultiplierAt(now: number, speedBuffUntil: number): number {
+  return now < speedBuffUntil ? GUNSLINGER_SPEED_MULTIPLIER : 1;
 }
 
 export const PLAYER_DASH_SOUND = {
@@ -48,3 +70,19 @@ export const PLAYER_ROLES = [
 export type PlayerRole = (typeof PLAYER_ROLES)[number];
 
 export type PlayerRoleId = PlayerRole['id'];
+
+export function dashCooldownUntil(now: number, roleId: PlayerRoleId): number {
+  return now + (roleId === 'gunslinger' ? GUNSLINGER_DASH_COOLDOWN_MS : PLAYER_DASH_COOLDOWN_MS);
+}
+
+export function dashDistanceFor(roleId: PlayerRoleId): number {
+  return roleId === 'gunslinger' ? GUNSLINGER_DASH_DISTANCE_PX : PLAYER_DASH_DISTANCE_PX;
+}
+
+export function dashSpeedFor(roleId: PlayerRoleId): number {
+  return dashDistanceFor(roleId) / (PLAYER_DASH_DURATION_MS / 1_000);
+}
+
+export function canFireWhileDashing(roleId: PlayerRoleId): boolean {
+  return roleId === 'gunslinger';
+}

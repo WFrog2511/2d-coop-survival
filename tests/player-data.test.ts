@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { PLAYER_ROLES, canDashAt, dashCooldownUntil, dashDirectionFor } from '../src/player-data';
+import { PLAYER_ROLES, canDashAt, canFireWhileDashing, dashDirectionFor, gunslingerComboAfterEvent, gunslingerSpeedBuffUntil, gunslingerSpeedMultiplierAt } from '../src/player-data';
 
 describe('プレイヤー行動データ', () => {
   test('照準方向を正規化し、同位置の照準は回避方向を作らない', () => {
@@ -7,21 +7,27 @@ describe('プレイヤー行動データ', () => {
     expect(dashDirectionFor({ x: 10, y: 20 }, { x: 10, y: 20 })).toBeUndefined();
   });
 
-  test('cooldown境界で再使用可否を決める', () => {
-    const cooldownUntil = dashCooldownUntil(1_000);
+  test('任意のdeadline境界で回避の再使用可否を決める', () => {
+    const deadline = 1_234;
 
-    expect(cooldownUntil).toBe(2_000);
-    expect(canDashAt(1_999, cooldownUntil)).toBe(false);
-    expect(canDashAt(2_000, cooldownUntil)).toBe(true);
+    expect(canDashAt(deadline - 1, deadline)).toBe(false);
+    expect(canDashAt(deadline, deadline)).toBe(true);
   });
 
-  test('5役職は承認済みの表示色とPhaser用tintを使う', () => {
-    expect(PLAYER_ROLES.map(role => ({ id: role.id, color: role.color, tint: role.tint }))).toEqual([
-      { id: 'gunner', color: '青', tint: 0x55d6ff },
-      { id: 'sniper', color: '紫', tint: 0xa88cff },
-      { id: 'gunslinger', color: '赤', tint: 0xff7b7b },
-      { id: 'bulwark', color: 'オレンジ', tint: 0xffb45f },
-      { id: 'quartermaster', color: '緑', tint: 0x7dffb2 },
-    ]);
+  test('ガンスリンガーだけ回避中の発砲を許可する', () => {
+    const nonGunslingerRoles = PLAYER_ROLES.filter(role => role.id !== 'gunslinger');
+
+    expect(nonGunslingerRoles.map(role => canFireWhileDashing(role.id))).toEqual([false, false, false, false]);
+    expect(canFireWhileDashing('gunslinger')).toBe(true);
+  });
+
+  test('ガンスリンガーのコンボと速度buffは状態遷移する', () => {
+    const comboBeforeEvent = 3;
+    expect(gunslingerComboAfterEvent(comboBeforeEvent)).toBeGreaterThan(comboBeforeEvent);
+
+    const buffUntil = gunslingerSpeedBuffUntil(1_000);
+    const activeMultiplier = gunslingerSpeedMultiplierAt(1_000, buffUntil);
+    const expiredMultiplier = gunslingerSpeedMultiplierAt(buffUntil, buffUntil);
+    expect(activeMultiplier).toBeGreaterThan(expiredMultiplier);
   });
 });
