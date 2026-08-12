@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { SCRAP_VISUAL_TIER_THRESHOLDS, scrapVisualTierFor } from '../src/game-data';
 import {
   AMMO_BOX_RESPAWN_MS,
   COMBAT_WAVE_DURATION_MS,
   DEFAULT_RUN_SCHEDULE,
   ENEMY_INSTANCE_IDS,
+  HANDGUN_AMMO,
   INITIAL_STATE,
   REST_DURATION_MS,
   STABLE_ENEMY_SLOT_COUNT,
@@ -49,6 +51,12 @@ import {
 } from '../src/rules';
 
 describe('戦闘ルール', () => {
+  it('スクラップ表示tierは調整用の数量境界から決定する', () => {
+    expect(scrapVisualTierFor(Math.max(0, SCRAP_VISUAL_TIER_THRESHOLDS.medium - 1))).toBe('small');
+    expect(scrapVisualTierFor(SCRAP_VISUAL_TIER_THRESHOLDS.medium)).toBe('medium');
+    expect(scrapVisualTierFor(SCRAP_VISUAL_TIER_THRESHOLDS.large)).toBe('large');
+  });
+
   it('武器ごとの射撃、弾倉、リロード、弾種契約を定義する', () => {
     expect(WEAPONS.rifle).toMatchObject({
       damageType: 'smallCaliber',
@@ -78,6 +86,21 @@ describe('戦闘ルール', () => {
     });
     expect(WEAPONS.shotgun.spread).toBeGreaterThan(0);
     expect(WEAPONS.shotgun.range).toBeLessThan(WEAPONS.rifle.range);
+    expect(WEAPONS.handgun).toMatchObject({
+      damageType: WEAPONS.rifle.damageType,
+      damage: WEAPONS.rifle.damage,
+      speed: WEAPONS.rifle.speed,
+      range: WEAPONS.rifle.range,
+      spread: WEAPONS.rifle.spread,
+      knockback: WEAPONS.rifle.knockback,
+      reloadMs: WEAPONS.rifle.reloadMs,
+      automatic: false,
+      pellets: 1,
+      reserveInitial: HANDGUN_AMMO.reserveInitial,
+      reserveMax: HANDGUN_AMMO.reserveMax,
+      ammoBoxRecovery: HANDGUN_AMMO.ammoBoxRecovery,
+    });
+    expect(Object.values(HANDGUN_AMMO).every(amount => amount % WEAPONS.handgun.magazineSize === 0)).toBe(true);
   });
 
   it('敵種と弾種のダメージ倍率を解決する', () => {
@@ -99,10 +122,10 @@ describe('戦闘ルール', () => {
     expect(new Set([droneLateralSpeedAt(0), droneLateralSpeedAt(100), droneLateralSpeedAt(200)])).toHaveLength(3);
   });
 
-  it('9分30秒の残り時間と勝利遷移は境界を含めて判定する', () => {
+  it('初回準備を含むrunの残り時間と勝利遷移は境界を含めて判定する', () => {
     const startedAt = 1000;
-    expect(SURVIVAL_LIMIT_MS).toBe(570000);
     expect(AMMO_BOX_RESPAWN_MS).toBe(30000);
+    expect(SURVIVAL_LIMIT_MS).toBe(runDurationMs(DEFAULT_RUN_SCHEDULE));
     expect(remainingSurvivalMs(startedAt, startedAt)).toBe(SURVIVAL_LIMIT_MS);
     expect(remainingSurvivalMs(startedAt, startedAt + SURVIVAL_LIMIT_MS - 1)).toBe(1);
     expect(remainingSurvivalMs(startedAt, startedAt + SURVIVAL_LIMIT_MS)).toBe(0);
@@ -114,26 +137,28 @@ describe('戦闘ルール', () => {
     expect(advanceSurvivalState(victory, startedAt, startedAt + SURVIVAL_LIMIT_MS)).toBe(victory);
   });
 
-  it('RunStateは3 combat waveと2 restを絶対経過時間から決定的に進める', () => {
+  it('RunStateは初回準備、3 combat wave、2 restを絶対経過時間から決定的に進める', () => {
     const initial = createRunState();
-    const beforeFirstRest = advanceRunState(initial, COMBAT_WAVE_DURATION_MS - 1);
-    const firstRest = advanceRunState(initial, COMBAT_WAVE_DURATION_MS);
-    const secondCombat = advanceRunState(initial, COMBAT_WAVE_DURATION_MS + REST_DURATION_MS);
-    const secondRest = advanceRunState(initial, COMBAT_WAVE_DURATION_MS * 2 + REST_DURATION_MS);
-    const thirdCombat = advanceRunState(initial, (COMBAT_WAVE_DURATION_MS + REST_DURATION_MS) * 2);
+    const beforeFirstCombat = advanceRunState(initial, REST_DURATION_MS - 1);
+    const firstCombat = advanceRunState(initial, REST_DURATION_MS);
+    const firstRest = advanceRunState(initial, REST_DURATION_MS + COMBAT_WAVE_DURATION_MS);
+    const secondCombat = advanceRunState(initial, REST_DURATION_MS + COMBAT_WAVE_DURATION_MS + REST_DURATION_MS);
+    const secondRest = advanceRunState(initial, REST_DURATION_MS + COMBAT_WAVE_DURATION_MS * 2 + REST_DURATION_MS);
+    const thirdCombat = advanceRunState(initial, REST_DURATION_MS * 3 + COMBAT_WAVE_DURATION_MS * 2);
     const victory = advanceRunState(initial, SURVIVAL_LIMIT_MS);
 
     expect(WAVE_COUNT).toBe(3);
     expect(WAVE_DURATION_MS).toBe(COMBAT_WAVE_DURATION_MS);
-    expect(COMBAT_WAVE_DURATION_MS).toBe(150000);
-    expect(REST_DURATION_MS).toBe(60000);
     expect(runDurationMs(DEFAULT_RUN_SCHEDULE)).toBe(SURVIVAL_LIMIT_MS);
-    expect(beforeFirstRest).toMatchObject({ status: 'playing', elapsedMs: 149999 });
-    expect(currentWaveNumber(beforeFirstRest)).toBe(1);
-    expect(currentRunPhase(beforeFirstRest)).toBe('combat');
-    expect(remainingPhaseMs(beforeFirstRest)).toBe(1);
-    expect(remainingWaveMs(beforeFirstRest)).toBe(1);
-    expect(firstRest).toEqual(advanceRunState(beforeFirstRest, COMBAT_WAVE_DURATION_MS));
+    expect(beforeFirstCombat).toMatchObject({ status: 'playing', elapsedMs: REST_DURATION_MS - 1 });
+    expect(currentWaveNumber(beforeFirstCombat)).toBe(1);
+    expect(currentRunPhase(beforeFirstCombat)).toBe('preparation');
+    expect(remainingPhaseMs(beforeFirstCombat)).toBe(1);
+    expect(remainingWaveMs(beforeFirstCombat)).toBe(0);
+    expect(firstCombat).toEqual(advanceRunState(beforeFirstCombat, REST_DURATION_MS));
+    expect(currentWaveNumber(firstCombat)).toBe(1);
+    expect(currentRunPhase(firstCombat)).toBe('combat');
+    expect(remainingPhaseMs(firstCombat)).toBe(COMBAT_WAVE_DURATION_MS);
     expect(currentWaveNumber(firstRest)).toBe(1);
     expect(currentRunPhase(firstRest)).toBe('rest');
     expect(remainingPhaseMs(firstRest)).toBe(REST_DURATION_MS);
@@ -157,18 +182,25 @@ describe('戦闘ルール', () => {
 
   it('RunStateは短いDEV schedule、phase別速度、recycle距離を純粋に解決する', () => {
     const schedule = createRunSchedule(1000, 500);
+    const { combatWaveDurationMs: combatDurationMs, restDurationMs } = schedule;
     const initial = createRunState(schedule);
-    const firstRest = advanceRunState(initial, 1000);
-    const secondCombat = advanceRunState(initial, 1500);
-    const secondRest = advanceRunState(initial, 2500);
-    const thirdCombat = advanceRunState(initial, 3000);
-    const victory = advanceRunState(initial, 4000);
+    const preparation = advanceRunState(initial, restDurationMs - 1);
+    const firstCombat = advanceRunState(initial, restDurationMs);
+    const firstRest = advanceRunState(initial, restDurationMs + combatDurationMs);
+    const secondCombat = advanceRunState(initial, restDurationMs + combatDurationMs + restDurationMs);
+    const secondRest = advanceRunState(initial, restDurationMs + combatDurationMs * 2 + restDurationMs);
+    const thirdCombat = advanceRunState(initial, restDurationMs * 3 + combatDurationMs * 2);
+    const victory = advanceRunState(initial, runDurationMs(schedule));
 
     expect(schedule).toEqual({ combatWaveDurationMs: 1000, restDurationMs: 500 });
-    expect(runDurationMs(schedule)).toBe(4000);
+    expect(runDurationMs(schedule)).toBe(combatDurationMs * WAVE_COUNT + restDurationMs * WAVE_COUNT);
     expect(createRunSchedule(0, Number.NaN)).toEqual(DEFAULT_RUN_SCHEDULE);
+    expect(currentRunPhase(preparation)).toBe('preparation');
+    expect(remainingPhaseMs(preparation)).toBe(1);
+    expect(currentWaveNumber(firstCombat)).toBe(1);
+    expect(currentRunPhase(firstCombat)).toBe('combat');
     expect(currentRunPhase(firstRest)).toBe('rest');
-    expect(remainingPhaseMs(firstRest)).toBe(500);
+    expect(remainingPhaseMs(firstRest)).toBe(restDurationMs);
     expect(currentWaveNumber(secondCombat)).toBe(2);
     expect(currentRunPhase(secondCombat)).toBe('combat');
     expect(currentRunPhase(secondRest)).toBe('rest');
@@ -271,8 +303,12 @@ describe('戦闘ルール', () => {
     expect(reloading.reloading).toBe('rifle');
     expect(fireWeapon(reloading, 0).fired).toBe(false);
     const completed = completeReload(reloading, 'rifle');
-    expect(completed.ammo).toEqual({ rifle: 20, shotgun: 4 });
-    expect(completed.reserve).toEqual({ rifle: 20, shotgun: 8 });
+    expect(completed.ammo.rifle).toBe(WEAPONS.rifle.magazineSize);
+    expect(completed.ammo.shotgun).toBe(INITIAL_STATE.ammo.shotgun);
+    expect(completed.ammo.handgun).toBe(INITIAL_STATE.ammo.handgun);
+    expect(completed.reserve.rifle).toBe(INITIAL_STATE.reserve.rifle - WEAPONS.rifle.magazineSize);
+    expect(completed.reserve.shotgun).toBe(INITIAL_STATE.reserve.shotgun);
+    expect(completed.reserve.handgun).toBe(INITIAL_STATE.reserve.handgun);
     expect(completed.reloading).toBeNull();
   });
   it('予備弾薬が不足するリロードと共通箱の上限回復を扱う', () => {
@@ -295,10 +331,16 @@ describe('戦闘ルール', () => {
     expect(completeReload(emptyReserve, 'rifle')).toBe(emptyReserve);
     const box = collectAmmoBox({
       ...INITIAL_STATE,
-      reserve: { rifle: 50, shotgun: 10 },
+      reserve: {
+        rifle: WEAPONS.rifle.reserveMax - WEAPONS.rifle.ammoBoxRecovery / 2,
+        shotgun: WEAPONS.shotgun.reserveMax - WEAPONS.shotgun.ammoBoxRecovery / 2,
+        handgun: WEAPONS.handgun.reserveMax,
+      },
     });
     expect(box.collected).toBe(true);
-    expect(box.state.reserve).toEqual({ rifle: 60, shotgun: 12 });
+    expect(box.state.reserve.rifle).toBe(WEAPONS.rifle.reserveMax);
+    expect(box.state.reserve.shotgun).toBe(WEAPONS.shotgun.reserveMax);
+    expect(box.state.reserve.handgun).toBe(WEAPONS.handgun.reserveMax);
     const full = collectAmmoBox(box.state);
     expect(full.collected).toBe(false);
     expect(full.state).toBe(box.state);
@@ -333,17 +375,24 @@ describe('戦闘ルール', () => {
     expect(damagePlayer(INITIAL_STATE, 120)).toMatchObject({ playerHp: 0, defeated: true });
   });
 
-  it('未所持武器を選択せず、武器と素材の取得だけを所持品へ反映する', () => {
+  it('未所持武器を選択せず、単発武器の重複pickupを無視してハンドガンだけを加算する', () => {
     expect(INITIAL_STATE.inventory).toEqual({
-      ownedWeapons: { rifle: true, shotgun: false },
+      weaponCounts: { rifle: 1, shotgun: 0, handgun: 0 },
       materials: { scrap: 0 },
     });
+    expect(collectWeapon(INITIAL_STATE, 'rifle')).toBe(INITIAL_STATE);
     expect(selectWeapon(INITIAL_STATE, 'shotgun')).toBe(INITIAL_STATE);
     const collected = collectWeapon(INITIAL_STATE, 'shotgun');
-    expect(collected.inventory.ownedWeapons.shotgun).toBe(true);
+    expect(collected.inventory.weaponCounts.shotgun).toBe(INITIAL_STATE.inventory.weaponCounts.shotgun + 1);
     expect(collectWeapon(collected, 'shotgun')).toBe(collected);
     const selected = selectWeapon(collected, 'shotgun');
     expect(selected.weapon).toBe('shotgun');
+    const firstHandgun = collectWeapon(selected, 'handgun');
+    const handgunAfterShot = fireWeapon(selectWeapon(firstHandgun, 'handgun'), 0).state;
+    const secondHandgun = collectWeapon(handgunAfterShot, 'handgun');
+    expect(secondHandgun.inventory.weaponCounts.handgun).toBe(firstHandgun.inventory.weaponCounts.handgun + 1);
+    expect(secondHandgun.ammo.handgun).toBe(handgunAfterShot.ammo.handgun);
+    expect(secondHandgun.reserve.handgun).toBe(handgunAfterShot.reserve.handgun);
     const first = collectMaterial(selected, 'scrap', 1);
     const second = collectMaterial(first, 'scrap', 1);
     expect(second.inventory.materials.scrap).toBeGreaterThan(first.inventory.materials.scrap);
@@ -360,7 +409,7 @@ describe('戦闘ルール', () => {
     expect(retried).toEqual(INITIAL_STATE);
     expect(retried.victory).toBe(false);
     expect(retried.inventory).not.toBe(INITIAL_STATE.inventory);
-    expect(retried.inventory.ownedWeapons).not.toBe(INITIAL_STATE.inventory.ownedWeapons);
+    expect(retried.inventory.weaponCounts).not.toBe(INITIAL_STATE.inventory.weaponCounts);
     expect(retried.inventory.materials).not.toBe(INITIAL_STATE.inventory.materials);
     expect(retried.ammo).not.toBe(INITIAL_STATE.ammo);
     expect(retried.nextFireAt).not.toBe(INITIAL_STATE.nextFireAt);

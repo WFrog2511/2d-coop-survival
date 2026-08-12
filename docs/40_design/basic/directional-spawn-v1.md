@@ -8,7 +8,7 @@ specification: SPEC-DIRECTIONAL-SPAWN
 
 ## 目的と境界
 
-60秒ごとに決定的に切り替わる主方向とその反対方向を、初期spawnとrespawnへ適用し、既存の3分間生存ループへ位置取りの判断を追加する。
+60秒ごとに決定的に切り替わる主方向とその反対方向を、初回combat epochからの初期spawnとrespawnへ適用し、既存のrunへ位置取りの判断を追加する。
 
 - 合意済み要件は[REQ-DIRECTIONAL-SPAWN](../../20_requirements/directional-spawn-v1.md)を参照する。
 - 検証可能な仕様は[SPEC-DIRECTIONAL-SPAWN](../../30_specs/directional-spawn-v1.md)を参照する。
@@ -18,7 +18,7 @@ specification: SPEC-DIRECTIONAL-SPAWN
 
 ### Issue #58の時間契約移行
 
-[DESIGN-BASIC-WAVE-PROGRESSION](wave-progression-v1.md)（Issue #58）は、Issue #34由来の180000ms（3分）生存timerだけをdynamic scheduleへsupersedeする。既定は3 combat wave各150000msとwave 1/2後のrest各60000ms、総570000msである。本書中の3分勝利は履歴として残し、現在のrun時間・phase残り・victory境界はDESIGN-BASIC-WAVE-PROGRESSIONを正本とする。60000ms spawn phase、方向規則、terminal/retryのtimer停止とgeneration guard、ammo box respawn契約は維持する。
+[DESIGN-BASIC-WAVE-PROGRESSION](wave-progression-v1.md)（Issue #71条件変更後）は、Issue #34由来の180000ms（3分）生存timerだけでなく、本書の`run開始`時initial/stagger・phase epochの設計を限定的にsupersedeする。既定はenemy-free初回準備60000ms、3 combat wave各150000msとwave 1/2後のrest各60000ms、総630000msである。本書中の3分勝利と旧run開始時initial/stagger設計は#71前の履歴として残し、現在のrun時間・phase残り・victory境界はDESIGN-BASIC-WAVE-PROGRESSIONを正本とする。60000ms spawn phaseは初回combat開始をepochとし、`status=playing && elapsedMs >= restDurationMs`を満たす最初のupdateでcurrent phaseにかかわらず一度だけlifecycleを開始する。方向規則、terminal/retryのtimer停止とgeneration guard、ammo box respawn契約は維持する。
 
 ## 責務
 
@@ -35,9 +35,10 @@ specification: SPEC-DIRECTIONAL-SPAWN
 
 ~~~mermaid
 flowchart TD
-  reset["run開始またはretry"] --> generation["generation更新・startedAt設定"]
+  reset["run開始またはretry"] --> generation["generation更新・survivalStartedAt設定"]
   generation --> map["map・player・弾薬箱を構築"]
-  map --> initial["初期8体をstrict hidden spawn"]
+  map --> preparation["enemy-free preparation"]
+  preparation --> initial["初回combat epochで初期8体をstrict hidden spawn"]
   initial --> stagger["3/6/9/12秒で4体を段階投入"]
   stagger --> playing["stable 12体でplaying"]
   playing --> hud["現在時刻からphaseと主方向をHUD更新"]
@@ -59,9 +60,9 @@ flowchart TD
 
 ## phase state
 
-resetはrun generationを更新し、初期8 IDをphase 0のstrict spawn対象、残り4 IDを3000/6000/9000/12000msのstagger対象として構築する。candidateなしは1000ms retryする。
+resetはrun generationを更新してenemy-free preparationを構築する。`status=playing && elapsedMs >= restDurationMs`を満たす最初のupdateだけが初期8 IDをcombat epochのphase 0のstrict spawn対象、残り4 IDを3000/6000/9000/12000msのstagger対象として構築する。candidateなしは1000ms retryする。
 
-playing中は`floor(max(0, now - startedAt) / 60000)`でcurrent phaseを求める。60秒境界で定期的に変更するのはphaseと主方向のHUDだけであり、active enemyのstateやspriteを更新しない。初期spawnまたはrespawnで`spawnEnemy`を実行する時だけ、その時点のcurrent phaseを適用する。
+enemy lifecycle開始後は`floor(max(0, now - combatStartedAt) / 60000)`でcurrent phaseを求める。preparation中のHUDはphase 0を表示する。60秒境界で定期的に変更するのはphaseと主方向のHUDだけであり、active enemyのstateやspriteを更新しない。初期spawnまたはrespawnで`spawnEnemy`を実行する時だけ、その時点のcurrent phaseを適用する。
 
 victory/defeat/retryはstagger、retry、death、recycleを含む全enemy TimerEventとrecycle lockを停止し、旧generation callbackを無効化する。
 
@@ -101,13 +102,13 @@ productionではSceneとhookを`window`へ公開しない。DEV hookを利用者
 - deathはstrict spawn成功までCombatStateを復活させず、recycleはCombatState HPを変更しない。
 - DEV hookの再出現が失敗した場合はrespawn count、元位置、spawn metadata、body、visibilityを直前状態へ戻して例外にする。
 - respawn callbackは登録時generationとcurrent generationを比較し、不一致またはterminalなら副作用なしで終了する。
-- occupied判定によりplayer、activeな弾薬箱、他のactive enemyと同じtileへ重複生成しない。
+- occupied判定によりplayer、activeな弾薬箱、activeなworld item（weapon/material）、他のactive enemyと同じtileへ重複生成しない。
 
 ## 既存sliceの回帰境界
 
 - Issue #20: LOSとnormal/boundary/hidden表示は維持し、別recycle policyがhidden結果だけを参照する。
 - Issue #21: 有限弾薬、武器切替、射撃、リロード、ammo panel、弾薬箱4個を維持する。activeな弾薬箱をenemy spawnのoccupiedに含める。
-- Issue #34: 180000ms生存勝利、victory/defeatのterminal停止、retry、30000ms後の弾薬箱respawnを維持する。敵phaseは同じ`startedAt`を使い、弾薬箱respawnもactive enemyとの非重複を維持する。
+- Issue #34の180000ms生存勝利は#71前の履歴とし、victory/defeatのterminal停止、retry、30000ms後の弾薬箱respawnを維持する。敵phaseは`combatStartedAt`を使い、弾薬箱respawnもactive enemyとの非重複を維持する。
 
 ## Ponytail方針と再検討条件
 

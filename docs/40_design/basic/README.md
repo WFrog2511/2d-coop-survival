@@ -4,4 +4,4 @@
 
 ## Index
 
-- [wave-progression-v1 基本設計](wave-progression-v1.md): 既存directional spawnを維持するcombat/rest RunState adapter設計。
+- [wave-progression-v1 基本設計](wave-progression-v1.md): 既存directional spawnをcombat epochから維持するpreparation/combat/rest RunState adapter設計。

@@ -150,7 +150,7 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
-#run-panel[data-phase='rest'] {
+#run-panel:is([data-phase='preparation'], [data-phase='rest']) {
   border-color: #e2bb78;
   background: rgb(107 87 59 / 88%);
 }

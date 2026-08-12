@@ -325,16 +325,18 @@ export function selectAmmoBoxTiles(
 }
 
 /**
- * 開始位置から到達できる近い初期武器pickupのtileを決定的に選ぶ。
+ * 開始位置から到達できる初期武器pickupのtile群を決定的に選ぶ。
  *
  * @param map 選択対象のアリーナ地形。
  * @param occupied 弾薬箱など、同一または近傍を避けるtile座標。
- * @returns 選択したtile座標。候補がなければnull。
+ * @param count 選択するpickup数。
+ * @returns 近い候補を優先した、回収範囲が重ならない到達可能tile群。
  */
-export function selectInitialWeaponPickupTile(
+export function selectInitialWeaponPickupTiles(
   map: ArenaMap,
   occupied: readonly TilePosition[] = [],
-): TilePosition | null {
+  count = 1,
+): TilePosition[] {
   const occupiedKeys = new Set([positionKey(map.start), ...occupied.map(positionKey)]);
   const distances = pathDistances(map, map.start);
   const candidates = floorTiles(map).flatMap((position) => {
@@ -345,12 +347,42 @@ export function selectInitialWeaponPickupTile(
       : [{ position, distance }];
   });
   const nearby = candidates.filter(candidate => candidate.distance <= INITIAL_WEAPON_PICKUP_MAX_PATH_DISTANCE);
-  const pool = nearby.length > 0 ? nearby : candidates;
-  return pool.sort((left, right) => {
+  const normalizedCount = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
+  const compareCandidates = (left: { position: TilePosition; distance: number }, right: { position: TilePosition; distance: number }): number => {
     const rank = mixSeed(map.seed, 'initial-weapon:' + positionKey(left.position))
       - mixSeed(map.seed, 'initial-weapon:' + positionKey(right.position));
     return left.distance - right.distance || rank || left.position.y - right.position.y || left.position.x - right.position.x;
-  })[0]?.position ?? null;
+  };
+  const ordered = nearby.length > 0
+    ? [...nearby.sort(compareCandidates), ...candidates.filter(candidate => candidate.distance > INITIAL_WEAPON_PICKUP_MAX_PATH_DISTANCE).sort(compareCandidates)]
+    : candidates.sort(compareCandidates);
+  const selected: TilePosition[] = [];
+  for (const candidate of ordered) {
+    const overlapsPickupRange = selected.some(tile =>
+      Math.abs(tile.x - candidate.position.x) <= 1
+      && Math.abs(tile.y - candidate.position.y) <= 1,
+    );
+    if (overlapsPickupRange)
+      continue;
+    selected.push(candidate.position);
+    if (selected.length === normalizedCount)
+      break;
+  }
+  return selected;
+}
+
+/**
+ * 開始位置から到達できる近い初期武器pickupのtileを決定的に選ぶ。
+ *
+ * @param map 選択対象のアリーナ地形。
+ * @param occupied 弾薬箱など、同一または近傍を避けるtile座標。
+ * @returns 選択したtile座標。候補がなければnull。
+ */
+export function selectInitialWeaponPickupTile(
+  map: ArenaMap,
+  occupied: readonly TilePosition[] = [],
+): TilePosition | null {
+  return selectInitialWeaponPickupTiles(map, occupied, 1)[0] ?? null;
 }
 
 /**

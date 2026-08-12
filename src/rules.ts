@@ -1,12 +1,12 @@
 /** プレイヤーが選択できる武器の識別子。 */
-export type WeaponId = 'rifle' | 'shotgun';
+export type WeaponId = 'rifle' | 'shotgun' | 'handgun';
 
 /** 最小インベントリで扱う素材の識別子。 */
 export type MaterialId = 'scrap';
 
 /** 所持武器と素材数だけを保持する最小インベントリ状態。 */
 export type InventoryState = {
-  ownedWeapons: Record<WeaponId, boolean>;
+  weaponCounts: Record<WeaponId, number>;
   materials: Record<MaterialId, number>;
 };
 
@@ -35,23 +35,23 @@ export const WAVE_COUNT = 3;
 export const COMBAT_WAVE_DURATION_MS = 150000;
 export const REST_DURATION_MS = 60000;
 export const WAVE_DURATION_MS = COMBAT_WAVE_DURATION_MS;
-export const SURVIVAL_LIMIT_MS = COMBAT_WAVE_DURATION_MS * WAVE_COUNT + REST_DURATION_MS * (WAVE_COUNT - 1);
+export const SURVIVAL_LIMIT_MS = COMBAT_WAVE_DURATION_MS * WAVE_COUNT + REST_DURATION_MS * WAVE_COUNT;
 export const STABLE_ENEMY_SLOT_COUNT = ENEMY_INSTANCE_IDS.length;
 export const AMMO_BOX_RESPAWN_MS = 30000;
 
 /** runの継続中またはterminalの状態を表す。 */
 export type RunStatus = 'playing' | 'victory' | 'defeat';
 
-/** 現在のwave内で敵が通常行動するか、次wave前の休憩かを表す。 */
-export type RunPhase = 'combat' | 'rest';
+/** 初回準備、戦闘、wave間休憩を表す。 */
+export type RunPhase = 'preparation' | 'combat' | 'rest';
 
-/** 3 combat waveと2 restを決めるrun時間設定。 */
+/** 初回準備、3 combat wave、2 restを決めるrun時間設定。 */
 export type RunSchedule = {
   combatWaveDurationMs: number;
   restDurationMs: number;
 };
 
-/** URL未指定時に使う3 combat waveと2 restの時間設定。 */
+/** URL未指定時に使う3 combat waveと共通の昼時間設定。 */
 export const DEFAULT_RUN_SCHEDULE: RunSchedule = {
   combatWaveDurationMs: COMBAT_WAVE_DURATION_MS,
   restDurationMs: REST_DURATION_MS,
@@ -92,6 +92,13 @@ export type WeaponDefinition = {
   spread: number;
   knockback: number;
 };
+
+/** ハンドガンの予備弾薬を10発単位で調整する設定。 */
+export const HANDGUN_AMMO = {
+  reserveInitial: 30,
+  reserveMax: 60,
+  ammoBoxRecovery: 10,
+} as const;
 
 /** 一体の敵に保持する戦闘状態。 */
 export type EnemyState = {
@@ -162,6 +169,23 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     spread: 0.2,
     knockback: 240,
   },
+  handgun: {
+    label: 'ハンドガン',
+    damageType: 'smallCaliber',
+    automatic: false,
+    fireIntervalMs: 150,
+    magazineSize: 10,
+    reserveInitial: HANDGUN_AMMO.reserveInitial,
+    reserveMax: HANDGUN_AMMO.reserveMax,
+    ammoBoxRecovery: HANDGUN_AMMO.ammoBoxRecovery,
+    reloadMs: 1200,
+    pellets: 1,
+    damage: 2,
+    speed: 600,
+    range: 520,
+    spread: 0,
+    knockback: 0,
+  },
 };
 
 const DAMAGE_MULTIPLIERS: Record<EnemyKind, Record<DamageType, number>> = {
@@ -207,7 +231,7 @@ function createInitialEnemies(): Record<EnemyInstanceId, EnemyState> {
 const INITIAL_ENEMIES = createInitialEnemies();
 
 const INITIAL_INVENTORY: InventoryState = {
-  ownedWeapons: { rifle: true, shotgun: false },
+  weaponCounts: { rifle: 1, shotgun: 0, handgun: 0 },
   materials: { scrap: 0 },
 };
 
@@ -217,9 +241,17 @@ export const INITIAL_STATE: CombatState = {
   victory: false,
   weapon: 'rifle',
   inventory: INITIAL_INVENTORY,
-  ammo: { rifle: WEAPONS.rifle.magazineSize, shotgun: WEAPONS.shotgun.magazineSize },
-  reserve: { rifle: WEAPONS.rifle.reserveInitial, shotgun: WEAPONS.shotgun.reserveInitial },
-  nextFireAt: { rifle: 0, shotgun: 0 },
+  ammo: {
+    rifle: WEAPONS.rifle.magazineSize,
+    shotgun: WEAPONS.shotgun.magazineSize,
+    handgun: WEAPONS.handgun.magazineSize,
+  },
+  reserve: {
+    rifle: WEAPONS.rifle.reserveInitial,
+    shotgun: WEAPONS.shotgun.reserveInitial,
+    handgun: WEAPONS.handgun.reserveInitial,
+  },
+  nextFireAt: { rifle: 0, shotgun: 0, handgun: 0 },
   reloading: null,
   enemies: INITIAL_ENEMIES,
 };
@@ -265,13 +297,13 @@ export function createRunSchedule(
 }
 
 /**
- * 3 combat waveと間の2 restを含むrun総時間を返す。
+ * 初回準備、3 combat wave、wave間休憩を含むrun総時間を返す。
  *
  * @param schedule 対象runの時間設定。
  * @returns victory境界となる総ミリ秒。
  */
 export function runDurationMs(schedule: RunSchedule): number {
-  return schedule.combatWaveDurationMs * WAVE_COUNT + schedule.restDurationMs * (WAVE_COUNT - 1);
+  return schedule.combatWaveDurationMs * WAVE_COUNT + schedule.restDurationMs * WAVE_COUNT;
 }
 
 function normalizedRunElapsedMs(elapsedMs: number, schedule: RunSchedule): number {
@@ -280,7 +312,7 @@ function normalizedRunElapsedMs(elapsedMs: number, schedule: RunSchedule): numbe
 }
 
 /**
- * 新しいrunを未spawnの12 stable slotと時間設定とともに作成する。
+ * 新しいrunを未spawnの12 stable slotと初回準備時間設定とともに作成する。
  *
  * @param schedule combat/restの時間設定。
  * @returns 初期化済みのrun状態。
@@ -316,18 +348,21 @@ export function advanceRunState(state: RunState, elapsedMs: number): RunState {
 }
 
 /**
- * 現在のcombat waveまたはその直後のrestが属する1始まりのwave番号を返す。
+ * 初回準備または現在phaseが属する1始まりのwave番号を返す。
  *
  * @param state 現在のrun状態。
  * @returns 1から3の範囲に収めたwave番号。
  */
 export function currentWaveNumber(state: RunState): number {
+  if (state.elapsedMs < state.schedule.restDurationMs)
+    return 1;
   const cycleDuration = state.schedule.combatWaveDurationMs + state.schedule.restDurationMs;
-  return Math.min(WAVE_COUNT, Math.floor(state.elapsedMs / cycleDuration) + 1);
+  const combatElapsedMs = state.elapsedMs - state.schedule.restDurationMs;
+  return Math.min(WAVE_COUNT, Math.floor(combatElapsedMs / cycleDuration) + 1);
 }
 
 /**
- * 現在のcombatまたはrest phaseを返す。
+ * 現在の初回準備、combat、rest phaseを返す。
  *
  * @param state 現在のrun状態。
  * @returns 現在のphase。
@@ -335,12 +370,15 @@ export function currentWaveNumber(state: RunState): number {
 export function currentRunPhase(state: RunState): RunPhase {
   if (state.elapsedMs >= runDurationMs(state.schedule))
     return 'combat';
-  const cycleElapsedMs = state.elapsedMs % (state.schedule.combatWaveDurationMs + state.schedule.restDurationMs);
+  if (state.elapsedMs < state.schedule.restDurationMs)
+    return 'preparation';
+  const cycleElapsedMs = (state.elapsedMs - state.schedule.restDurationMs)
+    % (state.schedule.combatWaveDurationMs + state.schedule.restDurationMs);
   return cycleElapsedMs < state.schedule.combatWaveDurationMs ? 'combat' : 'rest';
 }
 
 /**
- * 現在のcombatまたはrest phaseが終わるまでの残り時間を返す。
+ * 現在の初回準備、combat、rest phaseが終わるまでの残り時間を返す。
  *
  * @param state 現在のrun状態。
  * @returns 0から現在phaseの設定時間までの残りミリ秒。
@@ -348,8 +386,12 @@ export function currentRunPhase(state: RunState): RunPhase {
 export function remainingPhaseMs(state: RunState): number {
   if (state.elapsedMs >= runDurationMs(state.schedule))
     return 0;
-  const cycleElapsedMs = state.elapsedMs % (state.schedule.combatWaveDurationMs + state.schedule.restDurationMs);
-  return currentRunPhase(state) === 'combat'
+  const phase = currentRunPhase(state);
+  if (phase === 'preparation')
+    return state.schedule.restDurationMs - state.elapsedMs;
+  const cycleElapsedMs = (state.elapsedMs - state.schedule.restDurationMs)
+    % (state.schedule.combatWaveDurationMs + state.schedule.restDurationMs);
+  return phase === 'combat'
     ? state.schedule.combatWaveDurationMs - cycleElapsedMs
     : state.schedule.combatWaveDurationMs + state.schedule.restDurationMs - cycleElapsedMs;
 }
@@ -357,7 +399,7 @@ export function remainingPhaseMs(state: RunState): number {
 /**
  * 現在combat waveが終わるまでの残り時間を返す。
  *
- * rest中は次waveを開始するまで戦闘残り時間を0とし、既存HUDのdata-testidを維持する。
+ * 初回準備とrest中は次waveを開始するまで戦闘残り時間を0とし、既存HUDのdata-testidを維持する。
  *
  * @param state 現在のrun状態。
  * @returns 0からcombat wave設定時間までの残りミリ秒。
@@ -369,7 +411,7 @@ export function remainingWaveMs(state: RunState): number {
 /**
  * 通常移動へ一度だけ適用するphase別の敵速度倍率を返す。
  *
- * @param phase 現在のcombatまたはrest phase。
+ * @param phase 現在の初回準備、combatまたはrest phase。
  * @returns combatは1.5、restは0.75の速度倍率。
  */
 export function enemySpeedMultiplierForPhase(phase: RunPhase): number {
@@ -379,7 +421,7 @@ export function enemySpeedMultiplierForPhase(phase: RunPhase): number {
 /**
  * hidden recycleを許可する最小path距離をphase別に返す。
  *
- * @param phase 現在のcombatまたはrest phase。
+ * @param phase 現在の初回準備、combatまたはrest phase。
  * @returns combatは10、restは5 tileの最小距離。
  */
 export function hiddenRecyclePathDistanceForPhase(phase: RunPhase): number {
@@ -542,26 +584,33 @@ export function damagePlayer(state: CombatState, amount: number): CombatState {
  * @returns 武器選択と必要なリロード中断を反映した戦闘状態。
  */
 export function selectWeapon(state: CombatState, weapon: WeaponId): CombatState {
-  if (state.defeated || state.victory || !state.inventory.ownedWeapons[weapon])
+  if (state.defeated || state.victory || state.inventory.weaponCounts[weapon] <= 0)
     return state;
   return { ...state, weapon, reloading: weapon === state.weapon ? state.reloading : null };
 }
 
 /**
- * 未所持の武器を所持品へ追加する。
+ * 武器pickupを所持品へ反映する。ハンドガンだけは同一武器を重複取得できる。
  *
  * @param state 現在の戦闘状態。
  * @param weapon 取得する武器。
  * @returns 取得結果を反映した戦闘状態。
  */
 export function collectWeapon(state: CombatState, weapon: WeaponId): CombatState {
-  if (state.defeated || state.victory || state.inventory.ownedWeapons[weapon])
+  if (
+    state.defeated
+    || state.victory
+    || (weapon !== 'handgun' && state.inventory.weaponCounts[weapon] > 0)
+  )
     return state;
   return {
     ...state,
     inventory: {
       ...state.inventory,
-      ownedWeapons: { ...state.inventory.ownedWeapons, [weapon]: true },
+      weaponCounts: {
+        ...state.inventory.weaponCounts,
+        [weapon]: state.inventory.weaponCounts[weapon] + 1,
+      },
     },
   };
 }
@@ -751,7 +800,7 @@ export function retryCombat(): CombatState {
   return {
     ...INITIAL_STATE,
     inventory: {
-      ownedWeapons: { ...INITIAL_STATE.inventory.ownedWeapons },
+      weaponCounts: { ...INITIAL_STATE.inventory.weaponCounts },
       materials: { ...INITIAL_STATE.inventory.materials },
     },
     ammo: { ...INITIAL_STATE.ammo },

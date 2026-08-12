@@ -53,7 +53,7 @@ function element<T extends Element>(selector: string): T {
   return value;
 }
 
-function formatSurvivalTime(remainingMs: number): string {
+export function formatSurvivalTime(remainingMs: number): string {
   const totalSeconds = Math.ceil(remainingMs / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
@@ -70,6 +70,7 @@ export class ArenaHud {
   private readonly weaponSlots: Record<WeaponId, HTMLOutputElement> = {
     rifle: element<HTMLOutputElement>('[data-testid="weapon-slot-rifle"]'),
     shotgun: element<HTMLOutputElement>('[data-testid="weapon-slot-shotgun"]'),
+    handgun: element<HTMLOutputElement>('[data-testid="weapon-slot-handgun"]'),
   };
 
   private readonly scrapHud = element<HTMLOutputElement>('[data-testid="scrap"]');
@@ -211,15 +212,17 @@ export class ArenaHud {
   }
 
   private updateInventory(state: CombatState): void {
-    const keys: Record<WeaponId, string> = { rifle: '1', shotgun: '2' };
+    const keys: Record<WeaponId, string> = { rifle: '1', shotgun: '2', handgun: '3' };
     (Object.keys(WEAPONS) as WeaponId[]).forEach((weapon) => {
       const slot = this.weaponSlots[weapon];
-      const owned = state.inventory.ownedWeapons[weapon];
+      const count = state.inventory.weaponCounts[weapon];
+      const owned = count > 0;
       const selected = state.weapon === weapon;
-      slot.value = `${keys[weapon]} ${WEAPONS[weapon].label}: ${owned ? '所持' : '未所持'}${selected ? '（選択中）' : ''}`;
+      slot.value = `${keys[weapon]} ${WEAPONS[weapon].label}: ${owned ? `所持 ${count}` : '未所持'}${selected ? '（選択中）' : ''}`;
       slot.dataset.key = keys[weapon];
       slot.dataset.weapon = weapon;
       slot.dataset.owned = String(owned);
+      slot.dataset.count = String(count);
       slot.dataset.selected = String(selected);
     });
     this.scrapHud.value = `スクラップ ${state.inventory.materials.scrap}`;
@@ -248,7 +251,11 @@ export class ArenaHud {
     this.waveHud.dataset.state = state.status;
     this.waveRemainingHud.value = formatSurvivalTime(remainingWaveMs(state));
     this.runPanel.dataset.phase = phase;
-    this.runPhaseHud.value = phase === 'combat' ? '夜（戦闘）' : '昼（休憩）';
+    this.runPhaseHud.value = phase === 'combat'
+      ? '夜（戦闘）'
+      : phase === 'preparation'
+        ? '昼（準備）'
+        : '昼（休憩）';
     this.runPhaseHud.dataset.phase = phase;
     this.phaseRemainingHud.value = formatSurvivalTime(remainingPhaseMs(state));
     this.enemyCurrentHud.value = String(activeEnemyCount(state));

@@ -5,6 +5,8 @@ specification: SPEC-COMBAT-CHOICE
 
 # combat-choice-v1 基本設計
 
+> [Issue #71](https://github.com/WFrog2511/2d-coop-survival/issues/71)は、旧二武器・第三武器対象外の設計を履歴とし、ハンドガンの`WeaponId`、slot 3、`3`キー、shared ammo stateだけを限定的に追加する。その他のcombat-choice-v1設計は維持する。
+
 ## 責務
 
 - `src/rules.ts`: 武器定義と弾種、敵種ごとのダメージ倍率、再現可能なドローン横速度、武器別の残弾・発射待ち・リロード状態、9基本敵・3ドローンの12敵個体のHP減算・撃破・再出現、戦闘状態初期化を純粋関数で扱う。
@@ -16,7 +18,7 @@ specification: SPEC-COMBAT-CHOICE
 
 ## データと流れ
 
-`CombatState`は選択武器、武器別の残弾と`nextFireAt`、リロード対象、`basic-1`〜`basic-9`、`drone-1`〜`drone-3`の個別HP/撃破状態を保持する。`WeaponDefinition`は弾種、入力方式、発射待ち、弾倉、リロード時間と弾道を持つ。純粋な`resolveDamage`は敵種、弾種、基礎ダメージから実ダメージと耐性表示要否を返す。
+`CombatState`は選択武器、武器別の残弾と`nextFireAt`、リロード対象、`rifle`、`shotgun`、`handgun`の所持数、`basic-1`〜`basic-9`、`drone-1`〜`drone-3`の個別HP/撃破状態を保持する。ライフルとショットガンは重複pickupを無視し、ハンドガンだけは所持数を加算しながら弾倉・予備弾・リロード状態を共有する。`WeaponDefinition`は弾種、入力方式、発射待ち、弾倉、リロード時間と弾道を持つ。純粋な`resolveDamage`は敵種、弾種、基礎ダメージから実ダメージと耐性表示要否を返す。
 
 `ArenaMap`はseed、80×50（3200×2000px）のwall/floor配列、通常14部屋または3列×3行の中央開始8部屋fallback、通路、1タイル障害物、player開始tileを持つ。`generateArenaMap`は最大8候補とfallbackから連結済みmapを返す。`generateFallbackArenaMap`はfallback地形を決定的に返す。`generateNextArenaMap`は最大64候補から直前とtile配置が異なるmapを返す。`findPath`はfloorだけを通る4近傍BFS、`selectSpawnTile`は未占有floorからviewport外を優先する決定的選択、`respawnDelayFor`は敵種別範囲内の決定的待ち時間を返す。
 
@@ -32,4 +34,4 @@ HUDがない場合は起動時に失敗する。map通常生成に失敗した�
 
 ## Ponytailの境界
 
-既存のPhaser、TypeScript、DOM、Canvas生成テクスチャだけを再利用する。生成は矩形部屋とL字通路、経路は4000tile・最大12敵に対するBFSへ限定する。新規npm依存、lockfile変更、A*、navmesh、汎用map/AI基盤、外部assetは追加しない。視界・霧、破壊可能地形、map保存、予備弾薬、第三武器、追加敵種、ウェーブ、通信は対象外とする。実プレイで経路停止または生成の単調さが問題になった時点で、生成規則と経路探索の拡張を再検討する。
+既存のPhaser、TypeScript、DOM、Canvas生成テクスチャだけを再利用する。生成は矩形部屋とL字通路、経路は4000tile・最大12敵に対するBFSへ限定する。新規npm依存、lockfile変更、A*、navmesh、汎用map/AI基盤、外部assetは追加しない。視界・霧、破壊可能地形、map保存、予備弾薬、追加敵種、ウェーブ、通信は対象外とする。実プレイで経路停止または生成の単調さが問題になった時点で、生成規則と経路探索の拡張を再検討する。

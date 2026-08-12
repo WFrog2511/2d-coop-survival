@@ -20,6 +20,7 @@ import {
   respawnDelayFor,
   selectEnemySpawnTile,
   selectInitialWeaponPickupTile,
+  selectInitialWeaponPickupTiles,
   selectSpawnTile,
   selectAmmoBoxTiles,
   spawnDirectionForSlot,
@@ -29,6 +30,7 @@ import {
   type SpawnDirection,
   type TilePosition,
 } from '../src/arena-map';
+import { HANDGUN_WORLD_PICKUP_COUNT } from '../src/game-data';
 
 const seed = 20_260_802;
 
@@ -182,6 +184,25 @@ describe('自動生成アリーナ', () => {
     expect(pickup).not.toEqual(map.start);
     expect(boxes).not.toContainEqual(pickup);
     expect(findPath(map, map.start, pickup).length).toBeGreaterThan(0);
+  });
+
+  test('複数の初期weapon pickupは全件を決定的かつ到達可能な異なるtileへ選ぶ', () => {
+    const map = generateArenaMap(seed);
+    const boxes = selectAmmoBoxTiles(map);
+    const shotgun = selectInitialWeaponPickupTile(map, boxes);
+    if (!shotgun) throw new Error('ショットガンpickupのtileが必要です。');
+    const first = selectInitialWeaponPickupTiles(map, [...boxes, shotgun], HANDGUN_WORLD_PICKUP_COUNT);
+    const second = selectInitialWeaponPickupTiles(map, [...boxes, shotgun], HANDGUN_WORLD_PICKUP_COUNT);
+    expect(second).toEqual(first);
+    expect(first).toHaveLength(HANDGUN_WORLD_PICKUP_COUNT);
+    expect(new Set(first.map(tileKey))).toHaveLength(first.length);
+    expect(first).not.toContainEqual(map.start);
+    expect(first).not.toContainEqual(shotgun);
+    expect(first.every(tile => !boxes.some(box => tileKey(box) === tileKey(tile)))).toBe(true);
+    expect(first.every(tile => findPath(map, map.start, tile).length > 0)).toBe(true);
+    expect(first.every((tile, index) => first.slice(index + 1).every(other =>
+      Math.abs(tile.x - other.x) > 1 || Math.abs(tile.y - other.y) > 1,
+    ))).toBe(true);
   });
 
   test('12体の初期spawnは到達可能floorを使い、player、弾薬箱、他の敵と重複しない', () => {

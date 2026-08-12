@@ -24,17 +24,17 @@
           </aside>
           <aside id="survival-panel" class="game-overlay" aria-label="waveとフェーズ残り時間">
             <span>Wave <output data-testid="wave" data-state="playing">1</output></span>
-            <span><output data-testid="run-phase" data-phase="combat">夜（戦闘）</output> 残り <output data-testid="phase-remaining">02:30</output></span>
-            <output class="survival-time" data-testid="survival-time" hidden>09:30</output>
-            <output data-testid="wave-remaining" hidden>02:30</output>
+            <span><output data-testid="run-phase" data-phase="preparation">昼（準備）</output> 残り <output data-testid="phase-remaining">01:00</output></span>
+            <output class="survival-time" data-testid="survival-time" hidden>10:30</output>
+            <output data-testid="wave-remaining" hidden>00:00</output>
           </aside>
-          <aside id="run-panel" class="game-overlay" data-testid="run-panel" data-phase="combat" aria-label="撃破数">
+          <aside id="run-panel" class="game-overlay" data-testid="run-panel" data-phase="preparation" aria-label="撃破数">
             <span>撃破 <output data-testid="kills">0</output></span>
             <span class="gunslinger-combo" data-testid="gunslinger-combo-panel" hidden>コンボ <output data-testid="gunslinger-combo" data-active="false" data-speed-multiplier="1">0</output></span>
             <div hidden>
-              <output data-testid="enemy-current">8</output>
+              <output data-testid="enemy-current">0</output>
               <output data-testid="enemy-goal">12</output>
-              <output data-testid="enemy-remaining">8</output>
+              <output data-testid="enemy-remaining">0</output>
             </div>
           </aside>
           <aside id="hp-panel" class="game-overlay" aria-label="プレイヤー体力">
@@ -52,15 +52,16 @@
           </aside>
           <aside id="inventory-panel" data-testid="inventory-panel" aria-label="武器スロットと素材">
             <span class="inventory-panel-caption">武器スロット</span>
-            <output data-testid="weapon-slot-rifle" data-key="1" data-weapon="rifle" data-owned="true" data-selected="true">1 アサルトライフル: 所持（選択中）</output>
-            <output data-testid="weapon-slot-shotgun" data-key="2" data-weapon="shotgun" data-owned="false" data-selected="false">2 ショットガン: 未所持</output>
+            <output data-testid="weapon-slot-rifle" data-key="1" data-weapon="rifle" data-owned="true" data-count="1" data-selected="true">1 アサルトライフル: 所持 1（選択中）</output>
+            <output data-testid="weapon-slot-shotgun" data-key="2" data-weapon="shotgun" data-owned="false" data-count="0" data-selected="false">2 ショットガン: 未所持</output>
+            <output data-testid="weapon-slot-handgun" data-key="3" data-weapon="handgun" data-owned="false" data-count="0" data-selected="false">3 ハンドガン: 未所持</output>
             <span class="inventory-panel-caption">素材</span>
             <output data-testid="scrap" data-count="0">スクラップ 0</output>
             <output data-testid="world-item-count" data-world-items="" hidden>1</output>
           </aside>
         </div>
         <p>
-          移動: WASD / 矢印　武器: 1 ライフル / 2 ショットガン　拾う: E　照準: マウス移動　射撃: マウス左ボタン　リロード: R
+          移動: WASD / 矢印　武器: 1 ライフル / 2 ショットガン / 3 ハンドガン　拾う: E　照準: マウス移動　射撃: マウス左ボタン　リロード: R
         </p>
         <p data-testid="hud">
           武器: <output data-testid="weapon">アサルトライフル</output>

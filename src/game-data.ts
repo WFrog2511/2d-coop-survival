@@ -89,9 +89,27 @@ export const ENEMY_SPAWN_ORDER: readonly EnemyInstanceId[] = [
   ...STAGGERED_ENEMIES.map(({ id }) => id),
 ];
 
-export const ENEMY_HIT_STOP_MS: Record<WeaponId, number> = { rifle: 12, shotgun: 35 };
+/** 初期マップへ決定的に配置するハンドガンpickup数。 */
+export const HANDGUN_WORLD_PICKUP_COUNT = 8;
 
-export const ENEMY_DEFEAT_HIT_STOP_MS: Record<WeaponId, number> = { rifle: 24, shotgun: 42 };
+/** スクラップの見た目を切り替える数量境界。 */
+export const SCRAP_VISUAL_TIER_THRESHOLDS = { medium: 3, large: 6 } as const;
+
+/** スクラップ山の表示用段階。 */
+export type ScrapVisualTier = 'small' | 'medium' | 'large';
+
+/** 集約済みスクラップ数量から表示段階を決める。 */
+export function scrapVisualTierFor(quantity: number): ScrapVisualTier {
+  if (quantity >= SCRAP_VISUAL_TIER_THRESHOLDS.large)
+    return 'large';
+  if (quantity >= SCRAP_VISUAL_TIER_THRESHOLDS.medium)
+    return 'medium';
+  return 'small';
+}
+
+export const ENEMY_HIT_STOP_MS: Record<WeaponId, number> = { rifle: 12, shotgun: 35, handgun: 12 };
+
+export const ENEMY_DEFEAT_HIT_STOP_MS: Record<WeaponId, number> = { rifle: 24, shotgun: 42, handgun: 24 };
 
 export const PLAYER_HIT_STOP_MS: Record<EnemyKind, number> = { basic: 30, drone: 45 };
 
@@ -104,11 +122,13 @@ export const SHOTGUN_SHAKE: CameraShakeProfile = { duration: 70, intensity: 0.00
 export const WEAPON_FIRE_SHAKE: Record<WeaponId, CameraShakeProfile> = {
   rifle: { duration: 95, intensity: 0.0024 },
   shotgun: { duration: 95, intensity: 0.0050 },
+  handgun: { duration: 95, intensity: 0.0024 },
 };
 
 export const FIRE_SOUND: Record<WeaponId, SoundEffectProfile> = {
   rifle: { duration: 65, startFrequency: 360, endFrequency: 120, volume: 0.08, waveform: 'sawtooth', noiseVolume: 0.035, noiseFrequency: 3000 },
   shotgun: { duration: 95, startFrequency: 190, endFrequency: 70, volume: 0.13, waveform: 'square', noiseVolume: 0.08, noiseFrequency: 1800 },
+  handgun: { duration: 65, startFrequency: 360, endFrequency: 120, volume: 0.08, waveform: 'sawtooth', noiseVolume: 0.035, noiseFrequency: 3000 },
 };
 
 export const ENEMY_DEFEAT_SOUND: Record<EnemyKind, SoundEffectProfile> = {
@@ -119,6 +139,7 @@ export const ENEMY_DEFEAT_SOUND: Record<EnemyKind, SoundEffectProfile> = {
 export const MUZZLE_FLASH: Record<WeaponId, MuzzleFlashProfile> = {
   rifle: { duration: 55, points: 8, innerRadius: 5, outerRadius: 16, scale: 1.35, color: 0x9de9ff },
   shotgun: { duration: 85, points: 10, innerRadius: 7, outerRadius: 25, scale: 1.6, color: 0xffdd76 },
+  handgun: { duration: 55, points: 8, innerRadius: 5, outerRadius: 16, scale: 1.35, color: 0x9de9ff },
 };
 
 export const ENEMY_HIT_EFFECT: Record<EnemyKind, EnemyHitEffectProfile> = {
