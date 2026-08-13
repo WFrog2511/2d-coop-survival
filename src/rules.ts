@@ -1,6 +1,34 @@
 /** プレイヤーが選択できる武器の識別子。 */
 export type WeaponId = 'rifle' | 'shotgun' | 'handgun';
 
+/** 予備弾薬表示で使う弾薬種の識別子。 */
+export type AmmoType = 'rifle-ammo' | 'shotgun-ammo' | 'handgun-ammo';
+
+/** 弾薬ポーチに表示する順序と、既存の武器種への対応をまとめる。 */
+export const AMMO_TYPES: Record<AmmoType, { label: string; icon: string; weapon: WeaponId }> = {
+  'rifle-ammo': { label: 'ライフル弾', icon: '▰', weapon: 'rifle' },
+  'shotgun-ammo': { label: 'ショットガン弾', icon: '◀', weapon: 'shotgun' },
+  'handgun-ammo': { label: 'ハンドガン弾', icon: '▪', weapon: 'handgun' },
+};
+
+/** 弾薬ポーチへ常に並べる既存弾薬種の順序。 */
+export const AMMO_TYPE_ORDER: readonly AmmoType[] = ['rifle-ammo', 'shotgun-ammo', 'handgun-ammo'];
+
+const AMMO_TYPE_FOR_WEAPON: Record<WeaponId, AmmoType> = {
+  rifle: 'rifle-ammo',
+  shotgun: 'shotgun-ammo',
+  handgun: 'handgun-ammo',
+};
+
+/**
+ * 戦闘上の武器種に対応する弾薬種を返す。
+ * @param weapon 戦闘で共有する武器種。
+ * @returns 弾薬ポーチに表示する弾薬種。
+ */
+export function ammoTypeForWeapon(weapon: WeaponId): AmmoType {
+  return AMMO_TYPE_FOR_WEAPON[weapon];
+}
+
 /** 所持品の一枠に入る武器モデルの識別子。 */
 export type WeaponModel = 'rifle' | 'shotgun' | 'handgun' | 'revolver' | 'compact-pistol';
 

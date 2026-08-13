@@ -58,7 +58,6 @@
               <output data-testid="quick-slot-3" data-index="2" data-model="" data-weapon="" data-empty="true" data-selected="false">3 空き</output>
             </div>
             <output data-testid="scrap" data-count="0">スクラップ 0</output>
-            <output data-testid="world-item-count" data-world-items="" hidden>1</output>
           </aside>
           <aside id="inventory-detail" class="game-overlay" data-testid="inventory-detail" data-open="false" hidden aria-label="詳細インベントリ">
             <h2>インベントリ</h2>
@@ -84,6 +83,13 @@
               </div>
             </section>
           </aside>
+          <aside id="ammo-pouch" class="game-overlay" data-testid="ammo-pouch" data-open="false" hidden aria-label="弾薬ポーチ">
+            <h2>弾薬ポーチ</h2>
+            <output data-testid="ammo-pouch-rifle-ammo" data-ammo-type="rifle-ammo" data-weapon="rifle" data-reserve="">▰ ライフル弾</output>
+            <output data-testid="ammo-pouch-shotgun-ammo" data-ammo-type="shotgun-ammo" data-weapon="shotgun" data-reserve="">◀ ショットガン弾</output>
+            <output data-testid="ammo-pouch-handgun-ammo" data-ammo-type="handgun-ammo" data-weapon="handgun" data-reserve="">▪ ハンドガン弾</output>
+          </aside>
+          <output id="world-item-count" data-testid="world-item-count" data-world-items="" hidden aria-hidden="true">1</output>
         </div>
         <p>
           移動: WASD / 矢印　武器: 1〜3 クイックスロット　詳細インベントリ: Tab　拾う: E　照準: マウス移動　射撃: マウス左ボタン　リロード: R

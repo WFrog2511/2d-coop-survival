@@ -3,7 +3,7 @@ import { SPAWN_PHASE_MS, TILE_SIZE, WORLD_WEAPON_DROP_MAX_PATH_DISTANCE, enemyVi
 import { formatSurvivalTime } from '../src/arena/hud';
 import { INITIAL_WORLD_WEAPON_MODELS, SCRAP_DROP_AMOUNTS, SCRAP_VISUAL_TIER_THRESHOLDS, WORLD_SIDEARM_MODELS, scrapVisualTierFor } from '../src/game-data';
 import { GUNSLINGER_BOOT_KNIFE_DAMAGE, GUNSLINGER_COMBO_PER_EVENT, GUNSLINGER_COMBO_TIMEOUT_MS } from '../src/player-data';
-import { AMMO_BOX_RESPAWN_MS, COMBAT_WAVE_DURATION_MS, ENEMY_INSTANCE_IDS, WEAPON_MODELS, WEAPONS, createRunSchedule, runDurationMs, weaponIdForModel } from '../src/rules';
+import { AMMO_BOX_RESPAWN_MS, AMMO_TYPES, AMMO_TYPE_ORDER, COMBAT_WAVE_DURATION_MS, ENEMY_INSTANCE_IDS, WEAPON_MODELS, WEAPONS, createRunSchedule, runDurationMs, weaponIdForModel } from '../src/rules';
 
 type EnemyId = (typeof ENEMY_INSTANCE_IDS)[number];
 type EnemyPresentation = 'normal' | 'boundary' | 'hidden';
@@ -50,6 +50,7 @@ type ArenaDebugScene = {
   cameras: { main: { worldView: { left: number; top: number; right: number; bottom: number } } };
   children: { getChildren: () => readonly { fillColor?: number }[] };
   player: { x: number; y: number; rotation: number; tintTopLeft: number };
+  state: { ammo: { rifle: number } };
   enemies: Record<EnemyId, ArenaDebugEnemy>;
   textures: { get: (key: string) => { getSourceImage: () => HTMLCanvasElement } };
   debugRespawnEnemy: (id: EnemyId) => void;
@@ -57,6 +58,7 @@ type ArenaDebugScene = {
   debugSetPlayerInvulnerable: (enabled: boolean) => void;
   debugMovePlayerTo: (tile: TilePosition) => void;
   debugDamageEnemy: (id: EnemyId, amount: number) => void;
+  refreshHud: () => void;
 };
 
 function devStartUrl(path: string): string {
@@ -112,6 +114,66 @@ async function documentBounds(locator: import('@playwright/test').Locator): Prom
       height: bounds.height,
     };
   });
+}
+
+type CanvasInputPoint = { clientX: number; clientY: number };
+
+async function findGameCanvasInputPoint(
+  page: import('@playwright/test').Page,
+): Promise<CanvasInputPoint> {
+  return page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>('#game canvas');
+    if (!canvas) throw new Error('game canvasが見つかりません。');
+    const bounds = canvas.getBoundingClientRect();
+    const scanFractions = [0.1, 0.25, 0.5, 0.75, 0.9];
+    for (const y of scanFractions) {
+      for (const x of scanFractions) {
+        const clientX = bounds.left + bounds.width * x;
+        const clientY = bounds.top + bounds.height * y;
+        const element = document.elementFromPoint(clientX, clientY);
+        if (element === canvas || element?.closest('canvas') === canvas)
+          return { clientX, clientY };
+      }
+    }
+    throw new Error('Tab詳細表示中に#game canvasへ入力できる座標が見つかりません。');
+  });
+}
+
+async function expectGameCanvasAt(
+  page: import('@playwright/test').Page,
+  point: CanvasInputPoint,
+): Promise<void> {
+  const isCanvas = await page.evaluate(({ clientX, clientY }) => {
+    const canvas = document.querySelector<HTMLCanvasElement>('#game canvas');
+    if (!canvas) throw new Error('game canvasが見つかりません。');
+    const element = document.elementFromPoint(clientX, clientY);
+    return element === canvas || element?.closest('canvas') === canvas;
+  }, point);
+  expect(isCanvas).toBe(true);
+}
+
+async function clickGameCanvasAt(
+  page: import('@playwright/test').Page,
+  point: CanvasInputPoint,
+): Promise<void> {
+  await page.mouse.move(point.clientX, point.clientY);
+  await expectGameCanvasAt(page, point);
+  await page.mouse.click(point.clientX, point.clientY);
+}
+
+async function holdGameCanvasAt(
+  page: import('@playwright/test').Page,
+  point: CanvasInputPoint,
+  durationMs: number,
+): Promise<void> {
+  await page.mouse.move(point.clientX, point.clientY);
+  await expectGameCanvasAt(page, point);
+  await page.mouse.down();
+  try {
+    await page.clock.runFor(durationMs);
+  } finally {
+    await page.mouse.up();
+  }
 }
 
 async function expectAmmoBoxCount(
@@ -204,33 +266,6 @@ function expectedObscuredTileCount(
     for (let x = 0; x < map.width; x += 1)
       if (!hasLineOfSight(map, player, { x, y })) count += 1;
   return count;
-}
-
-async function moveToTile(
-  page: import('@playwright/test').Page,
-  map: ReturnType<typeof generateArenaMap>,
-  target: TilePosition,
-  playerTileHud: import('@playwright/test').Locator,
-): Promise<void> {
-  for (let step = 0; step < 300; step += 1) {
-    const currentText = await playerTileHud.textContent();
-    const currentParts = currentText?.split(',').map(Number) ?? [];
-    const current = { x: Number(currentParts[0]), y: Number(currentParts[1]) };
-    if (current.x === target.x && current.y === target.y) return;
-    const path = findPath(map, current, target);
-    if (path.length < 2) throw new Error('弾薬箱までの経路がありません。');
-    const next = path[1];
-    const dx = next.x - current.x;
-    const dy = next.y - current.y;
-    const key = dx > 0 ? 'd' : dx < 0 ? 'a' : dy > 0 ? 's' : 'w';
-    await page.keyboard.down(key);
-    try {
-      await expect(playerTileHud).not.toHaveText(current.x + ',' + current.y, { timeout: 2_000 });
-    } finally {
-      await page.keyboard.up(key);
-    }
-  }
-  throw new Error('弾薬箱までの移動が上限を超えました。');
 }
 
 async function moveEnemyToTile(
@@ -669,7 +704,81 @@ test('ガンスリンガーは回避中に発砲できる', async ({ page }) => 
   }
 });
 
-test('モデル別world weapon、クイックスロット、詳細インベントリと同tileスクラップをEで取得できる', async ({ page }) => {
+test('Tab詳細中は単発射撃と空ライフル弾倉の自動reloadを開始しない', async ({ page }) => {
+  await page.clock.install({ time: 15 });
+  await page.clock.pauseAt(15);
+  await page.goto(devStartUrl('/'));
+  await expect(page.locator('#game canvas')).toBeVisible();
+  await setArenaPhysics(page, 'pause');
+  await aimPlayer(page, { x: 1, y: 0 });
+  await collectShotgunPickup(page);
+  await page.keyboard.press('2');
+  await expect(page.getByTestId('weapon')).toHaveText(WEAPON_MODELS.shotgun.label);
+
+  const reloadHud = page.getByTestId('reload');
+  const reloadProgress = page.getByTestId('reload-progress');
+  const selectedAmmoState = async (): Promise<{
+    magazine: number;
+    reserve: string | null;
+    reload: string | null;
+    reloadProgressHidden: boolean;
+    reloadProgressValue: number;
+  }> => ({
+    magazine: await currentAmmo(page),
+    reserve: await page.getByTestId('ammo-reserve').getAttribute('data-reserve'),
+    reload: await reloadHud.textContent(),
+    reloadProgressHidden: await reloadProgress.isHidden(),
+    reloadProgressValue: await reloadProgress.evaluate(element =>
+      (element as HTMLProgressElement).value),
+  });
+  const expectSelectedAmmoState = async (before: {
+    magazine: number;
+    reserve: string | null;
+    reload: string | null;
+    reloadProgressHidden: boolean;
+    reloadProgressValue: number;
+  }): Promise<void> => {
+    expect(await currentAmmo(page)).toBe(before.magazine);
+    expect(await page.getByTestId('ammo-reserve').getAttribute('data-reserve')).toBe(before.reserve);
+    expect(await reloadHud.textContent()).toBe(before.reload);
+    expect(await reloadProgress.isHidden()).toBe(before.reloadProgressHidden);
+    expect(await reloadProgress.evaluate(element => (element as HTMLProgressElement).value))
+      .toBe(before.reloadProgressValue);
+  };
+
+  const shotgunBeforeBlockedClick = await selectedAmmoState();
+  await page.keyboard.press('Tab');
+  const tabCanvasPoint = await findGameCanvasInputPoint(page);
+  await clickGameCanvasAt(page, tabCanvasPoint);
+  await expectSelectedAmmoState(shotgunBeforeBlockedClick);
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('1');
+  await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.state.ammo.rifle = 0;
+    scene.refreshHud();
+  });
+
+  const emptyRifleBeforeBlockedHold = await selectedAmmoState();
+  expect(await currentAmmo(page)).toBe(0);
+  await expect(reloadHud).toHaveText('待機');
+  await expect(reloadProgress).toBeHidden();
+
+  await page.keyboard.press('Tab');
+  await holdGameCanvasAt(page, tabCanvasPoint, WEAPONS.rifle.fireIntervalMs * 2);
+  await expectSelectedAmmoState(emptyRifleBeforeBlockedHold);
+
+  await page.keyboard.press('Tab');
+  await holdGameCanvasAt(page, tabCanvasPoint, WEAPONS.rifle.fireIntervalMs * 2);
+  expect(await currentAmmo(page)).toBe(0);
+  expect(await page.getByTestId('ammo-reserve').getAttribute('data-reserve'))
+    .toBe(emptyRifleBeforeBlockedHold.reserve);
+  await expect(reloadHud).toContainText('リロード中');
+  await expect(reloadProgress).toBeVisible();
+});
+
+test('モデル別world weapon、クイックスロット、詳細インベントリをEで取得できる', async ({ page }) => {
   test.setTimeout(45_000);
   const schedule = createRunSchedule(15_000, 1_000);
   await page.clock.install({ time: 15 });
@@ -693,6 +802,10 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
   expect(quickbarBounds.x + quickbarBounds.width / 2).toBeCloseTo(canvasBounds.x + canvasBounds.width / 2, 1);
   expect(quickbarBounds.y + quickbarBounds.height).toBeLessThanOrEqual(canvasBounds.y + canvasBounds.height);
   await expect(page.getByTestId('scrap')).toHaveAttribute('data-count', '0');
+  const worldItemCount = page.getByTestId('world-item-count');
+  await expect(worldItemCount).toBeHidden();
+  await expect(worldItemCount).toHaveAttribute('data-world-items', /weapon/);
+  expect(await worldItemCount.evaluate(element => getComputedStyle(element).display)).toBe('none');
   const mapSeed = Number(await page.getByTestId('map-seed').textContent());
   const map = generateArenaMap(mapSeed);
   const weaponPickups = (await activeWorldItems(page)).filter(item => item.kind === 'weapon');
@@ -721,6 +834,47 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
   await page.keyboard.press('2');
   await expect(quickSlot2).toHaveAttribute('data-selected', 'true');
   await expect(quickSlot1).toHaveAttribute('data-selected', 'false');
+  const canvas = await canvasLocator.boundingBox();
+  if (!canvas) throw new Error('shotgun射撃用のcanvasが必要です。');
+  const reloadHud = page.getByTestId('reload');
+  const reloadProgress = page.getByTestId('reload-progress');
+  for (let shot = 0; shot < WEAPONS.shotgun.magazineSize; shot += 1) {
+    await page.mouse.click(canvas.x + canvas.width / 2, canvas.y + canvas.height / 2);
+    if (shot + 1 < WEAPONS.shotgun.magazineSize)
+      await page.clock.runFor(WEAPONS.shotgun.fireIntervalMs * 2);
+  }
+  expect(await currentAmmo(page)).toBe(0);
+  const emptyShotgunReserve = await page.getByTestId('ammo-reserve').getAttribute('data-reserve');
+  const emptyShotgunReloadProgressWasHidden = await reloadProgress.isHidden();
+  const emptyShotgunReloadProgressValueBefore = await reloadProgress.evaluate(element =>
+    (element as HTMLProgressElement).value);
+  await expect(reloadHud).toHaveText('待機');
+  await expect(reloadProgress).toBeHidden();
+  await page.keyboard.press('Tab');
+  const emptyShotgunCanvasPoint = await findGameCanvasInputPoint(page);
+  await clickGameCanvasAt(page, emptyShotgunCanvasPoint);
+  expect(await currentAmmo(page)).toBe(0);
+  expect(await page.getByTestId('ammo-reserve').getAttribute('data-reserve')).toBe(emptyShotgunReserve);
+  await expect(reloadHud).toHaveText('待機');
+  expect(await reloadProgress.isHidden()).toBe(emptyShotgunReloadProgressWasHidden);
+  expect(await reloadProgress.evaluate(element => (element as HTMLProgressElement).value))
+    .toBe(emptyShotgunReloadProgressValueBefore);
+  await holdGameCanvasAt(page, emptyShotgunCanvasPoint, WEAPONS.shotgun.fireIntervalMs);
+  expect(await currentAmmo(page)).toBe(0);
+  expect(await page.getByTestId('ammo-reserve').getAttribute('data-reserve')).toBe(emptyShotgunReserve);
+  await expect(reloadHud).toHaveText('待機');
+  expect(await reloadProgress.isHidden()).toBe(emptyShotgunReloadProgressWasHidden);
+  expect(await reloadProgress.evaluate(element => (element as HTMLProgressElement).value))
+    .toBe(emptyShotgunReloadProgressValueBefore);
+  await page.keyboard.press('Tab');
+  await clickGameCanvasAt(page, emptyShotgunCanvasPoint);
+  await expect(reloadHud).toContainText('リロード中');
+  await expect(reloadProgress).toBeVisible();
+  expect(await currentAmmo(page)).toBe(0);
+  expect(await page.getByTestId('ammo-reserve').getAttribute('data-reserve')).toBe(emptyShotgunReserve);
+  await page.keyboard.press('1');
+  await expect(reloadHud).toHaveText('待機');
+  await expect(reloadProgress).toBeHidden();
 
   const duplicateModel = WORLD_SIDEARM_MODELS.find(model =>
     weaponPickups.filter(item => item.item === model).length >= 2);
@@ -743,8 +897,6 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
   await expect(quickSlot3).toHaveAttribute('data-selected', 'true');
   await expect(page.getByTestId('weapon')).toHaveText(WEAPON_MODELS[duplicateModel].label);
   await aimPlayer(page, { x: 1, y: 0 });
-  const canvas = await page.locator('#game canvas').boundingBox();
-  if (!canvas) throw new Error('sidearm射撃用のcanvasが必要です。');
   const sidearmAmmoBeforeShot = await currentAmmo(page);
   await page.mouse.click(canvas.x + canvas.width / 2, canvas.y + canvas.height / 2);
   const sidearmAmmoAfterShot = await currentAmmo(page);
@@ -763,8 +915,18 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
   expect(await currentAmmo(page)).toBe(sidearmAmmoAfterShot);
 
   const detail = page.getByTestId('inventory-detail');
+  const ammoPouch = page.getByTestId('ammo-pouch');
   await page.keyboard.press('Tab');
   await expect(detail).toBeVisible();
+  await expect(ammoPouch).toBeVisible();
+  for (const type of AMMO_TYPE_ORDER) {
+    const ammo = AMMO_TYPES[type];
+    const pouchEntry = page.getByTestId(`ammo-pouch-${type}`);
+    await expect(pouchEntry).toHaveAttribute('data-ammo-type', type);
+    await expect(pouchEntry).toHaveAttribute('data-weapon', ammo.weapon);
+    await expect(pouchEntry).toHaveAttribute('data-reserve', /^\d+$/);
+    await expect(pouchEntry).toContainText(ammo.label);
+  }
   await expect(page.getByTestId('inventory-quick-slot-3')).toHaveAttribute('data-model', duplicateModel);
   await expect(page.getByTestId('backpack-slots').locator('output')).toHaveCount(10);
   await expect(page.getByTestId('inventory-quick-slot-3')).toHaveAttribute('draggable', 'true');
@@ -806,8 +968,22 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
   await expect(quickSlot1).toHaveAttribute('data-selected', 'true');
   await page.keyboard.press('Tab');
   await expect(detail).toBeHidden();
+});
 
-  await moveEnemyToTile(page, 'basic-1', shotgun.tile);
+test('同じtileのスクラップは数量と見た目を集約しEで取得できる', async ({ page }) => {
+  test.setTimeout(45_000);
+  const schedule = createRunSchedule(15_000, 1_000);
+  await page.clock.install({ time: 15 });
+  await page.clock.pauseAt(15);
+  await page.goto(devStartUrl(
+    `/?enemyInitialCount=1&enemyStaggerIntervalMs=30000&combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+  ));
+  await setArenaPhysics(page, 'pause');
+  await startInitialCombat(page, schedule.restDurationMs);
+  const mapSeed = Number(await page.getByTestId('map-seed').textContent());
+  const anchor = generateArenaMap(mapSeed).start;
+
+  await moveEnemyToTile(page, 'basic-1', anchor);
   const dropsToMediumTier = Math.max(1, Math.ceil(SCRAP_VISUAL_TIER_THRESHOLDS.medium / SCRAP_DROP_AMOUNTS.basic));
   let firstScrap: WorldItemEntry | undefined;
   let secondScrap: WorldItemEntry | undefined;
@@ -815,15 +991,17 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
     if (dropIndex > 0) {
       await page.clock.runFor(respawnDelayFor('basic', 'basic-1', dropIndex, mapSeed) + 100);
       await expect(page.getByTestId('basic-1-hp')).toHaveAttribute('data-active', 'true');
-      await moveEnemyToTile(page, 'basic-1', shotgun.tile);
+      await moveEnemyToTile(page, 'basic-1', anchor);
     }
     await debugDamageEnemy(page, 'basic-1', Number(await page.getByTestId('basic-1-hp').textContent()));
-    const scrap = (await activeWorldItems(page)).find(item => item.kind === 'material' && item.tile.x === shotgun.tile.x && item.tile.y === shotgun.tile.y);
+    const scrap = (await activeWorldItems(page)).find(item =>
+      item.kind === 'material' && item.tile.x === anchor.x && item.tile.y === anchor.y);
     if (!scrap) throw new Error('スクラップpickupが必要です。');
     if (!firstScrap) firstScrap = scrap;
     secondScrap = scrap;
   }
-  const scrapItems = (await activeWorldItems(page)).filter(item => item.kind === 'material' && item.tile.x === shotgun.tile.x && item.tile.y === shotgun.tile.y);
+  const scrapItems = (await activeWorldItems(page)).filter(item =>
+    item.kind === 'material' && item.tile.x === anchor.x && item.tile.y === anchor.y);
   expect(scrapItems).toHaveLength(1);
   if (!firstScrap || !secondScrap) throw new Error('集約後のスクラップpickupが必要です。');
   expect(secondScrap.quantity).toBeGreaterThanOrEqual(firstScrap.quantity);
@@ -835,7 +1013,7 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
     const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
     if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
     scene.debugMovePlayerTo(tile);
-  }, shotgun.tile);
+  }, anchor);
   await expect(page.getByTestId('pickup-prompt')).toBeVisible();
   await expect(page.getByTestId('pickup-target')).toHaveText(`スクラップ ${secondScrap.quantity}個`);
   await expect(page.getByTestId('pickup-action')).toHaveText('を拾う [E]');
@@ -966,14 +1144,17 @@ test('terminal中はpickupを止め、retryで所持品とworld itemを初期化
   }, shotgun.tile);
   await expect(page.getByTestId('pickup-prompt')).toBeVisible();
   const inventoryDetail = page.getByTestId('inventory-detail');
+  const ammoPouch = page.getByTestId('ammo-pouch');
   await page.keyboard.press('Tab');
   await expect(inventoryDetail).toBeVisible();
+  await expect(ammoPouch).toBeVisible();
   await beginInventoryDrag(page, 'inventory-quick-slot-1');
   await expect(inventoryDetail).toHaveAttribute('data-drag-source', 'quick:0');
   await page.clock.fastForward(runDurationMs(schedule));
   await expect(page.getByTestId('victory')).toBeVisible();
   await expect(page.getByTestId('pickup-prompt')).toBeHidden();
   await expect(inventoryDetail).toBeHidden();
+  await expect(ammoPouch).toBeHidden();
   await expect(inventoryDetail).not.toHaveAttribute('data-drag-source');
   await page.keyboard.press('Tab');
   await expect(inventoryDetail).toBeHidden();
@@ -989,8 +1170,16 @@ test('terminal中はpickupを止め、retryで所持品とworld itemを初期化
   await expect(page.getByTestId('quick-slot-3')).toHaveAttribute('data-empty', 'true');
   await expect(page.getByTestId('backpack-slots').locator('[data-empty="true"]')).toHaveCount(10);
   await expect(inventoryDetail).toBeHidden();
+  await expect(ammoPouch).toBeHidden();
   await expect(inventoryDetail).not.toHaveAttribute('data-drag-source');
   await expect(page.getByTestId('scrap')).toHaveAttribute('data-count', '0');
+  await page.keyboard.press('Tab');
+  await expect(inventoryDetail).toBeVisible();
+  await expect(ammoPouch).toBeVisible();
+  for (const type of AMMO_TYPE_ORDER) {
+    const weapon = AMMO_TYPES[type].weapon;
+    await expect(page.getByTestId(`ammo-pouch-${type}`)).toHaveAttribute('data-reserve', String(WEAPONS[weapon].reserveInitial));
+  }
   const retriedItems = await activeWorldItems(page);
   expect(retriedItems.filter(item => item.kind === 'weapon').map(item => item.item).sort()).toEqual([...INITIAL_WORLD_WEAPON_MODELS].sort());
   expect(retriedItems.filter(item => item.kind === 'material')).toHaveLength(0);
@@ -1323,7 +1512,11 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   const firstBoxKey = firstBox.x + ',' + firstBox.y;
   const initialBoxKeys = await page.getByTestId('ammo-box-count').getAttribute('data-active-tiles');
   expect(tileKeysFromAttribute(initialBoxKeys)).toContain(firstBoxKey);
-  await moveToTile(page, map, firstBox, playerTileHud);
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, firstBox);
   await expect(page.getByTestId('ammo-box-count')).toHaveText('4');
   await expect(page.getByTestId('pickup-prompt')).toBeVisible();
   await expect(page.getByTestId('pickup-target')).toHaveText('弾薬箱');
@@ -1334,6 +1527,19 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   expect(tileKeysFromAttribute(waitingBoxKeys)).not.toContain(firstBoxKey);
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-respawn-tiles', firstBoxKey);
   await expect(page.getByTestId('ammo-reserve')).toHaveText('予備 60/60');
+  const ammoPouch = page.getByTestId('ammo-pouch');
+  await page.keyboard.press('Tab');
+  await expect(ammoPouch).toBeVisible();
+  for (const type of AMMO_TYPE_ORDER) {
+    const weapon = AMMO_TYPES[type].weapon;
+    const expectedReserve = Math.min(
+      WEAPONS[weapon].reserveInitial + WEAPONS[weapon].ammoBoxRecovery,
+      WEAPONS[weapon].reserveMax,
+    );
+    await expect(page.getByTestId(`ammo-pouch-${type}`)).toHaveAttribute('data-reserve', String(expectedReserve));
+  }
+  await page.keyboard.press('Tab');
+  await expect(ammoPouch).toBeHidden();
 
   await expect(page.getByTestId('ammo-box-count')).toHaveText('3');
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-active-tiles', waitingBoxKeys ?? '');

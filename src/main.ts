@@ -1380,7 +1380,7 @@ class Arena extends Phaser.Scene {
   }
 
   private tryFire(): void {
-    if (this.state.defeated || this.state.victory || (this.playerDash && !canFireWhileDashing(this.playerRole.id)))
+    if (this.inventoryOpen || this.state.defeated || this.state.victory || (this.playerDash && !canFireWhileDashing(this.playerRole.id)))
       return;
     const weaponId = activeWeaponId(this.state);
     if (!weaponId)

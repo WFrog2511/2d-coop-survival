@@ -1,7 +1,7 @@
 import type { EnemyVisibility, SpawnDirection, TilePosition } from '../arena-map';
 import { DIRECTION_LABELS, ENEMY_IDS } from '../game-data';
 import { PLAYER_ROLES, type PlayerRoleId } from '../player-data';
-import { STABLE_ENEMY_SLOT_COUNT, WEAPON_MODELS, WEAPONS, activeEnemyCount, activeWeaponId, currentRunPhase, currentWaveNumber, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, weaponIdForModel, type CombatState, type EnemyInstanceId, type InventorySlotRef, type RunState, type WeaponModel } from '../rules';
+import { AMMO_TYPES, AMMO_TYPE_ORDER, STABLE_ENEMY_SLOT_COUNT, WEAPON_MODELS, WEAPONS, activeEnemyCount, activeWeaponId, currentRunPhase, currentWaveNumber, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, weaponIdForModel, type AmmoType, type CombatState, type EnemyInstanceId, type InventorySlotRef, type RunState, type WeaponModel } from '../rules';
 
 export type EnemyHudView = {
   stableId: string;
@@ -91,6 +91,12 @@ export class ArenaHud {
   ];
 
   private readonly inventoryDetail = element<HTMLElement>('[data-testid="inventory-detail"]');
+  private readonly ammoPouch = element<HTMLElement>('[data-testid="ammo-pouch"]');
+  private readonly ammoPouchEntries: ReadonlyArray<{ type: AmmoType; output: HTMLOutputElement }> = AMMO_TYPE_ORDER.map(type => ({
+    type,
+    output: element<HTMLOutputElement>(`[data-testid="ammo-pouch-${type}"]`),
+  }));
+
   private readonly inventoryDetailQuickSlots = [
     element<HTMLOutputElement>('[data-testid="inventory-quick-slot-1"]'),
     element<HTMLOutputElement>('[data-testid="inventory-quick-slot-2"]'),
@@ -231,6 +237,8 @@ export class ArenaHud {
   public setInventoryOpen(open: boolean): void {
     this.inventoryDetail.hidden = !open;
     this.inventoryDetail.dataset.open = String(open);
+    this.ammoPouch.hidden = !open;
+    this.ammoPouch.dataset.open = String(open);
     if (!open)
       this.clearInventoryDrag();
   }
@@ -335,6 +343,7 @@ export class ArenaHud {
       this.reserveHud.dataset.reserveCapacity = '';
     }
     this.updateInventory(view.state);
+    this.updateAmmoPouch(view.state);
     this.worldItemCountHud.value = String(view.activeWorldItemEntries.length);
     this.worldItemCountHud.dataset.worldItems = view.activeWorldItemEntries.join('|');
     this.ammoBoxCountHud.value = String(view.ammoBoxCount);
@@ -379,6 +388,17 @@ export class ArenaHud {
     this.inventoryDetail.dataset.selectedQuickSlot = String(state.inventory.selectedQuickSlot);
     this.scrapHud.value = `スクラップ ${state.inventory.materials.scrap}`;
     this.scrapHud.dataset.count = String(state.inventory.materials.scrap);
+  }
+
+  /** 弾薬ポーチは既存の武器種ごとの予備弾薬だけを一覧表示する。 */
+  private updateAmmoPouch(state: CombatState): void {
+    this.ammoPouchEntries.forEach(({ type, output }) => {
+      const ammo = AMMO_TYPES[type];
+      output.value = `${ammo.icon} ${ammo.label} ${state.reserve[ammo.weapon]}`;
+      output.dataset.ammoType = type;
+      output.dataset.weapon = ammo.weapon;
+      output.dataset.reserve = String(state.reserve[ammo.weapon]);
+    });
   }
 
   private updateWeaponSlot(

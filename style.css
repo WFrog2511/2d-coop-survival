@@ -123,8 +123,13 @@ h1 {
 }
 
 #pickup-prompt[hidden],
-#inventory-detail[hidden] {
+#inventory-detail[hidden],
+#ammo-pouch[hidden] {
   display: none;
+}
+
+#world-item-count[hidden] {
+  display: none !important;
 }
 
 .pickup-prompt-target {
@@ -301,6 +306,31 @@ h1 {
 #inventory-detail h2 {
   margin: 0;
   font-size: 1rem;
+}
+
+#ammo-pouch {
+  position: absolute;
+  top: 58px;
+  left: calc(50% + 154px);
+  display: grid;
+  gap: 5px;
+  min-width: 148px;
+  padding: 14px;
+  border: 1px solid #7ee7ff;
+  border-radius: 10px;
+  background: rgb(16 24 39 / 94%);
+  box-sizing: border-box;
+}
+
+#ammo-pouch h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+#ammo-pouch output {
+  color: #c7f7ff;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
 }
 
 #inventory-detail section {

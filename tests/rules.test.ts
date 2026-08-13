@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { SCRAP_VISUAL_TIER_THRESHOLDS, scrapVisualTierFor } from '../src/game-data';
 import {
   AMMO_BOX_RESPAWN_MS,
+  AMMO_TYPES,
+  AMMO_TYPE_ORDER,
   BACKPACK_SLOT_COUNT,
   COMBAT_WAVE_DURATION_MS,
   DEFAULT_RUN_SCHEDULE,
@@ -18,6 +20,7 @@ import {
   WEAPON_MODELS,
   activeWeaponId,
   activeEnemyCount,
+  ammoTypeForWeapon,
   advanceRunState,
   advanceSurvivalState,
   canFireAt,
@@ -381,6 +384,15 @@ describe('戦闘ルール', () => {
     expect(compactPistol.nextFireAt.handgun).toBe(reloading.nextFireAt.handgun);
   });
 
+  it('弾薬種は既存WeaponIdへ一意に対応し、sidearmはhandgun弾薬を共有する', () => {
+    const weaponIds = AMMO_TYPE_ORDER.map(type => AMMO_TYPES[type].weapon);
+    expect(new Set(weaponIds).size).toBe(Object.keys(WEAPONS).length);
+    AMMO_TYPE_ORDER.forEach((type) => {
+      expect(ammoTypeForWeapon(AMMO_TYPES[type].weapon)).toBe(type);
+    });
+    expect(ammoTypeForWeapon(weaponIdForModel('revolver'))).toBe(ammoTypeForWeapon(weaponIdForModel('compact-pistol')));
+  });
+
   it('基本敵9体とドローン3体を初期化し、対象だけへダメージと再出現を適用する', () => {
     const damaged = damageEnemy(INITIAL_STATE, 'basic-2', 9);
     expect(ENEMY_INSTANCE_IDS).toHaveLength(12);
@@ -487,10 +499,15 @@ describe('戦闘ルール', () => {
     expect(retried.inventory.backpackSlots).not.toBe(INITIAL_STATE.inventory.backpackSlots);
     expect(retried.inventory.materials).not.toBe(INITIAL_STATE.inventory.materials);
     expect(retried.ammo).not.toBe(INITIAL_STATE.ammo);
+    expect(retried.reserve).not.toBe(INITIAL_STATE.reserve);
     expect(retried.nextFireAt).not.toBe(INITIAL_STATE.nextFireAt);
     expect(retried.enemies).not.toBe(INITIAL_STATE.enemies);
     ENEMY_INSTANCE_IDS.forEach((id) => {
       expect(retried.enemies[id]).not.toBe(INITIAL_STATE.enemies[id]);
+    });
+    AMMO_TYPE_ORDER.forEach((type) => {
+      const weapon = AMMO_TYPES[type].weapon;
+      expect(retried.reserve[weapon]).toBe(INITIAL_STATE.reserve[weapon]);
     });
   });
 });
