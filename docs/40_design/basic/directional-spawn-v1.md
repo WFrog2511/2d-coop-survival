@@ -102,7 +102,7 @@ productionではSceneとhookを`window`へ公開しない。DEV hookを利用者
 - deathはstrict spawn成功までCombatStateを復活させず、recycleはCombatState HPを変更しない。
 - DEV hookの再出現が失敗した場合はrespawn count、元位置、spawn metadata、body、visibilityを直前状態へ戻して例外にする。
 - respawn callbackは登録時generationとcurrent generationを比較し、不一致またはterminalなら副作用なしで終了する。
-- occupied判定によりplayer、activeな弾薬箱、activeなworld item（weapon/material）、他のactive enemyと同じtileへ重複生成しない。
+- occupied判定によりplayer、activeな弾薬箱、activeなworld item（weapon/material/ammo）、他のactive enemyと同じtileへ重複生成しない。
 
 ## 既存sliceの回帰境界
 

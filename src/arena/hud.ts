@@ -45,6 +45,11 @@ export type ArenaHudView = {
 /** 詳細インベントリから移動する武器のDOM上の行き先。 */
 export type InventoryDropTarget = InventorySlotRef | 'world';
 
+/** 詳細インベントリからworldまたは武器枠へ移す対象。 */
+export type InventoryDragSource
+  = | { kind: 'weapon'; slot: InventorySlotRef }
+    | { kind: 'ammo'; ammoType: AmmoType };
+
 function inventorySlotRefFromTarget(target: EventTarget | null): InventorySlotRef | undefined {
   if (!(target instanceof Element)) return undefined;
   const slot = target.closest<HTMLElement>('[data-inventory-container][data-index]');
@@ -52,6 +57,12 @@ function inventorySlotRefFromTarget(target: EventTarget | null): InventorySlotRe
   const index = Number(slot?.dataset.index);
   if ((container !== 'quick' && container !== 'backpack') || !Number.isInteger(index)) return undefined;
   return { container, index };
+}
+
+function ammoTypeFromTarget(target: EventTarget | null): AmmoType | undefined {
+  if (!(target instanceof Element)) return undefined;
+  const ammoType = target.closest<HTMLOutputElement>('[data-ammo-type]')?.dataset.ammoType;
+  return AMMO_TYPE_ORDER.includes(ammoType as AmmoType) ? ammoType as AmmoType : undefined;
 }
 
 function sameInventorySlot(left: InventorySlotRef, right: InventorySlotRef): boolean {
@@ -140,22 +151,36 @@ export class ArenaHud {
   private readonly victory = element<HTMLElement>('[data-testid="victory"]');
   private readonly retry = element<HTMLButtonElement>('[data-testid="retry"]');
   private readonly enemyHp = enemyRecord(id => element<HTMLOutputElement>(`[data-testid="${id}-hp"]`));
-  private inventoryDropListener: ((source: InventorySlotRef, target: InventoryDropTarget) => void) | undefined;
-  private dragSource: InventorySlotRef | undefined;
+  private inventoryDropListener: ((source: InventoryDragSource, target: InventoryDropTarget) => void) | undefined;
+  private dragSource: InventoryDragSource | undefined;
   private inventoryDragMessage = false;
 
   private readonly onInventoryDragStart = (event: DragEvent): void => {
-    const source = inventorySlotRefFromTarget(event.target);
-    if (!source || !this.inventoryDropListener || !this.inventoryDetail.contains(event.target as Node))
+    if (!this.inventoryDropListener)
       return;
-    const sourceSlot = (event.target as Element).closest<HTMLElement>('[data-inventory-container][data-index]');
-    if (sourceSlot?.dataset.empty === 'true')
+    const slot = inventorySlotRefFromTarget(event.target);
+    const sourceSlot = event.target instanceof Element
+      ? event.target.closest<HTMLElement>('[data-inventory-container][data-index]')
+      : undefined;
+    if (slot && sourceSlot && this.inventoryDetail.contains(sourceSlot)) {
+      if (sourceSlot.dataset.empty === 'true')
+        return;
+      this.dragSource = { kind: 'weapon', slot };
+      this.inventoryDetail.dataset.dragSource = `${slot.container}:${slot.index}`;
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', `weapon:${slot.container}:${slot.index}`);
+      }
       return;
-    this.dragSource = source;
-    this.inventoryDetail.dataset.dragSource = `${source.container}:${source.index}`;
+    }
+    const ammoType = ammoTypeFromTarget(event.target);
+    if (!ammoType || !(event.target instanceof Node) || !this.ammoPouch.contains(event.target))
+      return;
+    this.dragSource = { kind: 'ammo', ammoType };
+    this.ammoPouch.dataset.dragSource = `ammo:${ammoType}`;
     if (event.dataTransfer) {
       event.dataTransfer.effectAllowed = 'move';
-      event.dataTransfer.setData('text/plain', `${source.container}:${source.index}`);
+      event.dataTransfer.setData('text/plain', `ammo:${ammoType}`);
     }
   };
 
@@ -163,7 +188,7 @@ export class ArenaHud {
 
   private readonly onInventoryDragOver = (event: DragEvent): void => {
     const target = inventorySlotRefFromTarget(event.target);
-    if (!this.dragSource || !target)
+    if (!this.dragSource || this.dragSource.kind !== 'weapon' || !target)
       return;
     event.preventDefault();
     if (event.dataTransfer)
@@ -174,7 +199,7 @@ export class ArenaHud {
   private readonly onInventoryDrop = (event: DragEvent): void => {
     const source = this.dragSource;
     const target = inventorySlotRefFromTarget(event.target);
-    if (!source || !target)
+    if (!source || source.kind !== 'weapon' || !target)
       return;
     event.preventDefault();
     this.inventoryDropListener?.(source, target);
@@ -206,6 +231,8 @@ export class ArenaHud {
     this.inventoryDetail.addEventListener('dragend', this.onInventoryDragEnd);
     this.inventoryDetail.addEventListener('dragover', this.onInventoryDragOver);
     this.inventoryDetail.addEventListener('drop', this.onInventoryDrop);
+    this.ammoPouch.addEventListener('dragstart', this.onInventoryDragStart);
+    this.ammoPouch.addEventListener('dragend', this.onInventoryDragEnd);
     this.game.addEventListener('dragover', this.onGameDragOver);
     this.game.addEventListener('drop', this.onGameDrop);
   }
@@ -215,7 +242,7 @@ export class ArenaHud {
   }
 
   /** Sceneごとに差し替える詳細インベントリのdrop処理を登録する。 */
-  public setInventoryDropListener(listener: ((source: InventorySlotRef, target: InventoryDropTarget) => void) | undefined): void {
+  public setInventoryDropListener(listener: ((source: InventoryDragSource, target: InventoryDropTarget) => void) | undefined): void {
     this.inventoryDropListener = listener;
   }
 
@@ -280,6 +307,7 @@ export class ArenaHud {
   public clearInventoryDrag(clearMessage = false): void {
     this.dragSource = undefined;
     delete this.inventoryDetail.dataset.dragSource;
+    delete this.ammoPouch.dataset.dragSource;
     delete this.game.dataset.weaponDropTarget;
     this.inventoryDetail.querySelectorAll<HTMLElement>('[data-drop-target]').forEach((slot) => {
       delete slot.dataset.dropTarget;
@@ -398,6 +426,10 @@ export class ArenaHud {
       output.dataset.ammoType = type;
       output.dataset.weapon = ammo.weapon;
       output.dataset.reserve = String(state.reserve[ammo.weapon]);
+      output.dataset.boxQuantity = String(ammo.boxQuantity);
+      output.dataset.worldColor = ammo.worldColor;
+      output.dataset.dragKind = 'ammo';
+      output.draggable = true;
     });
   }
 
@@ -430,7 +462,7 @@ export class ArenaHud {
     });
     const selector = `[data-inventory-container="${target.container}"][data-index="${target.index}"]`;
     const slot = this.inventoryDetail.querySelector<HTMLElement>(selector);
-    if (slot && this.dragSource && !sameInventorySlot(this.dragSource, target))
+    if (slot && this.dragSource?.kind === 'weapon' && !sameInventorySlot(this.dragSource.slot, target))
       slot.dataset.dropTarget = 'true';
   }
 

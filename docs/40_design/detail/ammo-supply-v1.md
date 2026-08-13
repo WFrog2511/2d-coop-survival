@@ -13,7 +13,7 @@ specification: SPEC-AMMO-SUPPLY
 ```text
 通常 --弾倉不足かつ予備>0--> リロード中 --タイマー完了--> 通常
 通常 --空弾倉クリックかつ予備=0--> 通常（表示のみ更新）
-通常 --弾薬箱取得--> 通常（予備を上限まで加算、箱を削除）
+通常 --種類別弾薬取得--> 通常（対応reserveを上限まで加算、残量0だけ削除）
 Tab詳細画面 --pointerdown / 自動長押し--> Tab詳細画面（弾薬・reload状態を変更しない）
 敗北 --retry--> 新しい通常状態（初期弾薬、4箱）
 ```
@@ -27,9 +27,10 @@ Tab詳細画面 --pointerdown / 自動長押し--> Tab詳細画面（弾薬・re
 
 ## ゲーム統合と失敗時動作
 
-- `main.ts` は箱をstatic groupで管理し、overlap時に純粋ロジックの取得結果が `collected` の場合だけ状態を更新して箱を破棄する。
-- 全武器の予備弾薬が上限なら箱取得は状態変更なしで、箱も消費しない。
-- retry開始時に既存箱を破棄し、現在runのマップへ4箱を再配置する。時間経過、wave、dropによる補充経路は持たない。
+- `main.ts` はstable boxとdropped ammoをstatic groupで管理し、`collectTypedAmmoBox`の取得量が正の場合だけ対応reserveを更新する。partialはactive itemと残量を維持し、残量0だけを破棄する。
+- 対象`WeaponId`の予備弾薬が上限なら同種の箱／world ammoは候補にせず、状態もitemも変更しない。stable boxだけは空になった後に30秒で同じ種類・設定量へ再出現し、dropped ammoはrespawnしない。
+- pouch dragは`dropAmmoBox`で`min(reserve, boxQuantity)`を計算するが、既存のpath距離2 world-drop候補を先に確定する。候補なしではreserve、world item、ID sequenceを変更せず、既存の配置不能messageを表示する。
+- retry開始時に既存箱とworld itemを破棄し、現在runのマップへ4個のtyped stable boxを再配置する。時間経過、waveによる補充経路は持たない。
 - ammo panelは毎回の状態更新で選択武器、弾倉、予備、残箱数を更新する。Tabと同時に開くpouchは各`AmmoType`のicon、名称、予備だけを同じ状態更新で更新し、弾倉は含めない。既存診断HUDの値と併存する。
 
 この詳細設計のTypeScript対応部分は手動同期とし、本sliceでは新しいDOCGEN transformを追加しない。

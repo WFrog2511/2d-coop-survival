@@ -41,17 +41,17 @@ updateは毎frame、純粋関数で期限を確認してHUDを更新する。期
 
 ## 3. 箱の識別と復活
 
-箱spriteにはstableなboxId、currentTileの複製、tile key（x,y）をdataとして持たせる。boxIdごとのstateはoriginTile、currentTile、respawnCountを保持し、tile keyはtimer identityには使わない。敵spawnのoccupied判定にはactive boxのcurrentTileだけを渡す。
+箱spriteにはstableなboxId、currentTileの複製、tile key（x,y）、AmmoType、現在数量をdataとして持たせる。boxIdごとのstateはoriginTile、currentTile、respawnCount、AmmoType、数量を保持し、tile keyはtimer identityには使わない。敵spawnのoccupied判定にはactive boxのcurrentTileだけを渡す。
 
 取得成功時の処理は次の順序とする。
 
 1. terminal、inactive、boxId/state data欠落、同boxIdの待機timerがあれば終了する。
-2. rulesのcollectAmmoBoxがcollected=trueを返した場合だけ状態を更新する。
-3. static groupから箱を削除する。
-4. 同boxIdのammoBoxRespawnsへ30000ms TimerEventを1つ登録する。
-5. HUDの残箱数、active boxId/current tile、pending boxIdを更新する。
+2. rulesのcollectTypedAmmoBoxが正の取得量を返した場合だけ対応reserveを更新する。
+3. partialなら同じ箱と残量を維持し、残量0だけstatic groupから削除する。
+4. 空になったstable boxだけ同boxIdのammoBoxRespawnsへ30000ms TimerEventを1つ登録する。
+5. HUDの残箱数、active boxId/current tile/type/quantity、pending boxIdを更新する。
 
-callbackではtimer mapからboxIdを先に削除し、generation一致かつ非terminalの場合だけ現在のplayer tile、camera viewport、active box、active world item（weapon/material）、active enemyをoccupiedにしてselectSpawnTileを呼ぶ。selectSpawnTileは到達可能floorのviewport外を優先し、候補がなければ最遠floorへfallbackする。boxIdのoriginTileはoccupiedとして元位置への復活を避け、seedはnextSeedへmap seed、slot、respawnCountを渡してrun内で再現可能にする。spawnAmmoBoxはactiveな同boxIdまたは同tileの箱を検査してから生成するため、同じ箱の重複生成を防ぐ。terminalまたはretryの停止後はcallbackの世代が不一致となり副作用を持たない。
+callbackではtimer mapからboxIdを先に削除し、generation一致かつ非terminalの場合だけ現在のplayer tile、camera viewport、active box、active world item（weapon/material/ammo）、active enemyをoccupiedにしてselectSpawnTileを呼ぶ。selectSpawnTileは到達可能floorのviewport外を優先し、候補がなければ最遠floorへfallbackする。boxIdのoriginTileはoccupiedとして元位置への復活を避け、seedはnextSeedへmap seed、slot、respawnCountを渡してrun内で再現可能にする。spawnAmmoBoxはactiveな同boxIdまたは同tileの箱を検査してから生成するため、同じ箱の重複生成を防ぐ。terminalまたはretryの停止後はcallbackの世代が不一致となり副作用を持たない。
 
 ## 4. #71前のterminalとUI（履歴）
 

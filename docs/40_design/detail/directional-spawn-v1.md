@@ -198,7 +198,7 @@ phase遷移はactive enemyの再配置イベントではない。既にactiveな
 
 player基準方向は`dx = target.x - player.x`、`dy = target.y - player.y`で求める。`abs(dx) > abs(dy)`なら`dx`の符号で左右、それ以外は`dy`の符号で上下を選ぶ。同率は上下を優先する。
 
-enemy spawnの`occupied`にはspawn時点のplayer、activeな弾薬箱、activeなworld item（weapon/material）、対象以外のactive enemyを含める。初期spawnも先にspawnしたenemyを除外するため、12体を同じtileへ配置しない。
+enemy spawnの`occupied`にはspawn時点のplayer、activeな弾薬箱、activeなworld item（weapon/material/ammo）、対象以外のactive enemyを含める。初期spawnも先にspawnしたenemyを除外するため、12体を同じtileへ配置しない。
 
 ## 10. reset、update、spawn、respawn、terminal
 
@@ -240,7 +240,7 @@ victoryまたはdefeatでrun timerを停止し、player/enemy velocityを0、弾
 | DEVでinactiveまたはterminal | 例外 | 有効なplaying状態で再実行 |
 | DEV再出現のcandidateなし | respawn count、元位置、spawn metadata、body、visibilityを復元後に例外 | 復元したplaying状態を維持 |
 
-失敗時にplayer、弾薬箱、activeなworld item（weapon/material）、他enemyと重複する位置へ強制spawnしない。通常respawn失敗時はCombatStateだけを復活させず、spriteとstateの不一致を避ける。
+失敗時にplayer、弾薬箱、activeなworld item（weapon/material/ammo）、他enemyと重複する位置へ強制spawnしない。通常respawn失敗時はCombatStateだけを復活させず、spriteとstateの不一致を避ける。
 
 ## 12. DEV/production境界と非機能要件
 
@@ -276,7 +276,7 @@ victoryまたはdefeatでrun timerを停止し、player/enemy velocityを0、弾
 | unit | stable slot | 12 slotで主方向9、反対方向3、`index % 4 === 3`だけ反対 |
 | unit | 方向判定 | 左右優先条件と同率時の上下優先が仕様どおり |
 | unit | strict enemy selector | up/right/down/leftでreachable、unoccupied、offscreen、hidden、direction一致を検証し、visible/wrong-direction/occupiedは`null` |
-| unit/E2E | population | 初期8体と段階投入後12体がplayer、弾薬箱、activeなworld item（weapon/material）、他enemyと非重複 |
+| unit/E2E | population | 初期8体と段階投入後12体がplayer、弾薬箱、activeなworld item（weapon/material/ammo）、他enemyと非重複 |
 | integration/E2E | population/phase | 初期8体、4段階投入後12体、phase境界でactive metadata不変 |
 | integration/E2E | DEV respawn | 1体だけが既存`spawnEnemy`経由でcurrent phase、方向、新tileを取得し、他11体は不変 |
 | E2E | retry/HUD | phase 0、初期8体、stagger予約、時間上中央・HP左下・ammo右下 |
@@ -301,7 +301,7 @@ Feature: 方向別enemy spawn
     Given phase 1で12体のenemyがactiveである
     When DEV環境で1体をdebugRespawnEnemyにより再出現させる
     Then その1体はphase 1の主方向とstable slotの割り当て方向を持つ
-    And その1体はplayer、弾薬箱、activeなworld item（weapon/material）、他enemyと重複しない到達可能tileにいる
+    And その1体はplayer、弾薬箱、activeなworld item（weapon/material/ammo）、他enemyと重複しない到達可能tileにいる
     And 他の11体のspawn metadataは変わらない
 
   Scenario: retryはenemy-free preparationとphase 0表示から新runを開始する

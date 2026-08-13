@@ -4,30 +4,8 @@ export type WeaponId = 'rifle' | 'shotgun' | 'handgun';
 /** 予備弾薬表示で使う弾薬種の識別子。 */
 export type AmmoType = 'rifle-ammo' | 'shotgun-ammo' | 'handgun-ammo';
 
-/** 弾薬ポーチに表示する順序と、既存の武器種への対応をまとめる。 */
-export const AMMO_TYPES: Record<AmmoType, { label: string; icon: string; weapon: WeaponId }> = {
-  'rifle-ammo': { label: 'ライフル弾', icon: '▰', weapon: 'rifle' },
-  'shotgun-ammo': { label: 'ショットガン弾', icon: '◀', weapon: 'shotgun' },
-  'handgun-ammo': { label: 'ハンドガン弾', icon: '▪', weapon: 'handgun' },
-};
-
 /** 弾薬ポーチへ常に並べる既存弾薬種の順序。 */
 export const AMMO_TYPE_ORDER: readonly AmmoType[] = ['rifle-ammo', 'shotgun-ammo', 'handgun-ammo'];
-
-const AMMO_TYPE_FOR_WEAPON: Record<WeaponId, AmmoType> = {
-  rifle: 'rifle-ammo',
-  shotgun: 'shotgun-ammo',
-  handgun: 'handgun-ammo',
-};
-
-/**
- * 戦闘上の武器種に対応する弾薬種を返す。
- * @param weapon 戦闘で共有する武器種。
- * @returns 弾薬ポーチに表示する弾薬種。
- */
-export function ammoTypeForWeapon(weapon: WeaponId): AmmoType {
-  return AMMO_TYPE_FOR_WEAPON[weapon];
-}
 
 /** 所持品の一枠に入る武器モデルの識別子。 */
 export type WeaponModel = 'rifle' | 'shotgun' | 'handgun' | 'revolver' | 'compact-pistol';
@@ -143,7 +121,6 @@ export type WeaponDefinition = {
   magazineSize: number;
   reserveInitial: number;
   reserveMax: number;
-  ammoBoxRecovery: number;
   reloadMs: number;
   pellets: number;
   damage: number;
@@ -153,11 +130,10 @@ export type WeaponDefinition = {
   knockback: number;
 };
 
-/** ハンドガンの予備弾薬を10発単位で調整する設定。 */
+/** ハンドガンの予備弾薬を調整する設定。 */
 export const HANDGUN_AMMO = {
   reserveInitial: 30,
   reserveMax: 60,
-  ammoBoxRecovery: 10,
 } as const;
 
 /** 一体の敵に保持する戦闘状態。 */
@@ -182,10 +158,17 @@ export type CombatState = {
   enemies: Record<EnemyInstanceId, EnemyState>;
 };
 
-/** 弾薬箱の取得可否と更新後の状態。 */
-export type AmmoBoxResult = {
+/** 種類別弾薬箱の取得量と残量を返す。 */
+export type TypedAmmoBoxResult = {
   state: CombatState;
-  collected: boolean;
+  collected: number;
+  remaining: number;
+};
+
+/** 弾薬ポーチからworldへ出す量を返す。 */
+export type AmmoDropResult = {
+  state: CombatState;
+  dropped: number;
 };
 
 /** 発射可否と更新後の状態。 */
@@ -203,7 +186,6 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     magazineSize: 20,
     reserveInitial: 40,
     reserveMax: 60,
-    ammoBoxRecovery: 20,
     reloadMs: 1200,
     pellets: 1,
     damage: 2,
@@ -220,7 +202,6 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     magazineSize: 4,
     reserveInitial: 8,
     reserveMax: 12,
-    ammoBoxRecovery: 4,
     reloadMs: 1600,
     pellets: 5,
     damage: 2,
@@ -237,7 +218,6 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     magazineSize: 10,
     reserveInitial: HANDGUN_AMMO.reserveInitial,
     reserveMax: HANDGUN_AMMO.reserveMax,
-    ammoBoxRecovery: HANDGUN_AMMO.ammoBoxRecovery,
     reloadMs: 1200,
     pellets: 1,
     damage: 2,
@@ -247,6 +227,43 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     knockback: 0,
   },
 };
+
+/** 弾薬ポーチ、弾薬箱、world表示で共有する種類別設定。 */
+export type AmmoTypeDefinition = {
+  label: string;
+  icon: string;
+  weapon: WeaponId;
+  boxQuantity: number;
+  worldColor: string;
+};
+
+/** 箱量を含む、種類別弾薬の唯一の調整設定。 */
+export const AMMO_TYPES: Record<AmmoType, AmmoTypeDefinition> = {
+  'rifle-ammo': {
+    label: 'ライフル弾', icon: '▰', weapon: 'rifle',
+    boxQuantity: 20, worldColor: '#55d6ff',
+  },
+  'shotgun-ammo': {
+    label: 'ショットガン弾', icon: '◀', weapon: 'shotgun',
+    boxQuantity: 4, worldColor: '#f28a3f',
+  },
+  'handgun-ammo': {
+    label: 'ハンドガン弾', icon: '▪', weapon: 'handgun',
+    boxQuantity: 10, worldColor: '#f2d75d',
+  },
+};
+
+/**
+ * 戦闘上の武器種に対応する弾薬種を唯一の弾薬設定から返す。
+ * @param weapon 戦闘で共有する武器種。
+ * @returns 対応する弾薬種。
+ */
+export function ammoTypeForWeapon(weapon: WeaponId): AmmoType {
+  const type = AMMO_TYPE_ORDER.find(candidate => AMMO_TYPES[candidate].weapon === weapon);
+  if (!type)
+    throw new Error(`対応する弾薬種がありません: ${weapon}`);
+  return type;
+}
 
 const DAMAGE_MULTIPLIERS: Record<EnemyKind, Record<DamageType, number>> = {
   basic: { smallCaliber: 1, scatter: 1 },
@@ -903,27 +920,52 @@ export function completeReload(state: CombatState, weapon: WeaponId): CombatStat
 }
 
 /**
- * 弾薬箱から各武器の予備弾薬を補給する。
+ * 種類別弾薬箱から、対象武器の予備弾薬だけを上限まで移す。
  *
  * @param state 現在の戦闘状態。
- * @returns 補給可否と更新後の戦闘状態。
+ * @param ammoType 取得する弾薬の種類。
+ * @param quantity 箱に残っている安全な正整数の弾数。
+ * @returns 取得量、箱の残量、更新後の戦闘状態。
  */
-export function collectAmmoBox(state: CombatState): AmmoBoxResult {
+export function collectTypedAmmoBox(state: CombatState, ammoType: AmmoType, quantity: number): TypedAmmoBoxResult {
+  const remaining = Number.isSafeInteger(quantity) && quantity > 0 ? quantity : 0;
+  if (state.defeated || state.victory || remaining === 0)
+    return { state, collected: 0, remaining };
+  const weapon = AMMO_TYPES[ammoType].weapon;
+  const collected = Math.min(remaining, WEAPONS[weapon].reserveMax - state.reserve[weapon]);
+  if (collected <= 0)
+    return { state, collected: 0, remaining };
+  return {
+    state: {
+      ...state,
+      reserve: { ...state.reserve, [weapon]: state.reserve[weapon] + collected },
+    },
+    collected,
+    remaining: remaining - collected,
+  };
+}
+
+/**
+ * 弾薬ポーチから設定済みの一箱分以下をworldへ出す。
+ *
+ * @param state 現在の戦闘状態。
+ * @param ammoType worldへ置く弾薬の種類。
+ * @returns 出した弾数と更新後の戦闘状態。
+ */
+export function dropAmmoBox(state: CombatState, ammoType: AmmoType): AmmoDropResult {
   if (state.defeated || state.victory)
-    return { state, collected: false };
-  const reserve = { ...state.reserve };
-  let collected = false;
-  (Object.keys(WEAPONS) as WeaponId[]).forEach((weapon) => {
-    const amount = Math.min(
-      WEAPONS[weapon].ammoBoxRecovery,
-      WEAPONS[weapon].reserveMax - reserve[weapon],
-    );
-    if (amount > 0) {
-      reserve[weapon] += amount;
-      collected = true;
-    }
-  });
-  return collected ? { state: { ...state, reserve }, collected } : { state, collected };
+    return { state, dropped: 0 };
+  const { weapon, boxQuantity } = AMMO_TYPES[ammoType];
+  const dropped = Math.min(state.reserve[weapon], boxQuantity);
+  if (dropped <= 0)
+    return { state, dropped: 0 };
+  return {
+    state: {
+      ...state,
+      reserve: { ...state.reserve, [weapon]: state.reserve[weapon] - dropped },
+    },
+    dropped,
+  };
 }
 
 /**

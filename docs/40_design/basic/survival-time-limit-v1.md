@@ -54,7 +54,7 @@ victoryとdefeatはterminalであり、入力イベントが届いてもルー�
 - 旧generationのsurvival、敵respawn、flash、reload、ammo box callbackは状態、sprite、HUDを変更しない。
 - 復活待ち中の箱に再度overlapが届いても、active spriteが存在しないため取得処理とtimer登録を行わない。
 - 既に同じboxIdのtimerがある場合は追加登録せず、callback時にも同じboxIdまたは同じtileのactive箱を重複生成しない。
-- 復活callbackは現在のplayer、camera viewport、active box、active world item（weapon/material）、enemyをoccupiedとしてselectSpawnTileへ渡し、viewport外の到達可能floorをseed決定的に選ぶ。viewport外候補がない場合は最遠floorへfallbackし、元tileはoccupiedとして除外する。
+- 復活callbackは現在のplayer、camera viewport、active box、active world item（weapon/material/ammo）、enemyをoccupiedとしてselectSpawnTileへ渡し、viewport外の到達可能floorをseed決定的に選ぶ。viewport外候補がない場合は最遠floorへfallbackし、元tileはoccupiedとして除外する。
 - terminal中の箱復活callbackは副作用なしで終了する。
 - retryは新generationを先に発行してから全timerを停止するため、旧mapのcallbackを新mapへ適用しない。
 - 既存の弾切れ、予備弾薬0、リロード中断、敗北の表示と導線は維持する。

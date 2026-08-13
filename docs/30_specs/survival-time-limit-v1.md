@@ -40,7 +40,7 @@ retryCombatはvictory=false、defeated=false、HP100、武器別ammo/reserve、�
 
 各箱はstableなboxId、現在tile、元tile、復活回数を保持する。tile keyは現在位置の表示用であり、timer identityには使わない。取得成功時だけ、箱をstatic groupから削除し、boxIdに対するrespawn TimerEventを1つ登録する。delayは30000ms固定とする。
 
-TimerEvent callbackはrun generationとterminal stateを確認する。generationが一致し、terminalでない場合だけ、現在のplayer tile、camera viewport、active box、active world item（weapon/material）、active enemyをoccupiedにして既存selectSpawnTileを呼ぶ。候補は到達可能なmap内floorからviewport外を優先し、候補がなければ最遠floorへfallbackする。復活した箱は元tileを避け、同じboxIdまたは同じtileにactive boxを重複生成せず、通常の箱取得overlapへ戻る。seedはnextSeedとmap seed、boxIdのslot、復活回数から決定する。
+TimerEvent callbackはrun generationとterminal stateを確認する。generationが一致し、terminalでない場合だけ、現在のplayer tile、camera viewport、active box、active world item（weapon/material/ammo）、active enemyをoccupiedにして既存selectSpawnTileを呼ぶ。候補は到達可能なmap内floorからviewport外を優先し、候補がなければ最遠floorへfallbackする。復活した箱は元tileを避け、同じboxIdまたは同じtileにactive boxを重複生成せず、通常の箱取得overlapへ戻る。seedはnextSeedとmap seed、boxIdのslot、復活回数から決定する。
 
 victory、defeat、retryでは復活timerを停止してMapから外し、旧generationのcallbackを無効化する。terminalへ入ったrunの箱を後から復活させない。
 

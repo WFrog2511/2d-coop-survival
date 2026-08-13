@@ -24,7 +24,7 @@ import {
   advanceRunState,
   advanceSurvivalState,
   canFireAt,
-  collectAmmoBox,
+  collectTypedAmmoBox,
   collectMaterial,
   collectWeapon,
   completeReload,
@@ -35,6 +35,7 @@ import {
   damageEnemy,
   damagePlayer,
   defeatRun,
+  dropAmmoBox,
   droneLateralSpeedAt,
   enemySpeedMultiplierForPhase,
   fireWeapon,
@@ -78,7 +79,6 @@ describe('戦闘ルール', () => {
       magazineSize: 20,
       reserveInitial: 40,
       reserveMax: 60,
-      ammoBoxRecovery: 20,
       reloadMs: 1200,
       pellets: 1,
       knockback: 0,
@@ -91,7 +91,6 @@ describe('戦闘ルール', () => {
       magazineSize: 4,
       reserveInitial: 8,
       reserveMax: 12,
-      ammoBoxRecovery: 4,
       reloadMs: 1600,
       pellets: 5,
       knockback: 240,
@@ -110,7 +109,6 @@ describe('戦闘ルール', () => {
       pellets: 1,
       reserveInitial: HANDGUN_AMMO.reserveInitial,
       reserveMax: HANDGUN_AMMO.reserveMax,
-      ammoBoxRecovery: HANDGUN_AMMO.ammoBoxRecovery,
     });
     expect(Object.values(HANDGUN_AMMO).every(amount => amount % WEAPONS.handgun.magazineSize === 0)).toBe(true);
   });
@@ -286,7 +284,14 @@ describe('戦闘ルール', () => {
     expect(damagePlayer(victory, 100)).toBe(victory);
     expect(damageEnemy(victory, 'basic-1', 100)).toBe(victory);
     expect(respawnEnemy(victory, 'basic-1')).toBe(victory);
-    expect(collectAmmoBox(victory)).toEqual({ state: victory, collected: false });
+    AMMO_TYPE_ORDER.forEach((ammoType) => {
+      expect(collectTypedAmmoBox(victory, ammoType, AMMO_TYPES[ammoType].boxQuantity)).toEqual({
+        state: victory,
+        collected: 0,
+        remaining: AMMO_TYPES[ammoType].boxQuantity,
+      });
+      expect(dropAmmoBox(victory, ammoType)).toEqual({ state: victory, dropped: 0 });
+    });
     expect(collectWeapon(victory, 'shotgun')).toBe(victory);
     expect(collectMaterial(victory, 'scrap', 1)).toBe(victory);
   });
@@ -323,7 +328,7 @@ describe('戦闘ルール', () => {
     expect(completed.reserve.handgun).toBe(INITIAL_STATE.reserve.handgun);
     expect(completed.reloading).toBeNull();
   });
-  it('予備弾薬が不足するリロードと共通箱の上限回復を扱う', () => {
+  it('予備弾薬が不足するリロードと種類別弾薬箱の部分・全量移動を扱う', () => {
     const partial = {
       ...INITIAL_STATE,
       ammo: { ...INITIAL_STATE.ammo, rifle: 12 },
@@ -341,21 +346,25 @@ describe('戦闘ルール', () => {
     expect(startReload(emptyReserve)).toBe(emptyReserve);
     expect(emptyReserve.reloading).toBeNull();
     expect(completeReload(emptyReserve, 'rifle')).toBe(emptyReserve);
-    const box = collectAmmoBox({
-      ...INITIAL_STATE,
-      reserve: {
-        rifle: WEAPONS.rifle.reserveMax - WEAPONS.rifle.ammoBoxRecovery / 2,
-        shotgun: WEAPONS.shotgun.reserveMax - WEAPONS.shotgun.ammoBoxRecovery / 2,
-        handgun: WEAPONS.handgun.reserveMax,
-      },
+    AMMO_TYPE_ORDER.forEach((ammoType) => {
+      const { weapon, boxQuantity } = AMMO_TYPES[ammoType];
+      const partialCapacity = Math.max(1, Math.floor(boxQuantity / 2));
+      const partial = collectTypedAmmoBox({
+        ...INITIAL_STATE,
+        reserve: { ...INITIAL_STATE.reserve, [weapon]: WEAPONS[weapon].reserveMax - partialCapacity },
+      }, ammoType, boxQuantity);
+      expect(partial.collected).toBe(partialCapacity);
+      expect(partial.remaining).toBe(boxQuantity - partialCapacity);
+      expect(partial.state.reserve[weapon]).toBe(WEAPONS[weapon].reserveMax);
+      const full = collectTypedAmmoBox(partial.state, ammoType, partial.remaining);
+      expect(full).toEqual({ state: partial.state, collected: 0, remaining: partial.remaining });
+
+      const dropped = dropAmmoBox(INITIAL_STATE, ammoType);
+      expect(dropped.dropped).toBe(Math.min(INITIAL_STATE.reserve[weapon], boxQuantity));
+      expect(dropped.state.reserve[weapon]).toBe(INITIAL_STATE.reserve[weapon] - dropped.dropped);
+      const empty = { ...INITIAL_STATE, reserve: { ...INITIAL_STATE.reserve, [weapon]: 0 } };
+      expect(dropAmmoBox(empty, ammoType)).toEqual({ state: empty, dropped: 0 });
     });
-    expect(box.collected).toBe(true);
-    expect(box.state.reserve.rifle).toBe(WEAPONS.rifle.reserveMax);
-    expect(box.state.reserve.shotgun).toBe(WEAPONS.shotgun.reserveMax);
-    expect(box.state.reserve.handgun).toBe(WEAPONS.handgun.reserveMax);
-    const full = collectAmmoBox(box.state);
-    expect(full.collected).toBe(false);
-    expect(full.state).toBe(box.state);
   });
 
   it('武器切替はリロードを中断し、残弾を保持する', () => {
@@ -387,8 +396,10 @@ describe('戦闘ルール', () => {
   it('弾薬種は既存WeaponIdへ一意に対応し、sidearmはhandgun弾薬を共有する', () => {
     const weaponIds = AMMO_TYPE_ORDER.map(type => AMMO_TYPES[type].weapon);
     expect(new Set(weaponIds).size).toBe(Object.keys(WEAPONS).length);
+    expect(new Set(AMMO_TYPE_ORDER.map(type => AMMO_TYPES[type].worldColor)).size).toBe(AMMO_TYPE_ORDER.length);
     AMMO_TYPE_ORDER.forEach((type) => {
       expect(ammoTypeForWeapon(AMMO_TYPES[type].weapon)).toBe(type);
+      expect(AMMO_TYPES[type].boxQuantity).toBeGreaterThan(0);
     });
     expect(ammoTypeForWeapon(weaponIdForModel('revolver'))).toBe(ammoTypeForWeapon(weaponIdForModel('compact-pistol')));
   });

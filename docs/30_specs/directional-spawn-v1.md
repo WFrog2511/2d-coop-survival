@@ -66,7 +66,7 @@ enemy用`selectEnemySpawnTile`は次の順で候補を絞り込む。
 
 弾薬箱用`selectSpawnTile`だけはviewport外なしで最遠floorへfallbackする。enemy用selectorはstrict条件を一つでも満たせなければ`null`を返す。
 
-敵spawn時の`occupied`は、現在のplayer tile、activeな弾薬箱tile、activeなworld item（weapon/material）のtile、対象以外のactiveな敵tileとする。初期spawnでは先に生成した敵もactive enemyとして除外されるため、12体を相互に重複させない。
+敵spawn時の`occupied`は、現在のplayer tile、activeな弾薬箱tile、activeなworld item（weapon/material/ammo）のtile、対象以外のactiveな敵tileとする。初期spawnでは先に生成した敵もactive enemyとして除外されるため、12体を相互に重複させない。
 
 ## phase適用と状態更新
 

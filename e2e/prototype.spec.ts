@@ -9,11 +9,21 @@ type EnemyId = (typeof ENEMY_INSTANCE_IDS)[number];
 type EnemyPresentation = 'normal' | 'boundary' | 'hidden';
 type WorldItemEntry = {
   id: string;
-  kind: 'weapon' | 'material';
+  kind: 'weapon' | 'material' | 'ammo';
   item: string;
   tile: TilePosition;
   quantity: number;
   visualTier: string;
+  worldColor: string;
+  texture: string;
+};
+type AmmoBoxEntry = {
+  boxId: string;
+  tile: TilePosition;
+  ammoType: (typeof AMMO_TYPE_ORDER)[number];
+  quantity: number;
+  worldColor: string;
+  texture: string;
 };
 const INITIAL_ACTIVE_IDS: readonly EnemyId[] = ['basic-1', 'basic-2', 'basic-3', 'basic-4', 'basic-5', 'basic-6', 'drone-1', 'drone-2'];
 const STAGGERED_ENEMIES: readonly { id: EnemyId; delay: number }[] = [
@@ -50,7 +60,10 @@ type ArenaDebugScene = {
   cameras: { main: { worldView: { left: number; top: number; right: number; bottom: number } } };
   children: { getChildren: () => readonly { fillColor?: number }[] };
   player: { x: number; y: number; rotation: number; tintTopLeft: number };
-  state: { ammo: { rifle: number } };
+  state: {
+    ammo: Record<'rifle' | 'shotgun' | 'handgun', number>;
+    reserve: Record<'rifle' | 'shotgun' | 'handgun', number>;
+  };
   enemies: Record<EnemyId, ArenaDebugEnemy>;
   textures: { get: (key: string) => { getSourceImage: () => HTMLCanvasElement } };
   debugRespawnEnemy: (id: EnemyId) => void;
@@ -197,17 +210,51 @@ function tileKeysFromAttribute(value: string | null): string[] {
 async function activeWorldItems(page: import('@playwright/test').Page): Promise<WorldItemEntry[]> {
   const value = await page.getByTestId('world-item-count').getAttribute('data-world-items');
   return tileKeysFromAttribute(value).map((entry) => {
-    const [id, kind, item, tile, quantity, visualTier] = entry.split(':');
+    const [id, kind, item, tile, quantity, visualTier, worldColor, texture] = entry.split(':');
     const [x, y] = tile?.split(',').map(Number) ?? [];
     if (
       !id
-      || (kind !== 'weapon' && kind !== 'material')
+      || (kind !== 'weapon' && kind !== 'material' && kind !== 'ammo')
       || !item
       || !Number.isInteger(x)
       || !Number.isInteger(y)
       || !Number.isSafeInteger(Number(quantity))
     ) throw new Error(`world itemの観測値が不正です: ${entry}`);
-    return { id, kind, item, tile: { x, y }, quantity: Number(quantity), visualTier: visualTier ?? '' };
+    return {
+      id,
+      kind,
+      item,
+      tile: { x, y },
+      quantity: Number(quantity),
+      visualTier: visualTier ?? '',
+      worldColor: worldColor ?? '',
+      texture: texture ?? '',
+    };
+  });
+}
+
+async function activeAmmoBoxes(page: import('@playwright/test').Page): Promise<AmmoBoxEntry[]> {
+  const value = await page.getByTestId('ammo-box-count').getAttribute('data-active-boxes');
+  return tileKeysFromAttribute(value).map((entry) => {
+    const [boxId, tile, ammoType, quantity, worldColor, texture] = entry.split(':');
+    const [x, y] = tile?.split(',').map(Number) ?? [];
+    if (
+      !boxId
+      || !AMMO_TYPE_ORDER.includes(ammoType as (typeof AMMO_TYPE_ORDER)[number])
+      || !Number.isInteger(x)
+      || !Number.isInteger(y)
+      || !Number.isSafeInteger(Number(quantity))
+      || !worldColor
+      || !texture
+    ) throw new Error(`弾薬箱の観測値が不正です: ${entry}`);
+    return {
+      boxId,
+      tile: { x, y },
+      ammoType: ammoType as (typeof AMMO_TYPE_ORDER)[number],
+      quantity: Number(quantity),
+      worldColor,
+      texture,
+    };
   });
 }
 
@@ -970,6 +1017,72 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
   await expect(detail).toBeHidden();
 });
 
+test('弾薬ポーチの種類別弾薬をworldへ置き、部分取得してEで回収できる', async ({ page }) => {
+  test.setTimeout(30_000);
+  await page.clock.install({ time: 15 });
+  await page.clock.pauseAt(15);
+  await page.goto(devStartUrl('/'));
+  await setArenaPhysics(page, 'pause');
+  const ammoType = 'handgun-ammo' as const;
+  const ammo = AMMO_TYPES[ammoType];
+  const droppedQuantity = Math.max(1, Math.floor(ammo.boxQuantity / 2));
+  if (droppedQuantity >= ammo.boxQuantity)
+    throw new Error('less-than-chunk確認には弾薬箱の設定量が2以上必要です。');
+  await page.evaluate(({ weapon, reserve }) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.state.reserve[weapon] = reserve;
+    scene.refreshHud();
+  }, { weapon: ammo.weapon, reserve: droppedQuantity });
+
+  await page.keyboard.press('Tab');
+  const pouchEntry = page.getByTestId(`ammo-pouch-${ammoType}`);
+  await expect(pouchEntry).toHaveAttribute('draggable', 'true');
+  await expect(pouchEntry).toHaveAttribute('data-box-quantity', String(ammo.boxQuantity));
+  await expect(pouchEntry).toHaveAttribute('data-world-color', ammo.worldColor);
+  await dragInventorySlot(page, `ammo-pouch-${ammoType}`, '#game');
+  await expect(pouchEntry).toHaveAttribute('data-reserve', '0');
+
+  const dropped = (await activeWorldItems(page)).find(item => item.id.startsWith('dropped-ammo-'));
+  if (!dropped || dropped.kind !== 'ammo')
+    throw new Error('worldへ置いた種類別弾薬が必要です。');
+  expect(dropped.item).toBe(ammoType);
+  expect(dropped.quantity).toBe(droppedQuantity);
+  expect(dropped.quantity).toBeLessThan(ammo.boxQuantity);
+  expect(dropped.worldColor).toBe(ammo.worldColor);
+  expect(dropped.texture).toBe(`ammo-box-${ammoType}`);
+  await expect(page.getByTestId('pickup-prompt')).toBeVisible();
+  await expect(page.getByTestId('pickup-target')).toHaveText(`${ammo.label} ${dropped.quantity}発`);
+  await expect(page.getByTestId('pickup-action')).toHaveText('を拾う [E]');
+
+  const partialCapacity = dropped.quantity - 1;
+  if (partialCapacity <= 0)
+    throw new Error('部分取得確認にはworldへ置く弾薬が2発以上必要です。');
+  await page.evaluate(({ weapon, reserve }) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.state.reserve[weapon] = reserve;
+    scene.refreshHud();
+  }, { weapon: ammo.weapon, reserve: WEAPONS[ammo.weapon].reserveMax - partialCapacity });
+  await page.keyboard.press('e');
+  const remainingQuantity = dropped.quantity - partialCapacity;
+  const partiallyCollected = (await activeWorldItems(page)).find(item => item.id === dropped.id);
+  expect(partiallyCollected).toMatchObject({ kind: 'ammo', quantity: remainingQuantity });
+  await expect(pouchEntry).toHaveAttribute('data-reserve', String(WEAPONS[ammo.weapon].reserveMax));
+  await page.keyboard.press('e');
+  expect((await activeWorldItems(page)).find(item => item.id === dropped.id)).toMatchObject({ quantity: remainingQuantity });
+
+  await page.evaluate(({ weapon, reserve }) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.state.reserve[weapon] = reserve;
+    scene.refreshHud();
+  }, { weapon: ammo.weapon, reserve: WEAPONS[ammo.weapon].reserveMax - remainingQuantity });
+  await page.keyboard.press('e');
+  expect((await activeWorldItems(page)).some(item => item.id === dropped.id)).toBe(false);
+  await expect(pouchEntry).toHaveAttribute('data-reserve', String(WEAPONS[ammo.weapon].reserveMax));
+});
+
 test('同じtileのスクラップは数量と見た目を集約しEで取得できる', async ({ page }) => {
   test.setTimeout(45_000);
   const schedule = createRunSchedule(15_000, 1_000);
@@ -1022,7 +1135,7 @@ test('同じtileのスクラップは数量と見た目を集約しEで取得で
   expect((await activeWorldItems(page)).filter(item => item.id === secondScrap.id)).toHaveLength(0);
 });
 
-test('world weaponを置けない場合はinventoryとworldを変えずに通知する', async ({ page }) => {
+test('world weaponと弾薬を置けない場合はinventoryとworldを変えずに通知する', async ({ page }) => {
   test.setTimeout(30_000);
   const schedule = createRunSchedule(15_000, 1_000);
   await page.clock.install({ time: 15 });
@@ -1077,6 +1190,17 @@ test('world weaponを置けない場合はinventoryとworldを変えずに通知
   await expect(page.getByTestId('feedback')).toHaveText('置ける場所がありません');
   await expect(page.getByTestId('quick-slot-2')).toHaveAttribute('data-model', 'shotgun');
   expect(await activeWorldItems(page)).toEqual(worldItemsBeforeDrop);
+
+  const ammoType = 'rifle-ammo' as const;
+  const pouch = page.getByTestId('ammo-pouch');
+  const pouchEntry = page.getByTestId(`ammo-pouch-${ammoType}`);
+  const reserveBeforeAmmoDrop = await pouchEntry.getAttribute('data-reserve');
+  await beginInventoryDrag(page, `ammo-pouch-${ammoType}`);
+  await expect(pouch).toHaveAttribute('data-drag-source', `ammo:${ammoType}`);
+  await dragInventorySlot(page, `ammo-pouch-${ammoType}`, '#game');
+  await expect(page.getByTestId('feedback')).toHaveText('置ける場所がありません');
+  await expect(pouchEntry).toHaveAttribute('data-reserve', reserveBeforeAmmoDrop ?? '');
+  expect(await activeWorldItems(page)).toEqual(worldItemsBeforeDrop);
 });
 
 test('満タン弾薬箱と同tileのスクラップをEで取得できる', async ({ page }) => {
@@ -1089,26 +1213,18 @@ test('満タン弾薬箱と同tileのスクラップをEで取得できる', asy
   await setArenaPhysics(page, 'pause');
   await startInitialCombat(page, schedule.restDurationMs);
   const mapSeed = Number(await page.getByTestId('map-seed').textContent());
-  const ammoBoxes = selectAmmoBoxTiles(generateArenaMap(mapSeed));
-  const refillBoxCount = Math.max(...Object.values(WEAPONS).map(weapon =>
-    Math.ceil((weapon.reserveMax - weapon.reserveInitial) / weapon.ammoBoxRecovery)));
-  const refillBoxes = ammoBoxes.slice(0, refillBoxCount);
-  const targetBox = ammoBoxes[refillBoxCount];
-  if (refillBoxes.length !== refillBoxCount || !targetBox)
-    throw new Error('満タン確認用と競合確認用の弾薬箱が必要です。');
+  const targetBox = selectAmmoBoxTiles(generateArenaMap(mapSeed))[0];
+  if (!targetBox)
+    throw new Error('満タン競合確認用の弾薬箱が必要です。');
   const ammoBoxCount = page.getByTestId('ammo-box-count');
   const targetBoxKey = `${targetBox.x},${targetBox.y}`;
-
-  for (const refillBox of refillBoxes) {
-    await page.evaluate((tile) => {
-      const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
-      if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
-      scene.debugMovePlayerTo(tile);
-    }, refillBox);
-    await page.keyboard.press('e');
-    await page.clock.runFor(100);
-    await expect.poll(async () => tileKeysFromAttribute(await ammoBoxCount.getAttribute('data-active-tiles'))).not.toContain(`${refillBox.x},${refillBox.y}`);
-  }
+  await page.evaluate((weapons) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    for (const [weapon, definition] of Object.entries(weapons))
+      scene.state.reserve[weapon as 'rifle' | 'shotgun' | 'handgun'] = definition.reserveMax;
+    scene.refreshHud();
+  }, WEAPONS);
   await expect.poll(async () => tileKeysFromAttribute(await ammoBoxCount.getAttribute('data-active-tiles'))).toContain(targetBoxKey);
 
   await moveEnemyToTile(page, 'basic-1', targetBox);
@@ -1148,6 +1264,10 @@ test('terminal中はpickupを止め、retryで所持品とworld itemを初期化
   await page.keyboard.press('Tab');
   await expect(inventoryDetail).toBeVisible();
   await expect(ammoPouch).toBeVisible();
+  await dragInventorySlot(page, 'ammo-pouch-handgun-ammo', '#game');
+  const droppedAmmo = (await activeWorldItems(page)).find(item => item.id.startsWith('dropped-ammo-'));
+  if (!droppedAmmo || droppedAmmo.kind !== 'ammo')
+    throw new Error('retry初期化確認用のworld弾薬が必要です。');
   await beginInventoryDrag(page, 'inventory-quick-slot-1');
   await expect(inventoryDetail).toHaveAttribute('data-drag-source', 'quick:0');
   await page.clock.fastForward(runDurationMs(schedule));
@@ -1183,6 +1303,17 @@ test('terminal中はpickupを止め、retryで所持品とworld itemを初期化
   const retriedItems = await activeWorldItems(page);
   expect(retriedItems.filter(item => item.kind === 'weapon').map(item => item.item).sort()).toEqual([...INITIAL_WORLD_WEAPON_MODELS].sort());
   expect(retriedItems.filter(item => item.kind === 'material')).toHaveLength(0);
+  expect(retriedItems.some(item => item.id === droppedAmmo.id)).toBe(false);
+  const retriedBoxes = await activeAmmoBoxes(page);
+  expect(retriedBoxes).toHaveLength(selectAmmoBoxTiles(generateArenaMap(Number(await page.getByTestId('map-seed').textContent()))).length);
+  retriedBoxes.forEach((box, index) => {
+    const expectedType = AMMO_TYPE_ORDER[index % AMMO_TYPE_ORDER.length];
+    if (!expectedType) throw new Error('弾薬種の設定が必要です。');
+    expect(box.ammoType).toBe(expectedType);
+    expect(box.quantity).toBe(AMMO_TYPES[expectedType].boxQuantity);
+    expect(box.worldColor).toBe(AMMO_TYPES[expectedType].worldColor);
+    expect(box.texture).toBe(`ammo-box-${expectedType}`);
+  });
 });
 
 test('ガンスリンガーは回避中の敵を一度だけブーツナイフで通過し、コンボと速度buffを更新する', async ({ page }) => {
@@ -1512,6 +1643,13 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   const firstBoxKey = firstBox.x + ',' + firstBox.y;
   const initialBoxKeys = await page.getByTestId('ammo-box-count').getAttribute('data-active-tiles');
   expect(tileKeysFromAttribute(initialBoxKeys)).toContain(firstBoxKey);
+  const firstAmmoBox = (await activeAmmoBoxes(page)).find(entry =>
+    entry.boxId === `ammo-box-${boxTiles.findIndex(tile => tile.x === firstBox.x && tile.y === firstBox.y) + 1}`);
+  if (!firstAmmoBox) throw new Error('種類別弾薬箱の観測値が必要です。');
+  const reservesBeforeAmmoPickup = Object.fromEntries(await Promise.all(AMMO_TYPE_ORDER.map(async type => [
+    type,
+    Number(await page.getByTestId(`ammo-pouch-${type}`).getAttribute('data-reserve')),
+  ]))) as Record<(typeof AMMO_TYPE_ORDER)[number], number>;
   await page.evaluate((tile) => {
     const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
     if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
@@ -1519,23 +1657,21 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   }, firstBox);
   await expect(page.getByTestId('ammo-box-count')).toHaveText('4');
   await expect(page.getByTestId('pickup-prompt')).toBeVisible();
-  await expect(page.getByTestId('pickup-target')).toHaveText('弾薬箱');
-  await expect(page.getByTestId('pickup-action')).toHaveText('予備弾薬を補給 [E]');
+  await expect(page.getByTestId('pickup-target')).toHaveText(`${AMMO_TYPES[firstAmmoBox.ammoType].label} ${firstAmmoBox.quantity}発`);
+  await expect(page.getByTestId('pickup-action')).toHaveText('を拾う [E]');
   await page.keyboard.press('e');
   await expect(page.getByTestId('ammo-box-count')).toHaveText('3');
   const waitingBoxKeys = await page.getByTestId('ammo-box-count').getAttribute('data-active-tiles');
   expect(tileKeysFromAttribute(waitingBoxKeys)).not.toContain(firstBoxKey);
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-respawn-tiles', firstBoxKey);
-  await expect(page.getByTestId('ammo-reserve')).toHaveText('予備 60/60');
   const ammoPouch = page.getByTestId('ammo-pouch');
   await page.keyboard.press('Tab');
   await expect(ammoPouch).toBeVisible();
   for (const type of AMMO_TYPE_ORDER) {
     const weapon = AMMO_TYPES[type].weapon;
-    const expectedReserve = Math.min(
-      WEAPONS[weapon].reserveInitial + WEAPONS[weapon].ammoBoxRecovery,
-      WEAPONS[weapon].reserveMax,
-    );
+    const expectedReserve = type === firstAmmoBox.ammoType
+      ? Math.min(reservesBeforeAmmoPickup[type] + firstAmmoBox.quantity, WEAPONS[weapon].reserveMax)
+      : reservesBeforeAmmoPickup[type];
     await expect(page.getByTestId(`ammo-pouch-${type}`)).toHaveAttribute('data-reserve', String(expectedReserve));
   }
   await page.keyboard.press('Tab');
@@ -1544,7 +1680,12 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expect(page.getByTestId('ammo-box-count')).toHaveText('3');
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-active-tiles', waitingBoxKeys ?? '');
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-respawn-tiles', firstBoxKey);
-  await expect(page.getByTestId('ammo-reserve')).toHaveAttribute('data-reserve', '60');
+  await expect(page.getByTestId('ammo-reserve')).toHaveAttribute(
+    'data-reserve',
+    String(firstAmmoBox.ammoType === 'rifle-ammo'
+      ? Math.min(reservesBeforeAmmoPickup['rifle-ammo'] + firstAmmoBox.quantity, WEAPONS.rifle.reserveMax)
+      : reservesBeforeAmmoPickup['rifle-ammo']),
+  );
 
   await setArenaPhysics(page, 'pause');
   await collectShotgunPickup(page);
@@ -2128,6 +2269,11 @@ test('弾薬箱は取得後30秒で同じboxIdのまま新しい画面外floor�
   const firstBoxKey = firstBox.x + ',' + firstBox.y;
   const boxCount = page.getByTestId('ammo-box-count');
   await expect(boxCount).toHaveAttribute('data-active-boxes', new RegExp(boxId + ':' + firstBoxKey));
+  const initialBox = (await activeAmmoBoxes(page)).find(entry => entry.boxId === boxId);
+  if (!initialBox) throw new Error('初期種類別弾薬箱が必要です。');
+  expect(initialBox.quantity).toBe(AMMO_TYPES[initialBox.ammoType].boxQuantity);
+  expect(initialBox.worldColor).toBe(AMMO_TYPES[initialBox.ammoType].worldColor);
+  expect(initialBox.texture).toBe(`ammo-box-${initialBox.ammoType}`);
   await collectAmmoBoxWithClock(page, firstBox, boxCount);
   await expect(boxCount).toHaveText('3');
   await expect(boxCount).toHaveAttribute('data-respawn-boxes', boxId);
@@ -2136,18 +2282,21 @@ test('弾薬箱は取得後30秒で同じboxIdのまま新しい画面外floor�
   await page.clock.runFor(AMMO_BOX_RESPAWN_MS);
   await expect.poll(async () => boxCount.textContent()).toBe('4');
   await expect(boxCount).toHaveAttribute('data-respawn-boxes', '');
-  const activeEntries = (await boxCount.getAttribute('data-active-boxes'))?.split('|') ?? [];
-  const respawnedEntry = activeEntries.find(entry => entry.startsWith(boxId + ':'));
-  if (!respawnedEntry) throw new Error('復活した弾薬箱のboxIdが必要です。');
-  const respawnedKey = respawnedEntry.split(':')[1];
-  if (!respawnedKey) throw new Error('復活した弾薬箱のtileが必要です。');
+  const activeEntries = await activeAmmoBoxes(page);
+  const respawnedEntry = activeEntries.find(entry => entry.boxId === boxId);
+  if (!respawnedEntry) throw new Error('復活した種類別弾薬箱のboxIdが必要です。');
+  const respawnedKey = `${respawnedEntry.tile.x},${respawnedEntry.tile.y}`;
   expect(respawnedKey).not.toBe(firstBoxKey);
+  expect(respawnedEntry.ammoType).toBe(initialBox.ammoType);
+  expect(respawnedEntry.quantity).toBe(AMMO_TYPES[initialBox.ammoType].boxQuantity);
+  expect(respawnedEntry.worldColor).toBe(initialBox.worldColor);
+  expect(respawnedEntry.texture).toBe(initialBox.texture);
   expect(initialWorldItemTiles.has(respawnedKey)).toBe(false);
   const [x, y] = respawnedKey.split(',').map(Number);
   expect(map.tiles[y][x]).toBe('floor');
   expect(findPath(map, map.start, { x, y }).length).toBeGreaterThan(0);
   expect((await boxCount.getAttribute('data-offscreen-boxes'))?.split('|')).toContain(boxId);
-  expect(new Set(activeEntries.map(entry => entry.split(':')[0])).size).toBe(activeEntries.length);
+  expect(new Set(activeEntries.map(entry => entry.boxId)).size).toBe(activeEntries.length);
 });
 
 test('victoryとretryは弾薬箱の復活待ちをclearし、新しいrunを初期化する', async ({ page }) => {
