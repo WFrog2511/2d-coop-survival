@@ -1,7 +1,7 @@
 import type { EnemyVisibility, SpawnDirection, TilePosition } from '../arena-map';
 import { DIRECTION_LABELS, ENEMY_IDS } from '../game-data';
 import { PLAYER_ROLES, type PlayerRoleId } from '../player-data';
-import { STABLE_ENEMY_SLOT_COUNT, WEAPON_MODELS, WEAPONS, activeEnemyCount, currentRunPhase, currentWaveNumber, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, weaponIdForModel, type CombatState, type EnemyInstanceId, type RunState, type WeaponModel } from '../rules';
+import { STABLE_ENEMY_SLOT_COUNT, WEAPON_MODELS, WEAPONS, activeEnemyCount, activeWeaponId, currentRunPhase, currentWaveNumber, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, weaponIdForModel, type CombatState, type EnemyInstanceId, type InventorySlotRef, type RunState, type WeaponModel } from '../rules';
 
 export type EnemyHudView = {
   stableId: string;
@@ -42,6 +42,22 @@ export type ArenaHudView = {
   playerTile: TilePosition;
 };
 
+/** 詳細インベントリから移動する武器のDOM上の行き先。 */
+export type InventoryDropTarget = InventorySlotRef | 'world';
+
+function inventorySlotRefFromTarget(target: EventTarget | null): InventorySlotRef | undefined {
+  if (!(target instanceof Element)) return undefined;
+  const slot = target.closest<HTMLElement>('[data-inventory-container][data-index]');
+  const container = slot?.dataset.inventoryContainer;
+  const index = Number(slot?.dataset.index);
+  if ((container !== 'quick' && container !== 'backpack') || !Number.isInteger(index)) return undefined;
+  return { container, index };
+}
+
+function sameInventorySlot(left: InventorySlotRef, right: InventorySlotRef): boolean {
+  return left.container === right.container && left.index === right.index;
+}
+
 function enemyRecord<T>(create: (id: EnemyInstanceId) => T): Record<EnemyInstanceId, T> {
   return Object.fromEntries(ENEMY_IDS.map(id => [id, create(id)])) as Record<EnemyInstanceId, T>;
 }
@@ -61,6 +77,7 @@ export function formatSurvivalTime(remainingMs: number): string {
 }
 
 export class ArenaHud {
+  private readonly game = element<HTMLElement>('#game');
   private readonly playerHp = element<HTMLOutputElement>('[data-testid="hp"]');
   private readonly playerHpBar = element<HTMLProgressElement>('[data-testid="hp-bar"]');
   private readonly weaponHud = element<HTMLOutputElement>('[data-testid="weapon"]');
@@ -117,14 +134,83 @@ export class ArenaHud {
   private readonly victory = element<HTMLElement>('[data-testid="victory"]');
   private readonly retry = element<HTMLButtonElement>('[data-testid="retry"]');
   private readonly enemyHp = enemyRecord(id => element<HTMLOutputElement>(`[data-testid="${id}-hp"]`));
+  private inventoryDropListener: ((source: InventorySlotRef, target: InventoryDropTarget) => void) | undefined;
+  private dragSource: InventorySlotRef | undefined;
+  private inventoryDragMessage = false;
+
+  private readonly onInventoryDragStart = (event: DragEvent): void => {
+    const source = inventorySlotRefFromTarget(event.target);
+    if (!source || !this.inventoryDropListener || !this.inventoryDetail.contains(event.target as Node))
+      return;
+    const sourceSlot = (event.target as Element).closest<HTMLElement>('[data-inventory-container][data-index]');
+    if (sourceSlot?.dataset.empty === 'true')
+      return;
+    this.dragSource = source;
+    this.inventoryDetail.dataset.dragSource = `${source.container}:${source.index}`;
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', `${source.container}:${source.index}`);
+    }
+  };
+
+  private readonly onInventoryDragEnd = (): void => this.clearInventoryDrag();
+
+  private readonly onInventoryDragOver = (event: DragEvent): void => {
+    const target = inventorySlotRefFromTarget(event.target);
+    if (!this.dragSource || !target)
+      return;
+    event.preventDefault();
+    if (event.dataTransfer)
+      event.dataTransfer.dropEffect = 'move';
+    this.setInventoryDropTarget(target);
+  };
+
+  private readonly onInventoryDrop = (event: DragEvent): void => {
+    const source = this.dragSource;
+    const target = inventorySlotRefFromTarget(event.target);
+    if (!source || !target)
+      return;
+    event.preventDefault();
+    this.inventoryDropListener?.(source, target);
+    this.clearInventoryDrag();
+  };
+
+  private readonly onGameDragOver = (event: DragEvent): void => {
+    if (!this.dragSource)
+      return;
+    event.preventDefault();
+    if (event.dataTransfer)
+      event.dataTransfer.dropEffect = 'move';
+    this.game.dataset.weaponDropTarget = 'true';
+  };
+
+  private readonly onGameDrop = (event: DragEvent): void => {
+    const source = this.dragSource;
+    if (!source)
+      return;
+    event.preventDefault();
+    this.inventoryDropListener?.(source, 'world');
+    this.clearInventoryDrag();
+  };
 
   constructor(spawnConfig: string, runConfig: string) {
     this.spawnPhaseHud.dataset.spawnConfig = spawnConfig;
     this.runPanel.dataset.runConfig = runConfig;
+    this.inventoryDetail.addEventListener('dragstart', this.onInventoryDragStart);
+    this.inventoryDetail.addEventListener('dragend', this.onInventoryDragEnd);
+    this.inventoryDetail.addEventListener('dragover', this.onInventoryDragOver);
+    this.inventoryDetail.addEventListener('drop', this.onInventoryDrop);
+    this.game.addEventListener('dragover', this.onGameDragOver);
+    this.game.addEventListener('drop', this.onGameDrop);
   }
 
   public onRetry(listener: () => void): void {
     this.retry.addEventListener('click', listener);
+  }
+
+  /** Sceneごとに差し替える詳細インベントリのdrop処理を登録する。 */
+  public setInventoryDropListener(listener: ((source: InventorySlotRef, target: InventoryDropTarget) => void) | undefined): void {
+    this.inventoryDropListener = listener;
   }
 
   public setPlayerRole(roleId: PlayerRoleId): void {
@@ -145,6 +231,8 @@ export class ArenaHud {
   public setInventoryOpen(open: boolean): void {
     this.inventoryDetail.hidden = !open;
     this.inventoryDetail.dataset.open = String(open);
+    if (!open)
+      this.clearInventoryDrag();
   }
 
   public updateFps(value: number): void {
@@ -152,6 +240,7 @@ export class ArenaHud {
   }
 
   public setPlaying(): void {
+    this.clearInventoryDrag(true);
     this.feedback.textContent = '-';
     this.resultPanel.hidden = true;
     this.resultPanel.dataset.state = 'playing';
@@ -160,6 +249,7 @@ export class ArenaHud {
   }
 
   public showResult(result: 'defeat' | 'victory'): void {
+    this.clearInventoryDrag(true);
     this.resultPanel.hidden = false;
     this.resultPanel.dataset.state = result;
     this.defeat.hidden = result !== 'defeat';
@@ -168,7 +258,28 @@ export class ArenaHud {
   }
 
   public setFeedback(message: string): void {
+    this.inventoryDragMessage = false;
     this.feedback.textContent = message;
+  }
+
+  /** worldへ置けないときだけ、次のrun境界で消す一時メッセージを表示する。 */
+  public setInventoryDragMessage(message: string): void {
+    this.feedback.textContent = message;
+    this.inventoryDragMessage = true;
+  }
+
+  /** drag sourceとdrop強調を消し、run境界では一時メッセージも消す。 */
+  public clearInventoryDrag(clearMessage = false): void {
+    this.dragSource = undefined;
+    delete this.inventoryDetail.dataset.dragSource;
+    delete this.game.dataset.weaponDropTarget;
+    this.inventoryDetail.querySelectorAll<HTMLElement>('[data-drop-target]').forEach((slot) => {
+      delete slot.dataset.dropTarget;
+    });
+    if (clearMessage && this.inventoryDragMessage) {
+      this.feedback.textContent = '-';
+      this.inventoryDragMessage = false;
+    }
   }
 
   public updateVisibilityMask(alpha: number, obscuredTileCount: number, playerTile: TilePosition): void {
@@ -203,16 +314,26 @@ export class ArenaHud {
       this.enemyHp[id].value = String(view.state.enemies[id].hp);
     });
     const selectedModel = view.state.inventory.quickSlots[view.state.inventory.selectedQuickSlot];
-    const selectedLabel = selectedModel ? WEAPON_MODELS[selectedModel].label : WEAPONS[view.state.weapon].label;
+    const weaponId = activeWeaponId(view.state);
+    const selectedLabel = selectedModel ? WEAPON_MODELS[selectedModel].label : '武器なし';
     this.weaponHud.value = selectedLabel;
-    const weapon = WEAPONS[view.state.weapon];
     this.ammoPanelWeaponHud.value = selectedLabel;
-    this.ammoHud.value = view.state.ammo[view.state.weapon] + '/' + weapon.magazineSize;
-    this.reserveHud.value = '予備 ' + view.state.reserve[view.state.weapon] + '/' + weapon.reserveMax;
-    this.ammoHud.dataset.magazine = String(view.state.ammo[view.state.weapon]);
-    this.ammoHud.dataset.magazineCapacity = String(weapon.magazineSize);
-    this.reserveHud.dataset.reserve = String(view.state.reserve[view.state.weapon]);
-    this.reserveHud.dataset.reserveCapacity = String(weapon.reserveMax);
+    if (weaponId) {
+      const weapon = WEAPONS[weaponId];
+      this.ammoHud.value = view.state.ammo[weaponId] + '/' + weapon.magazineSize;
+      this.reserveHud.value = '予備 ' + view.state.reserve[weaponId] + '/' + weapon.reserveMax;
+      this.ammoHud.dataset.magazine = String(view.state.ammo[weaponId]);
+      this.ammoHud.dataset.magazineCapacity = String(weapon.magazineSize);
+      this.reserveHud.dataset.reserve = String(view.state.reserve[weaponId]);
+      this.reserveHud.dataset.reserveCapacity = String(weapon.reserveMax);
+    } else {
+      this.ammoHud.value = '-/-';
+      this.reserveHud.value = '予備 -/-';
+      this.ammoHud.dataset.magazine = '';
+      this.ammoHud.dataset.magazineCapacity = '';
+      this.reserveHud.dataset.reserve = '';
+      this.reserveHud.dataset.reserveCapacity = '';
+    }
     this.updateInventory(view.state);
     this.worldItemCountHud.value = String(view.activeWorldItemEntries.length);
     this.worldItemCountHud.dataset.worldItems = view.activeWorldItemEntries.join('|');
@@ -240,7 +361,7 @@ export class ArenaHud {
         this.updateWeaponSlot(quickSlot, model, index, selected);
       const inventoryDetailQuickSlot = this.inventoryDetailQuickSlots[index];
       if (inventoryDetailQuickSlot)
-        this.updateWeaponSlot(inventoryDetailQuickSlot, model, index, selected);
+        this.updateWeaponSlot(inventoryDetailQuickSlot, model, index, selected, 'quick');
     });
     state.inventory.backpackSlots.forEach((model, index) => {
       const slot = this.backpackSlots[index];
@@ -252,13 +373,21 @@ export class ArenaHud {
       slot.dataset.model = model ?? '';
       slot.dataset.weapon = model ? weaponIdForModel(model) : '';
       slot.dataset.empty = String(model === null);
+      slot.dataset.inventoryContainer = 'backpack';
+      slot.draggable = model !== null;
     });
     this.inventoryDetail.dataset.selectedQuickSlot = String(state.inventory.selectedQuickSlot);
     this.scrapHud.value = `スクラップ ${state.inventory.materials.scrap}`;
     this.scrapHud.dataset.count = String(state.inventory.materials.scrap);
   }
 
-  private updateWeaponSlot(slot: HTMLOutputElement, model: WeaponModel | null, index: number, selected: boolean): void {
+  private updateWeaponSlot(
+    slot: HTMLOutputElement,
+    model: WeaponModel | null,
+    index: number,
+    selected: boolean,
+    inventoryContainer?: InventorySlotRef['container'],
+  ): void {
     const label = model ? WEAPON_MODELS[model].label : '空き';
     slot.value = `${index + 1} ${label}${selected ? '（選択中）' : ''}`;
     slot.dataset.index = String(index);
@@ -266,6 +395,23 @@ export class ArenaHud {
     slot.dataset.weapon = model ? weaponIdForModel(model) : '';
     slot.dataset.empty = String(model === null);
     slot.dataset.selected = String(selected);
+    if (inventoryContainer) {
+      slot.dataset.inventoryContainer = inventoryContainer;
+      slot.draggable = model !== null;
+    } else {
+      delete slot.dataset.inventoryContainer;
+      slot.draggable = false;
+    }
+  }
+
+  private setInventoryDropTarget(target: InventorySlotRef): void {
+    this.inventoryDetail.querySelectorAll<HTMLElement>('[data-drop-target]').forEach((slot) => {
+      delete slot.dataset.dropTarget;
+    });
+    const selector = `[data-inventory-container="${target.container}"][data-index="${target.index}"]`;
+    const slot = this.inventoryDetail.querySelector<HTMLElement>(selector);
+    if (slot && this.dragSource && !sameInventorySlot(this.dragSource, target))
+      slot.dataset.dropTarget = 'true';
   }
 
   public updateReloadProgress(reload: { active: boolean; progress: number }): void {

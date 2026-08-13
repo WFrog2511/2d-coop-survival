@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { SPAWN_PHASE_MS, TILE_SIZE, enemyVisibility, findPath, generateArenaMap, hasLineOfSight, hiddenRecycleThresholdFor, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, spawnDirectionForSlot, type SpawnDirection, type TilePosition, viewportTileRect } from '../src/arena-map';
+import { SPAWN_PHASE_MS, TILE_SIZE, WORLD_WEAPON_DROP_MAX_PATH_DISTANCE, enemyVisibility, findPath, generateArenaMap, hasLineOfSight, hiddenRecycleThresholdFor, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, spawnDirectionForSlot, type SpawnDirection, type TilePosition, viewportTileRect } from '../src/arena-map';
 import { formatSurvivalTime } from '../src/arena/hud';
 import { INITIAL_WORLD_WEAPON_MODELS, SCRAP_DROP_AMOUNTS, SCRAP_VISUAL_TIER_THRESHOLDS, WORLD_SIDEARM_MODELS, scrapVisualTierFor } from '../src/game-data';
 import { GUNSLINGER_BOOT_KNIFE_DAMAGE, GUNSLINGER_COMBO_PER_EVENT, GUNSLINGER_COMBO_TIMEOUT_MS } from '../src/player-data';
@@ -147,6 +147,37 @@ async function activeWorldItems(page: import('@playwright/test').Page): Promise<
     ) throw new Error(`world itemの観測値が不正です: ${entry}`);
     return { id, kind, item, tile: { x, y }, quantity: Number(quantity), visualTier: visualTier ?? '' };
   });
+}
+
+async function dragInventorySlot(
+  page: import('@playwright/test').Page,
+  sourceTestId: string,
+  targetSelector: string,
+): Promise<void> {
+  await page.evaluate(({ sourceId, target }) => {
+    const source = document.querySelector<HTMLElement>(`[data-testid="${sourceId}"]`);
+    const destination = document.querySelector<HTMLElement>(target);
+    if (!source || !destination)
+      throw new Error('inventory drag/drop用のDOM要素が見つかりません。');
+    const dataTransfer = new DataTransfer();
+    source.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer }));
+    destination.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer }));
+    destination.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer }));
+    source.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer }));
+  }, { sourceId: sourceTestId, target: targetSelector });
+}
+
+async function beginInventoryDrag(page: import('@playwright/test').Page, sourceTestId: string): Promise<void> {
+  await page.evaluate((sourceId) => {
+    const source = document.querySelector<HTMLElement>(`[data-testid="${sourceId}"]`);
+    if (!source)
+      throw new Error('inventory drag開始用のDOM要素が見つかりません。');
+    source.dispatchEvent(new DragEvent('dragstart', {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: new DataTransfer(),
+    }));
+  }, sourceTestId);
 }
 
 async function collectShotgunPickup(page: import('@playwright/test').Page): Promise<WorldItemEntry> {
@@ -651,10 +682,17 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
   const quickSlot1 = page.getByTestId('quick-slot-1');
   const quickSlot2 = page.getByTestId('quick-slot-2');
   const quickSlot3 = page.getByTestId('quick-slot-3');
+  const canvasLocator = page.locator('#game canvas');
   await expect(quickSlot1).toHaveAttribute('data-model', 'rifle');
   await expect(quickSlot1).toHaveAttribute('data-selected', 'true');
   await expect(quickSlot2).toHaveAttribute('data-empty', 'true');
   await expect(quickSlot3).toHaveAttribute('data-empty', 'true');
+  await expect(quickSlot1).toContainText(WEAPON_MODELS.rifle.label);
+  const quickbarBounds = await documentBounds(page.getByTestId('inventory-panel'));
+  const canvasBounds = await documentBounds(canvasLocator);
+  expect(quickbarBounds.x + quickbarBounds.width / 2).toBeCloseTo(canvasBounds.x + canvasBounds.width / 2, 1);
+  expect(quickbarBounds.y + quickbarBounds.height).toBeLessThanOrEqual(canvasBounds.y + canvasBounds.height);
+  await expect(page.getByTestId('scrap')).toHaveAttribute('data-count', '0');
   const mapSeed = Number(await page.getByTestId('map-seed').textContent());
   const map = generateArenaMap(mapSeed);
   const weaponPickups = (await activeWorldItems(page)).filter(item => item.kind === 'weapon');
@@ -729,6 +767,40 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
   await expect(detail).toBeVisible();
   await expect(page.getByTestId('inventory-quick-slot-3')).toHaveAttribute('data-model', duplicateModel);
   await expect(page.getByTestId('backpack-slots').locator('output')).toHaveCount(10);
+  await expect(page.getByTestId('inventory-quick-slot-3')).toHaveAttribute('draggable', 'true');
+
+  await dragInventorySlot(page, 'inventory-quick-slot-3', '[data-testid="backpack-slot-2"]');
+  await expect(quickSlot3).toHaveAttribute('data-empty', 'true');
+  await expect(detail).toHaveAttribute('data-selected-quick-slot', '2');
+  await expect(page.getByTestId('backpack-slot-2')).toHaveAttribute('data-model', duplicateModel);
+  await expect(page.getByTestId('weapon')).toHaveText('武器なし');
+  await expect(page.getByTestId('ammo')).toHaveText('-/-');
+
+  await dragInventorySlot(page, 'backpack-slot-1', '[data-testid="inventory-quick-slot-3"]');
+  await expect(quickSlot3).toHaveAttribute('data-model', duplicateModel);
+  await expect(detail).toHaveAttribute('data-selected-quick-slot', '2');
+  await expect(quickSlot3).toHaveAttribute('data-selected', 'true');
+  await expect(page.getByTestId('weapon')).toHaveText(WEAPON_MODELS[duplicateModel].label);
+
+  await dragInventorySlot(page, 'inventory-quick-slot-2', '[data-testid="backpack-slot-2"]');
+  await expect(quickSlot2).toHaveAttribute('data-model', duplicateModel);
+  await expect(page.getByTestId('backpack-slot-2')).toHaveAttribute('data-model', 'shotgun');
+  const worldItemsBeforeDrop = await activeWorldItems(page);
+  const playerTileForDrop = parseFloorTile(map, await page.getByTestId('player-tile').textContent(), 'world drop時のplayer');
+  await dragInventorySlot(page, 'backpack-slot-2', '#game');
+  await expect(page.getByTestId('backpack-slot-2')).toHaveAttribute('data-empty', 'true');
+  const dropped = (await activeWorldItems(page)).find(item => item.id.startsWith('dropped-weapon-'));
+  if (!dropped)
+    throw new Error('worldへ置いたweaponが必要です。');
+  expect(dropped.id).toMatch(/^dropped-weapon-/);
+  expect(dropped.item).toBe('shotgun');
+  expect(dropped.tile).toEqual(playerTileForDrop);
+  expect((await activeWorldItems(page)).length).toBe(worldItemsBeforeDrop.length + 1);
+  await expect(page.getByTestId('pickup-prompt')).toBeVisible();
+  await page.keyboard.press('e');
+  await expect(page.getByTestId('backpack-slot-1')).toHaveAttribute('data-model', 'shotgun');
+  expect((await activeWorldItems(page)).some(item => item.id === dropped.id)).toBe(false);
+
   await page.keyboard.press('1');
   await expect(detail).toBeVisible();
   await expect(quickSlot1).toHaveAttribute('data-selected', 'true');
@@ -770,6 +842,63 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
   await page.keyboard.press('e');
   await expect(page.getByTestId('scrap')).toHaveAttribute('data-count', /[1-9]/);
   expect((await activeWorldItems(page)).filter(item => item.id === secondScrap.id)).toHaveLength(0);
+});
+
+test('world weaponを置けない場合はinventoryとworldを変えずに通知する', async ({ page }) => {
+  test.setTimeout(30_000);
+  const schedule = createRunSchedule(15_000, 1_000);
+  await page.clock.install({ time: 15 });
+  await page.clock.pauseAt(15);
+  await page.goto(devStartUrl(
+    `/?enemyInitialCount=${ENEMY_INSTANCE_IDS.length}&enemyStaggerIntervalMs=30000&combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+  ));
+  await setArenaPhysics(page, 'pause');
+  await startInitialCombat(page, schedule.restDurationMs);
+  await expect(page.getByTestId('enemy-current')).toHaveText(String(ENEMY_INSTANCE_IDS.length));
+  const map = generateArenaMap(Number(await page.getByTestId('map-seed').textContent()));
+  const shotgun = (await activeWorldItems(page)).find(item => item.kind === 'weapon' && item.item === 'shotgun');
+  if (!shotgun)
+    throw new Error('配置失敗確認用のショットガンpickupが必要です。');
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, shotgun.tile);
+  await page.keyboard.press('e');
+  await expect(page.getByTestId('quick-slot-2')).toHaveAttribute('data-model', 'shotgun');
+
+  const nearbyFloorsFor = (player: TilePosition): TilePosition[] => map.tiles.flatMap((row, y) => row.flatMap((tile, x) => {
+    const candidate = { x, y };
+    return tile === 'floor' && findPath(map, player, candidate).length - 1 <= WORLD_WEAPON_DROP_MAX_PATH_DISTANCE
+      ? [candidate]
+      : [];
+  }));
+  const dropPlayerTile = map.tiles.flatMap((row, y) => row.flatMap((tile, x) => tile === 'floor' ? [{ x, y }] : []))
+    .find(tile => nearbyFloorsFor(tile).length <= ENEMY_INSTANCE_IDS.length);
+  if (!dropPlayerTile)
+    throw new Error('全近傍候補を敵で塞げるfloor tileが必要です。');
+  const blockedTiles = nearbyFloorsFor(dropPlayerTile);
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, dropPlayerTile);
+  for (const [index, tile] of blockedTiles.entries()) {
+    const id = ENEMY_INSTANCE_IDS[index];
+    if (!id)
+      throw new Error('world drop候補を塞ぐ敵枠が必要です。');
+    await moveEnemyToTile(page, id, tile);
+  }
+
+  await page.keyboard.press('Tab');
+  await expect(page.getByTestId('inventory-detail')).toBeVisible();
+  const worldItemsBeforeDrop = await activeWorldItems(page);
+  await beginInventoryDrag(page, 'inventory-quick-slot-2');
+  await expect(page.getByTestId('inventory-detail')).toHaveAttribute('data-drag-source', 'quick:1');
+  await dragInventorySlot(page, 'inventory-quick-slot-2', '#game');
+  await expect(page.getByTestId('feedback')).toHaveText('置ける場所がありません');
+  await expect(page.getByTestId('quick-slot-2')).toHaveAttribute('data-model', 'shotgun');
+  expect(await activeWorldItems(page)).toEqual(worldItemsBeforeDrop);
 });
 
 test('満タン弾薬箱と同tileのスクラップをEで取得できる', async ({ page }) => {
@@ -839,10 +968,13 @@ test('terminal中はpickupを止め、retryで所持品とworld itemを初期化
   const inventoryDetail = page.getByTestId('inventory-detail');
   await page.keyboard.press('Tab');
   await expect(inventoryDetail).toBeVisible();
+  await beginInventoryDrag(page, 'inventory-quick-slot-1');
+  await expect(inventoryDetail).toHaveAttribute('data-drag-source', 'quick:0');
   await page.clock.fastForward(runDurationMs(schedule));
   await expect(page.getByTestId('victory')).toBeVisible();
   await expect(page.getByTestId('pickup-prompt')).toBeHidden();
   await expect(inventoryDetail).toBeHidden();
+  await expect(inventoryDetail).not.toHaveAttribute('data-drag-source');
   await page.keyboard.press('Tab');
   await expect(inventoryDetail).toBeHidden();
   await page.keyboard.press('e');
@@ -857,6 +989,7 @@ test('terminal中はpickupを止め、retryで所持品とworld itemを初期化
   await expect(page.getByTestId('quick-slot-3')).toHaveAttribute('data-empty', 'true');
   await expect(page.getByTestId('backpack-slots').locator('[data-empty="true"]')).toHaveCount(10);
   await expect(inventoryDetail).toBeHidden();
+  await expect(inventoryDetail).not.toHaveAttribute('data-drag-source');
   await expect(page.getByTestId('scrap')).toHaveAttribute('data-count', '0');
   const retriedItems = await activeWorldItems(page);
   expect(retriedItems.filter(item => item.kind === 'weapon').map(item => item.item).sort()).toEqual([...INITIAL_WORLD_WEAPON_MODELS].sort());

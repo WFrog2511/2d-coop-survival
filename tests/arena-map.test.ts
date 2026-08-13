@@ -9,6 +9,7 @@ import {
   SPAWN_DIRECTIONS,
   SPAWN_PHASE_MS,
   TILE_SIZE,
+  WORLD_WEAPON_DROP_MAX_PATH_DISTANCE,
   basicApproachRoleFor,
   findPath,
   generateArenaMap,
@@ -24,6 +25,7 @@ import {
   selectInitialWeaponPickupTiles,
   selectSpawnTile,
   selectAmmoBoxTiles,
+  selectWorldWeaponDropTile,
   spawnDirectionForSlot,
   spawnPhaseAt,
   viewportTileRect,
@@ -225,6 +227,32 @@ describe('自動生成アリーナ', () => {
     expect(first.every((tile, index) => first.slice(index + 1).every(other =>
       Math.abs(tile.x - other.x) > 1 || Math.abs(tile.y - other.y) > 1,
     ))).toBe(true);
+  });
+
+  test('world weapon dropはplayer tileを優先し、近傍の到達可能floorだけを決定的に選ぶ', () => {
+    const map = mapFrom([
+      ['wall', 'wall', 'wall', 'wall', 'wall', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'floor', 'floor', 'wall', 'floor', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'wall', 'wall', 'wall', 'wall', 'wall'],
+    ]);
+    expect(selectWorldWeaponDropTile(map, map.start)).toEqual(map.start);
+
+    const occupiedStart = [map.start];
+    const nearest = selectWorldWeaponDropTile(map, map.start, occupiedStart);
+    if (!nearest)
+      throw new Error('開始tileを除いたworld weapon drop候補が必要です。');
+    expect(findPath(map, map.start, nearest).length - 1).toBe(1);
+    expect(selectWorldWeaponDropTile(map, map.start, occupiedStart)).toEqual(nearest);
+
+    const allNearbyFloors = map.tiles.flatMap((row, y) => row.flatMap((tile, x) => {
+      const position = { x, y };
+      return tile === 'floor' && findPath(map, map.start, position).length - 1 <= WORLD_WEAPON_DROP_MAX_PATH_DISTANCE
+        ? [position]
+        : [];
+    }));
+    expect(selectWorldWeaponDropTile(map, map.start, allNearbyFloors)).toBeNull();
   });
 
   test('12体の初期spawnは到達可能floorを使い、player、弾薬箱、他の敵と重複しない', () => {

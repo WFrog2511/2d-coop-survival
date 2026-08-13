@@ -1,11 +1,11 @@
 import Phaser from 'phaser';
-import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, basicApproachRoleFor, enemyVisibility, findPath, hasLineOfSight, type EnemyVisibility, generateArenaMap, generateNextArenaMap, hiddenRecycleThresholdFor, nextSeed, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, selectEnemySpawnTile, selectInitialWeaponPickupTiles, selectSpawnTile, spawnDirectionForSlot, spawnPhaseAt, type ArenaMap, type TilePosition, viewportTileRect } from './arena-map';
+import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, basicApproachRoleFor, enemyVisibility, findPath, hasLineOfSight, type EnemyVisibility, generateArenaMap, generateNextArenaMap, hiddenRecycleThresholdFor, nextSeed, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, selectEnemySpawnTile, selectInitialWeaponPickupTiles, selectSpawnTile, selectWorldWeaponDropTile, spawnDirectionForSlot, spawnPhaseAt, type ArenaMap, type TilePosition, viewportTileRect } from './arena-map';
 import { ArenaEffects } from './arena/effects';
-import { ArenaHud } from './arena/hud';
+import { ArenaHud, type InventoryDropTarget } from './arena/hud';
 import { ENEMIES, ENEMY_DEFEAT_HIT_STOP_MS, ENEMY_HIT_STOP_MS, ENEMY_IDS, ENEMY_LABELS, ENEMY_SPAWN_ORDER, INITIAL_ENEMY_IDS, INITIAL_WORLD_WEAPON_MODELS, PLAYER_HIT_STOP_MS, SCRAP_DROP_AMOUNTS, STAGGERED_ENEMIES, scrapVisualTierFor, type ScrapVisualTier } from './game-data';
 import { GUNSLINGER_BOOT_KNIFE_DAMAGE, GUNSLINGER_COMBO_TIMEOUT_MS, PLAYER_DASH_DURATION_MS, PLAYER_ROLES, canDashAt, canFireWhileDashing, dashCooldownUntil, dashDirectionFor, dashSpeedFor, gunslingerComboAfterEvent, gunslingerSpeedBuffUntil, gunslingerSpeedMultiplierAt, type DashDirection, type PlayerRole } from './player-data';
 import { selectNearbyPickup } from './pickups';
-import { AMMO_BOX_RESPAWN_MS, COMBAT_WAVE_DURATION_MS, REST_DURATION_MS, WEAPON_MODELS, WEAPONS, advanceRunState, advanceSurvivalState, cancelReload, collectAmmoBox as collectAmmoBoxState, collectMaterial, collectWeapon, completeReload, createRunSchedule, currentRunPhase, damageEnemy, damagePlayer, defeatRun, droneLateralSpeedAt, enemySpeedMultiplierForPhase, fireWeapon, hiddenRecyclePathDistanceForPhase, isEnemyDefeated, recordEnemyDefeated, recordEnemyRecycled, recordEnemySpawned, remainingSurvivalMs, resolveDamage, respawnEnemy, retryCombat, retryRun, runDurationMs, selectQuickSlot, startReload, weaponIdForModel, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type MaterialId, type RunPhase, type RunSchedule, type RunState, type WeaponId, type WeaponModel } from './rules';
+import { AMMO_BOX_RESPAWN_MS, COMBAT_WAVE_DURATION_MS, REST_DURATION_MS, WEAPON_MODELS, WEAPONS, activeWeaponId, advanceRunState, advanceSurvivalState, cancelReload, collectAmmoBox as collectAmmoBoxState, collectMaterial, collectWeapon, completeReload, createRunSchedule, currentRunPhase, damageEnemy, damagePlayer, defeatRun, droneLateralSpeedAt, enemySpeedMultiplierForPhase, fireWeapon, hiddenRecyclePathDistanceForPhase, inventoryWeaponAt, isEnemyDefeated, moveInventoryWeapon, recordEnemyDefeated, recordEnemyRecycled, recordEnemySpawned, remainingSurvivalMs, removeInventoryWeapon, resolveDamage, respawnEnemy, retryCombat, retryRun, runDurationMs, selectQuickSlot, startReload, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type InventorySlotRef, type MaterialId, type RunPhase, type RunSchedule, type RunState, type WeaponId, type WeaponModel } from './rules';
 
 const WIDTH = 800;
 const HEIGHT = 500;
@@ -212,6 +212,7 @@ class Arena extends Phaser.Scene {
   private hiddenRecycleEnabled = true;
   private debugPlayerInvulnerable = false;
   private inventoryOpen = false;
+  private droppedWeaponSequence = 0;
   private readonly onTabKeyDown = (event: KeyboardEvent): void => {
     if (event.code !== 'Tab')
       return;
@@ -229,6 +230,7 @@ class Arena extends Phaser.Scene {
 
   create(): void {
     resetArena = () => this.reset();
+    arenaHud.setInventoryDropListener((source, target) => this.handleInventoryDrop(source, target));
     this.createTextures();
     this.effects = new ArenaEffects(this, arenaHud.playerHitVignette, this.playerRole.tint);
     this.walls = this.physics.add.staticGroup();
@@ -265,7 +267,11 @@ class Arena extends Phaser.Scene {
     this.input.keyboard?.on('keydown-TWO', () => this.changeQuickSlot(1));
     this.input.keyboard?.on('keydown-THREE', () => this.changeQuickSlot(2));
     window.addEventListener('keydown', this.onTabKeyDown, true);
-    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => window.removeEventListener('keydown', this.onTabKeyDown, true));
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      window.removeEventListener('keydown', this.onTabKeyDown, true);
+      arenaHud.clearInventoryDrag(true);
+      arenaHud.setInventoryDropListener(undefined);
+    });
     this.input.keyboard?.on('keydown-R', () => this.reload());
     this.input.keyboard?.on('keydown-E', () => this.collectNearbyPickup());
     this.input.keyboard?.on('keydown-SPACE', () => this.tryDash());
@@ -273,7 +279,8 @@ class Arena extends Phaser.Scene {
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => this.updateAimDirection(pointer));
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       this.updateAimDirection(pointer);
-      if (!WEAPONS[this.state.weapon].automatic)
+      const weapon = activeWeaponId(this.state);
+      if (weapon && !WEAPONS[weapon].automatic)
         this.tryFire();
     });
     this.input.keyboard?.addCapture(['W', 'A', 'S', 'D', 'R', 'E', 'TAB', 'SPACE', 'SHIFT', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'ONE', 'TWO', 'THREE']);
@@ -299,7 +306,8 @@ class Arena extends Phaser.Scene {
       const aim = this.aimPoint();
       this.player.rotation = Phaser.Math.Angle.Between(this.player.x, this.player.y, aim.x, aim.y);
     }
-    if (WEAPONS[this.state.weapon].automatic && this.input.activePointer.isDown)
+    const weapon = activeWeaponId(this.state);
+    if (weapon && WEAPONS[weapon].automatic && this.input.activePointer.isDown)
       this.tryFire();
     this.bullets.getChildren().forEach((child) => {
       const bullet = child as Phaser.Physics.Arcade.Sprite;
@@ -479,7 +487,7 @@ class Arena extends Phaser.Scene {
     if (this.state.enemies[id].hp < previousHp)
       this.extendGunslingerComboTimeout();
     const defeated = isEnemyDefeated(this.state, id);
-    this.startEnemyImpact(id, this.state.weapon, defeated);
+    this.startEnemyImpact(id, activeWeaponId(this.state) ?? 'rifle', defeated);
     if (defeated) this.scheduleDefeatedEnemy(id);
     this.refreshHud();
   }
@@ -492,10 +500,12 @@ class Arena extends Phaser.Scene {
     this.runState = retryRun(RUN_SCHEDULE);
     this.inventoryOpen = false;
     arenaHud.setInventoryOpen(false);
+    arenaHud.clearInventoryDrag(true);
     this.mapPhase = undefined;
     this.survivalStartedAt = this.time.now;
     this.combatStartedAt = 0;
     this.enemyLifecycleStarted = false;
+    this.droppedWeaponSequence = 0;
     this.contactAt = enemyNumbers();
     this.playerHitStopUntil = 0;
     this.playerDash = undefined;
@@ -762,6 +772,12 @@ class Arena extends Phaser.Scene {
       .map(item => item.tile);
   }
 
+  private activeEnemyTiles(): TilePosition[] {
+    return ENEMY_IDS
+      .filter(id => this.enemies[id].active)
+      .map(id => this.tile(this.enemies[id]));
+  }
+
   private activeWorldItemEntries(): string[] {
     return [...this.worldItemStates.values()]
       .filter(item => item.sprite.active)
@@ -840,6 +856,63 @@ class Arena extends Phaser.Scene {
       return;
     this.inventoryOpen = !this.inventoryOpen;
     arenaHud.setInventoryOpen(this.inventoryOpen);
+  }
+
+  private handleInventoryDrop(source: InventorySlotRef, target: InventoryDropTarget): void {
+    if (this.state.defeated || this.state.victory)
+      return;
+    if (target === 'world') {
+      this.dropInventoryWeapon(source);
+      return;
+    }
+    const next = moveInventoryWeapon(this.state, source, target);
+    if (!this.applyInventoryState(next))
+      return;
+    arenaHud.setFeedback('武器を移動しました');
+  }
+
+  private dropInventoryWeapon(source: InventorySlotRef): void {
+    const model = inventoryWeaponAt(this.state, source);
+    if (!model)
+      return;
+    const tile = selectWorldWeaponDropTile(this.map, this.tile(this.player), [
+      ...this.activeWorldItemTiles(),
+      ...this.activeAmmoBoxTiles(),
+      ...this.activeEnemyTiles(),
+    ]);
+    if (!tile) {
+      arenaHud.setInventoryDragMessage('置ける場所がありません');
+      return;
+    }
+    const next = removeInventoryWeapon(this.state, source);
+    if (next === this.state)
+      return;
+    const id = this.nextDroppedWeaponId(model);
+    this.spawnWeaponWorldItem(id, model, tile);
+    this.applyInventoryState(next);
+    arenaHud.setFeedback(`${WEAPON_MODELS[model].label}を置きました`);
+    this.updatePickupPrompt();
+  }
+
+  private applyInventoryState(next: CombatState): boolean {
+    if (next === this.state)
+      return false;
+    if (this.state.reloading !== null && next.reloading === null)
+      this.clearReloadTimer();
+    this.state = next;
+    this.refreshHud();
+    return true;
+  }
+
+  private nextDroppedWeaponId(model: WeaponModel): string {
+    let sequence = this.droppedWeaponSequence + 1;
+    let id = `dropped-weapon-${this.generation}-${model}-${sequence}`;
+    while (this.worldItemStates.has(id)) {
+      sequence += 1;
+      id = `dropped-weapon-${this.generation}-${model}-${sequence}`;
+    }
+    this.droppedWeaponSequence = sequence;
+    return id;
   }
 
   private startSurvivalTimer(): void {
@@ -1259,11 +1332,10 @@ class Arena extends Phaser.Scene {
     const model = this.state.inventory.quickSlots[slot];
     if (!model)
       return;
-    const weapon = weaponIdForModel(model);
-    const interrupted = this.state.reloading !== null && weapon !== this.state.weapon;
-    if (interrupted)
-      this.stopReload();
-    this.state = selectQuickSlot(this.state, slot);
+    const next = selectQuickSlot(this.state, slot);
+    const interrupted = this.state.reloading !== null && next.reloading === null;
+    if (interrupted) this.clearReloadTimer();
+    this.state = next;
     arenaHud.setFeedback(interrupted ? `リロード中断: ${WEAPON_MODELS[model].label}` : `武器: ${WEAPON_MODELS[model].label}`);
     this.refreshHud();
   }
@@ -1271,7 +1343,9 @@ class Arena extends Phaser.Scene {
   private reload(): void {
     if (this.state.defeated || this.state.victory)
       return;
-    const weapon = this.state.weapon;
+    const weapon = activeWeaponId(this.state);
+    if (!weapon)
+      return;
     const next = startReload(this.state);
     if (next === this.state) {
       arenaHud.setFeedback(this.state.reloading !== null
@@ -1296,15 +1370,21 @@ class Arena extends Phaser.Scene {
   }
 
   private stopReload(): void {
+    this.clearReloadTimer();
+    this.state = cancelReload(this.state);
+  }
+
+  private clearReloadTimer(): void {
     this.reloadTimer?.remove(false);
     this.reloadTimer = undefined;
-    this.state = cancelReload(this.state);
   }
 
   private tryFire(): void {
     if (this.state.defeated || this.state.victory || (this.playerDash && !canFireWhileDashing(this.playerRole.id)))
       return;
-    const weaponId = this.state.weapon;
+    const weaponId = activeWeaponId(this.state);
+    if (!weaponId)
+      return;
     const weapon = WEAPONS[weaponId];
     if (this.state.ammo[weaponId] === 0) {
       this.reload();
@@ -1317,7 +1397,7 @@ class Arena extends Phaser.Scene {
     if (!result.fired) {
       if (this.state.reloading !== null)
         arenaHud.setFeedback('リロード中です');
-      else if (this.state.ammo[this.state.weapon] === 0)
+      else if (this.state.ammo[weaponId] === 0)
         arenaHud.setFeedback('弾切れ: Rでリロード');
       return;
     }
@@ -1325,13 +1405,13 @@ class Arena extends Phaser.Scene {
     const base = Phaser.Math.Angle.Between(this.player.x, this.player.y, aim.x, aim.y);
     this.effects.playWeaponFire(this.player, weaponId, base);
     for (let index = 0; index < weapon.pellets; index += 1) {
-      const bullet = this.bullets.get(this.player.x, this.player.y, `bullet-${this.state.weapon}`) as Phaser.Physics.Arcade.Sprite | null;
+      const bullet = this.bullets.get(this.player.x, this.player.y, `bullet-${weaponId}`) as Phaser.Physics.Arcade.Sprite | null;
       if (!bullet)
         continue;
       const ratio = weapon.pellets === 1 ? 0 : index / (weapon.pellets - 1) - 0.5;
       const angle = base + ratio * weapon.spread * 2;
-      bullet.enableBody(true, this.player.x, this.player.y, true, true).setTexture(`bullet-${this.state.weapon}`).setVelocity(Math.cos(angle) * weapon.speed, Math.sin(angle) * weapon.speed);
-      this.meta.set(bullet, { weapon: this.state.weapon, damageType: weapon.damageType, damage: weapon.damage, range: weapon.range, knockback: weapon.knockback, startX: this.player.x, startY: this.player.y, directionX: Math.cos(angle), directionY: Math.sin(angle) });
+      bullet.enableBody(true, this.player.x, this.player.y, true, true).setTexture(`bullet-${weaponId}`).setVelocity(Math.cos(angle) * weapon.speed, Math.sin(angle) * weapon.speed);
+      this.meta.set(bullet, { weapon: weaponId, damageType: weapon.damageType, damage: weapon.damage, range: weapon.range, knockback: weapon.knockback, startX: this.player.x, startY: this.player.y, directionX: Math.cos(angle), directionY: Math.sin(angle) });
     }
     this.refreshHud();
   }

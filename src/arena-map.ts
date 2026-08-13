@@ -3,6 +3,7 @@ export const ARENA_WIDTH_TILES = 80;
 export const ARENA_HEIGHT_TILES = 50;
 export const AMMO_BOX_COUNT = 4;
 export const SPAWN_PHASE_MS = 60_000;
+export const WORLD_WEAPON_DROP_MAX_PATH_DISTANCE = 2;
 export const SPAWN_DIRECTIONS = ['up', 'right', 'down', 'left'] as const;
 
 const NORMAL_ROOM_COUNT = 14;
@@ -388,6 +389,40 @@ export function selectInitialWeaponPickupTile(
   occupied: readonly TilePosition[] = [],
 ): TilePosition | null {
   return selectInitialWeaponPickupTiles(map, occupied, 1)[0] ?? null;
+}
+
+/**
+ * プレイヤー近傍へworld weaponを置ける、もっとも近い決定的なfloor tileを選ぶ。
+ *
+ * @param map 選択対象のアリーナ地形。
+ * @param player 配置元プレイヤーの現在tile。
+ * @param occupied active world item、弾薬箱、敵など配置不可のtile。
+ * @returns 道なり距離上限内の候補。候補がなければnull。
+ */
+export function selectWorldWeaponDropTile(
+  map: ArenaMap,
+  player: TilePosition,
+  occupied: readonly TilePosition[] = [],
+): TilePosition | null {
+  const occupiedKeys = new Set(occupied.map(positionKey));
+  const distances = pathDistances(map, player);
+  const candidates = floorTiles(map).flatMap((position) => {
+    const distance = distances.get(positionKey(position));
+    return distance === undefined
+      || distance > WORLD_WEAPON_DROP_MAX_PATH_DISTANCE
+      || occupiedKeys.has(positionKey(position))
+      ? []
+      : [{ position, distance }];
+  });
+  candidates.sort((left, right) => {
+    const distance = left.distance - right.distance;
+    if (distance !== 0) return distance;
+    const rank = mixSeed(map.seed, 'world-weapon-drop:' + positionKey(left.position))
+      - mixSeed(map.seed, 'world-weapon-drop:' + positionKey(right.position));
+    if (rank !== 0) return rank;
+    return left.position.y - right.position.y || left.position.x - right.position.x;
+  });
+  return candidates[0]?.position ?? null;
 }
 
 /**

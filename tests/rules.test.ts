@@ -16,6 +16,7 @@ import {
   WAVE_DURATION_MS,
   WEAPONS,
   WEAPON_MODELS,
+  activeWeaponId,
   activeEnemyCount,
   advanceRunState,
   advanceSurvivalState,
@@ -36,7 +37,9 @@ import {
   fireWeapon,
   hasReachedSurvivalLimit,
   hiddenRecyclePathDistanceForPhase,
+  inventoryWeaponAt,
   isEnemyDefeated,
+  moveInventoryWeapon,
   recordEnemyDefeated,
   recordEnemyRecycled,
   recordEnemySpawned,
@@ -48,6 +51,7 @@ import {
   respawnEnemy,
   retryCombat,
   retryRun,
+  removeInventoryWeapon,
   runDurationMs,
   selectWeapon,
   selectQuickSlot,
@@ -436,6 +440,37 @@ describe('戦闘ルール', () => {
     const second = collectMaterial(first, 'scrap', 1);
     expect(second.inventory.materials.scrap).toBeGreaterThan(first.inventory.materials.scrap);
     expect(collectMaterial(second, 'scrap', 0)).toBe(second);
+  });
+
+  it('詳細インベントリは武器を移動・交換し、空いた選択quick slotを戦闘に使わない', () => {
+    const collected = collectWeapon(collectWeapon(collectWeapon(INITIAL_STATE, 'shotgun'), 'revolver'), 'compact-pistol');
+    const selected = {
+      ...selectQuickSlot(collected, 1),
+      ammo: { ...collected.ammo, shotgun: Math.max(0, WEAPONS.shotgun.magazineSize - 1) },
+    };
+    const reloading = startReload(selected);
+    expect(reloading.reloading).toBe('shotgun');
+
+    const moved = moveInventoryWeapon(reloading, { container: 'quick', index: 1 }, { container: 'backpack', index: 1 });
+    expect(moved.inventory.selectedQuickSlot).toBe(1);
+    expect(inventoryWeaponAt(moved, { container: 'quick', index: 1 })).toBeNull();
+    expect(inventoryWeaponAt(moved, { container: 'backpack', index: 1 })).toBe('shotgun');
+    expect(moved.weapon).toBeNull();
+    expect(moved.reloading).toBeNull();
+    expect(activeWeaponId(moved)).toBeNull();
+
+    const staleWeapon = { ...moved, weapon: 'rifle' as const };
+    expect(canFireAt(staleWeapon, staleWeapon.nextFireAt.rifle)).toBe(false);
+    expect(fireWeapon(staleWeapon, staleWeapon.nextFireAt.rifle)).toEqual({ state: staleWeapon, fired: false });
+    expect(startReload(staleWeapon)).toBe(staleWeapon);
+
+    const restored = moveInventoryWeapon(moved, { container: 'backpack', index: 0 }, { container: 'quick', index: 1 });
+    expect(restored.inventory.selectedQuickSlot).toBe(1);
+    expect(restored.weapon).toBe(weaponIdForModel('compact-pistol'));
+    const swapped = moveInventoryWeapon(restored, { container: 'quick', index: 2 }, { container: 'backpack', index: 1 });
+    expect(inventoryWeaponAt(swapped, { container: 'quick', index: 2 })).toBe('shotgun');
+    expect(inventoryWeaponAt(swapped, { container: 'backpack', index: 1 })).toBe('revolver');
+    expect(removeInventoryWeapon(swapped, { container: 'backpack', index: 9 })).toBe(swapped);
   });
 
   it('再挑戦は所持品、武器別残弾、発射待ち、リロード、敵12個体を初期化する', () => {
