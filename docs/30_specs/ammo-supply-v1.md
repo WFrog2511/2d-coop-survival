@@ -7,12 +7,13 @@ requirements: REQ-AMMO-SUPPLY
 
 ## 状態
 
-`CombatState`は武器ごとの `ammo`（弾倉）と `reserve`（予備弾薬）を保持する。武器定義は `reserveInitial`、`reserveMax`、`ammoBoxRecovery` を公開する。
+`CombatState`は各`WeaponId`（rifle、shotgun、handgun）ごとの `ammo`（弾倉）と `reserve`（予備弾薬）を保持する。武器定義は `reserveInitial`、`reserveMax`、`ammoBoxRecovery` を公開する。ハンドガン、リボルバー、コンパクトピストルは1組のhandgun弾倉・予備弾薬・リロード状態を共有する。
 
 | 武器 | 弾倉 | 予備初期値 | 予備上限 | 箱回復 |
 | --- | ---: | ---: | ---: | ---: |
 | rifle | 20 | 40 | 60 | 20 |
 | shotgun | 4 | 8 | 12 | 4 |
+| handgun（ハンドガン／リボルバー／コンパクトピストル共有） | 10 | 30 | 60 | 10 |
 
 ## リロード規則
 
@@ -23,7 +24,7 @@ requirements: REQ-AMMO-SUPPLY
 
 ## 弾薬箱と表示
 
-`E`入力で3x3近傍の弾薬箱を選択したときは、両武器の予備弾薬へそれぞれの回復量を加算する。接触だけでは状態を変更しない。上限到達後の取得は状態を変更せず、取得済み箱は30秒後に同じ`boxId`で新しい画面外floorへ再出現する。マップ生成のseedと床タイル順から4位置を決定し、開始位置・壁・指定済み占有位置を除外する。
+`E`入力で3x3近傍の弾薬箱を選択したときは、全`WeaponId`（rifle、shotgun、handgun）の予備弾薬へそれぞれの回復量を加算する。handgun系sidearm modelは同じhandgun stateを共有するため、回復も1組だけへ適用する。接触だけでは状態を変更しない。上限到達後の取得は状態を変更せず、取得済み箱は30秒後に同じ`boxId`で新しい画面外floorへ再出現する。マップ生成のseedと床タイル順から4位置を決定し、開始位置・指定済み占有位置・既選択弾薬箱との3x3回収範囲、および壁を除外する。
 
 ゲーム領域は800x500を基準とし、ammo panelはゲーム領域の右下にDOMとして配置する。パネルの弾倉表示は `現在値/上限`、予備表示は `予備 現在値/上限` とする。
 
@@ -31,7 +32,7 @@ requirements: REQ-AMMO-SUPPLY
 ## 検証対象
 
 - `tests/rules.test.ts`: 初期値、リロード、予備0、上限、箱取得。
-- `tests/arena-map.test.ts`: 4位置、床・開始位置除外、重複なし、seed決定性、到達可能性。
+- `tests/arena-map.test.ts`: 箱数、床・開始位置・占有位置・相互の3x3回収範囲除外、seed決定性、到達可能性、候補不足時の残数。
 - `e2e/prototype.spec.ts`: DOM表示、射撃、空弾倉クリックによる一度だけのリロード、`R`キー、接触では消費しない弾薬箱の`E`取得、30秒再出現、retry再配置。
 ## 旧combat-choice-v1の記載との関係
 

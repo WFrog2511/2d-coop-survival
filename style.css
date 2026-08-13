@@ -101,7 +101,8 @@ h1 {
 
 .game-overlay,
 #ammo-panel,
-#inventory-panel {
+#inventory-panel,
+#inventory-detail {
   z-index: 1;
   pointer-events: none;
 }
@@ -110,6 +111,9 @@ h1 {
   position: absolute;
   bottom: 92px;
   left: 50%;
+  display: grid;
+  gap: 2px;
+  justify-items: center;
   padding: 6px 10px;
   border: 1px solid #ffef76;
   border-radius: 8px;
@@ -118,10 +122,17 @@ h1 {
   transform: translateX(-50%);
 }
 
-#pickup-prompt kbd {
-  padding: 1px 5px;
-  border: 1px solid currentcolor;
-  border-radius: 3px;
+#pickup-prompt[hidden],
+#inventory-detail[hidden] {
+  display: none;
+}
+
+.pickup-prompt-target {
+  font-weight: 700;
+}
+
+.pickup-prompt-action {
+  font-size: 0.85rem;
 }
 
 #survival-panel {
@@ -220,16 +231,55 @@ h1 {
   box-sizing: border-box;
 }
 
+#inventory-detail {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  display: grid;
+  gap: 10px;
+  min-width: 280px;
+  padding: 14px;
+  border: 1px solid #9e8cff;
+  border-radius: 10px;
+  background: rgb(16 24 39 / 94%);
+  box-sizing: border-box;
+  transform: translateX(-50%);
+}
+
+#inventory-detail h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+#inventory-detail section {
+  display: grid;
+  gap: 4px;
+}
+
+.backpack-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.backpack-grid output {
+  padding: 3px 5px;
+  border: 1px solid #55728b;
+  border-radius: 4px;
+}
+
 .inventory-panel-caption {
   font-size: 0.75rem;
   color: #c7f7ff;
 }
 
-#inventory-panel output[data-owned='false'] {
+#inventory-panel output[data-empty='true'],
+#inventory-detail output[data-empty='true'] {
   color: #9ba9b4;
 }
 
-#inventory-panel output[data-selected='true'] {
+#inventory-panel output[data-selected='true'],
+#inventory-detail output[data-selected='true'] {
   color: #ffef76;
 }
 

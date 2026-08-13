@@ -3,6 +3,7 @@ import {
   type EnemyInstanceId,
   type EnemyKind,
   type WeaponId,
+  type WeaponModel,
 } from './rules';
 
 export type EnemyConfig = {
@@ -89,8 +90,20 @@ export const ENEMY_SPAWN_ORDER: readonly EnemyInstanceId[] = [
   ...STAGGERED_ENEMIES.map(({ id }) => id),
 ];
 
-/** 初期マップへ決定的に配置するハンドガンpickup数。 */
-export const HANDGUN_WORLD_PICKUP_COUNT = 8;
+/** 初期マップへ決定的に配置するsidearmモデル列。 */
+export const WORLD_SIDEARM_MODELS: readonly WeaponModel[] = [
+  'revolver',
+  'compact-pistol',
+  'handgun',
+  'revolver',
+  'compact-pistol',
+  'handgun',
+  'revolver',
+  'compact-pistol',
+];
+
+/** 初期マップへ決定的に配置する全武器モデル列。 */
+export const INITIAL_WORLD_WEAPON_MODELS: readonly WeaponModel[] = ['shotgun', ...WORLD_SIDEARM_MODELS];
 
 /** スクラップの見た目を切り替える数量境界。 */
 export const SCRAP_VISUAL_TIER_THRESHOLDS = { medium: 3, large: 6 } as const;

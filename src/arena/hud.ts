@@ -1,7 +1,7 @@
 import type { EnemyVisibility, SpawnDirection, TilePosition } from '../arena-map';
 import { DIRECTION_LABELS, ENEMY_IDS } from '../game-data';
 import { PLAYER_ROLES, type PlayerRoleId } from '../player-data';
-import { STABLE_ENEMY_SLOT_COUNT, WEAPONS, activeEnemyCount, currentRunPhase, currentWaveNumber, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, type CombatState, type EnemyInstanceId, type RunState, type WeaponId } from '../rules';
+import { STABLE_ENEMY_SLOT_COUNT, WEAPON_MODELS, WEAPONS, activeEnemyCount, currentRunPhase, currentWaveNumber, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, weaponIdForModel, type CombatState, type EnemyInstanceId, type RunState, type WeaponModel } from '../rules';
 
 export type EnemyHudView = {
   stableId: string;
@@ -67,17 +67,29 @@ export class ArenaHud {
   private readonly ammoHud = element<HTMLOutputElement>('[data-testid="ammo"]');
   private readonly ammoPanelWeaponHud = element<HTMLOutputElement>('[data-testid="ammo-panel-weapon"]');
   private readonly reserveHud = element<HTMLOutputElement>('[data-testid="ammo-reserve"]');
-  private readonly weaponSlots: Record<WeaponId, HTMLOutputElement> = {
-    rifle: element<HTMLOutputElement>('[data-testid="weapon-slot-rifle"]'),
-    shotgun: element<HTMLOutputElement>('[data-testid="weapon-slot-shotgun"]'),
-    handgun: element<HTMLOutputElement>('[data-testid="weapon-slot-handgun"]'),
-  };
+  private readonly quickSlots = [
+    element<HTMLOutputElement>('[data-testid="quick-slot-1"]'),
+    element<HTMLOutputElement>('[data-testid="quick-slot-2"]'),
+    element<HTMLOutputElement>('[data-testid="quick-slot-3"]'),
+  ];
+
+  private readonly inventoryDetail = element<HTMLElement>('[data-testid="inventory-detail"]');
+  private readonly inventoryDetailQuickSlots = [
+    element<HTMLOutputElement>('[data-testid="inventory-quick-slot-1"]'),
+    element<HTMLOutputElement>('[data-testid="inventory-quick-slot-2"]'),
+    element<HTMLOutputElement>('[data-testid="inventory-quick-slot-3"]'),
+  ];
+
+  private readonly backpackSlots = Array.from({ length: 10 }, (_, index) =>
+    element<HTMLOutputElement>(`[data-testid="backpack-slot-${index + 1}"]`));
 
   private readonly scrapHud = element<HTMLOutputElement>('[data-testid="scrap"]');
   private readonly worldItemCountHud = element<HTMLOutputElement>('[data-testid="world-item-count"]');
   private readonly ammoBoxCountHud = element<HTMLOutputElement>('[data-testid="ammo-box-count"]');
   private readonly playerRoleHud = element<HTMLOutputElement>('[data-testid="role"]');
   private readonly pickupPrompt = element<HTMLElement>('[data-testid="pickup-prompt"]');
+  private readonly pickupTarget = element<HTMLElement>('[data-testid="pickup-target"]');
+  private readonly pickupAction = element<HTMLElement>('[data-testid="pickup-action"]');
   private readonly reloadProgressLabel = element<HTMLElement>('[data-testid="reload-progress-label"]');
   private readonly reloadProgressHud = element<HTMLProgressElement>('[data-testid="reload-progress"]');
   private readonly reloadHud = element<HTMLOutputElement>('[data-testid="reload"]');
@@ -124,8 +136,15 @@ export class ArenaHud {
     this.playerRoleHud.style.color = role.accent;
   }
 
-  public setPickupPrompt(visible: boolean): void {
-    this.pickupPrompt.hidden = !visible;
+  public setPickupPrompt(prompt: { target: string; action: string } | undefined): void {
+    this.pickupPrompt.hidden = prompt === undefined;
+    this.pickupTarget.textContent = prompt?.target ?? '';
+    this.pickupAction.textContent = prompt?.action ?? '';
+  }
+
+  public setInventoryOpen(open: boolean): void {
+    this.inventoryDetail.hidden = !open;
+    this.inventoryDetail.dataset.open = String(open);
   }
 
   public updateFps(value: number): void {
@@ -183,9 +202,11 @@ export class ArenaHud {
     ENEMY_IDS.forEach((id) => {
       this.enemyHp[id].value = String(view.state.enemies[id].hp);
     });
-    this.weaponHud.value = WEAPONS[view.state.weapon].label;
+    const selectedModel = view.state.inventory.quickSlots[view.state.inventory.selectedQuickSlot];
+    const selectedLabel = selectedModel ? WEAPON_MODELS[selectedModel].label : WEAPONS[view.state.weapon].label;
+    this.weaponHud.value = selectedLabel;
     const weapon = WEAPONS[view.state.weapon];
-    this.ammoPanelWeaponHud.value = weapon.label;
+    this.ammoPanelWeaponHud.value = selectedLabel;
     this.ammoHud.value = view.state.ammo[view.state.weapon] + '/' + weapon.magazineSize;
     this.reserveHud.value = '予備 ' + view.state.reserve[view.state.weapon] + '/' + weapon.reserveMax;
     this.ammoHud.dataset.magazine = String(view.state.ammo[view.state.weapon]);
@@ -212,21 +233,39 @@ export class ArenaHud {
   }
 
   private updateInventory(state: CombatState): void {
-    const keys: Record<WeaponId, string> = { rifle: '1', shotgun: '2', handgun: '3' };
-    (Object.keys(WEAPONS) as WeaponId[]).forEach((weapon) => {
-      const slot = this.weaponSlots[weapon];
-      const count = state.inventory.weaponCounts[weapon];
-      const owned = count > 0;
-      const selected = state.weapon === weapon;
-      slot.value = `${keys[weapon]} ${WEAPONS[weapon].label}: ${owned ? `所持 ${count}` : '未所持'}${selected ? '（選択中）' : ''}`;
-      slot.dataset.key = keys[weapon];
-      slot.dataset.weapon = weapon;
-      slot.dataset.owned = String(owned);
-      slot.dataset.count = String(count);
-      slot.dataset.selected = String(selected);
+    state.inventory.quickSlots.forEach((model, index) => {
+      const selected = state.inventory.selectedQuickSlot === index;
+      const quickSlot = this.quickSlots[index];
+      if (quickSlot)
+        this.updateWeaponSlot(quickSlot, model, index, selected);
+      const inventoryDetailQuickSlot = this.inventoryDetailQuickSlots[index];
+      if (inventoryDetailQuickSlot)
+        this.updateWeaponSlot(inventoryDetailQuickSlot, model, index, selected);
     });
+    state.inventory.backpackSlots.forEach((model, index) => {
+      const slot = this.backpackSlots[index];
+      if (!slot)
+        return;
+      const label = model ? WEAPON_MODELS[model].label : '空き';
+      slot.value = `${index + 1} ${label}`;
+      slot.dataset.index = String(index);
+      slot.dataset.model = model ?? '';
+      slot.dataset.weapon = model ? weaponIdForModel(model) : '';
+      slot.dataset.empty = String(model === null);
+    });
+    this.inventoryDetail.dataset.selectedQuickSlot = String(state.inventory.selectedQuickSlot);
     this.scrapHud.value = `スクラップ ${state.inventory.materials.scrap}`;
     this.scrapHud.dataset.count = String(state.inventory.materials.scrap);
+  }
+
+  private updateWeaponSlot(slot: HTMLOutputElement, model: WeaponModel | null, index: number, selected: boolean): void {
+    const label = model ? WEAPON_MODELS[model].label : '空き';
+    slot.value = `${index + 1} ${label}${selected ? '（選択中）' : ''}`;
+    slot.dataset.index = String(index);
+    slot.dataset.model = model ?? '';
+    slot.dataset.weapon = model ? weaponIdForModel(model) : '';
+    slot.dataset.empty = String(model === null);
+    slot.dataset.selected = String(selected);
   }
 
   public updateReloadProgress(reload: { active: boolean; progress: number }): void {

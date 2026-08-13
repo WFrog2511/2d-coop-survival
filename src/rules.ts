@@ -1,12 +1,38 @@
 /** プレイヤーが選択できる武器の識別子。 */
 export type WeaponId = 'rifle' | 'shotgun' | 'handgun';
 
+/** 所持品の一枠に入る武器モデルの識別子。 */
+export type WeaponModel = 'rifle' | 'shotgun' | 'handgun' | 'revolver' | 'compact-pistol';
+
+/** 武器モデルの表示名と戦闘上の武器種を対応付ける。 */
+export const WEAPON_MODELS: Record<WeaponModel, { label: string; weapon: WeaponId }> = {
+  'rifle': { label: 'アサルトライフル', weapon: 'rifle' },
+  'shotgun': { label: 'ショットガン', weapon: 'shotgun' },
+  'handgun': { label: 'ハンドガン', weapon: 'handgun' },
+  'revolver': { label: 'リボルバー', weapon: 'handgun' },
+  'compact-pistol': { label: 'コンパクトピストル', weapon: 'handgun' },
+};
+
+/**
+ * 武器モデルが利用する既存の戦闘上の武器種を返す。
+ * @param model 所持品にある武器モデル。
+ * @returns 戦闘と弾薬で共有する武器種。
+ */
+export function weaponIdForModel(model: WeaponModel): WeaponId {
+  return WEAPON_MODELS[model].weapon;
+}
+
+export const QUICK_SLOT_COUNT = 3;
+export const BACKPACK_SLOT_COUNT = 10;
+
 /** 最小インベントリで扱う素材の識別子。 */
 export type MaterialId = 'scrap';
 
-/** 所持武器と素材数だけを保持する最小インベントリ状態。 */
+/** 個別武器モデルと素材数だけを保持する最小インベントリ状態。 */
 export type InventoryState = {
-  weaponCounts: Record<WeaponId, number>;
+  quickSlots: Array<WeaponModel | null>;
+  backpackSlots: Array<WeaponModel | null>;
+  selectedQuickSlot: number;
   materials: Record<MaterialId, number>;
 };
 
@@ -231,7 +257,9 @@ function createInitialEnemies(): Record<EnemyInstanceId, EnemyState> {
 const INITIAL_ENEMIES = createInitialEnemies();
 
 const INITIAL_INVENTORY: InventoryState = {
-  weaponCounts: { rifle: 1, shotgun: 0, handgun: 0 },
+  quickSlots: ['rifle', null, null],
+  backpackSlots: Array<WeaponModel | null>(BACKPACK_SLOT_COUNT).fill(null),
+  selectedQuickSlot: 0,
   materials: { scrap: 0 },
 };
 
@@ -577,42 +605,63 @@ export function damagePlayer(state: CombatState, amount: number): CombatState {
 }
 
 /**
- * 使用武器を切り替える。
+ * クイックスロットの武器モデルを選択する。
  *
  * @param state 現在の戦闘状態。
- * @param weapon 選択する武器。
+ * @param slot 0始まりの選択するクイックスロット。
  * @returns 武器選択と必要なリロード中断を反映した戦闘状態。
  */
-export function selectWeapon(state: CombatState, weapon: WeaponId): CombatState {
-  if (state.defeated || state.victory || state.inventory.weaponCounts[weapon] <= 0)
+export function selectQuickSlot(state: CombatState, slot: number): CombatState {
+  if (state.defeated || state.victory || !Number.isInteger(slot) || slot < 0 || slot >= QUICK_SLOT_COUNT)
     return state;
-  return { ...state, weapon, reloading: weapon === state.weapon ? state.reloading : null };
-}
-
-/**
- * 武器pickupを所持品へ反映する。ハンドガンだけは同一武器を重複取得できる。
- *
- * @param state 現在の戦闘状態。
- * @param weapon 取得する武器。
- * @returns 取得結果を反映した戦闘状態。
- */
-export function collectWeapon(state: CombatState, weapon: WeaponId): CombatState {
-  if (
-    state.defeated
-    || state.victory
-    || (weapon !== 'handgun' && state.inventory.weaponCounts[weapon] > 0)
-  )
+  const model = state.inventory.quickSlots[slot];
+  if (!model)
+    return state;
+  const weapon = weaponIdForModel(model);
+  if (state.inventory.selectedQuickSlot === slot)
     return state;
   return {
     ...state,
-    inventory: {
-      ...state.inventory,
-      weaponCounts: {
-        ...state.inventory.weaponCounts,
-        [weapon]: state.inventory.weaponCounts[weapon] + 1,
-      },
-    },
+    weapon,
+    reloading: weapon === state.weapon ? state.reloading : null,
+    inventory: { ...state.inventory, selectedQuickSlot: slot },
   };
+}
+
+/**
+ * 戦闘上の武器種を持つ最初のクイックスロットを選択する。
+ *
+ * @param state 現在の戦闘状態。
+ * @param weapon 選択する戦闘上の武器種。
+ * @returns 対応するクイックスロットを選択した状態。
+ */
+export function selectWeapon(state: CombatState, weapon: WeaponId): CombatState {
+  const slot = state.inventory.quickSlots.findIndex(model => model !== null && weaponIdForModel(model) === weapon);
+  return slot < 0 ? state : selectQuickSlot(state, slot);
+}
+
+/**
+ * 武器pickupを最初の空きクイックスロット、次にバックパックへ個別に格納する。
+ *
+ * @param state 現在の戦闘状態。
+ * @param model 取得する武器モデル。
+ * @returns 格納結果を反映した戦闘状態。満杯またはterminalなら元の状態。
+ */
+export function collectWeapon(state: CombatState, model: WeaponModel): CombatState {
+  if (state.defeated || state.victory)
+    return state;
+  const quickSlot = state.inventory.quickSlots.indexOf(null);
+  if (quickSlot >= 0) {
+    const quickSlots = [...state.inventory.quickSlots];
+    quickSlots[quickSlot] = model;
+    return { ...state, inventory: { ...state.inventory, quickSlots } };
+  }
+  const backpackSlot = state.inventory.backpackSlots.indexOf(null);
+  if (backpackSlot < 0)
+    return state;
+  const backpackSlots = [...state.inventory.backpackSlots];
+  backpackSlots[backpackSlot] = model;
+  return { ...state, inventory: { ...state.inventory, backpackSlots } };
 }
 
 /**
@@ -800,7 +849,9 @@ export function retryCombat(): CombatState {
   return {
     ...INITIAL_STATE,
     inventory: {
-      weaponCounts: { ...INITIAL_STATE.inventory.weaponCounts },
+      quickSlots: [...INITIAL_STATE.inventory.quickSlots],
+      backpackSlots: [...INITIAL_STATE.inventory.backpackSlots],
+      selectedQuickSlot: INITIAL_STATE.inventory.selectedQuickSlot,
       materials: { ...INITIAL_STATE.inventory.materials },
     },
     ammo: { ...INITIAL_STATE.ammo },

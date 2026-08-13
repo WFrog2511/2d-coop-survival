@@ -5,7 +5,7 @@ specification: SPEC-COMBAT-CHOICE
 
 # combat-choice-v1 基本設計
 
-> [Issue #71](https://github.com/WFrog2511/2d-coop-survival/issues/71)は、旧二武器・第三武器対象外の設計を履歴とし、ハンドガンの`WeaponId`、slot 3、`3`キー、shared ammo stateだけを限定的に追加する。その他のcombat-choice-v1設計は維持する。
+> [Issue #71](https://github.com/WFrog2511/2d-coop-survival/issues/71)は、旧二武器・第三武器対象外・固定weapon種slotの設計を履歴とする。`WeaponModel`をquick slot 3件とbackpack 10件へ非stack格納し、handgun、revolver、compact-pistolを既存handgunの`WeaponId`とshared ammo stateへ解決する。その他のcombat-choice-v1設計は維持する。
 
 ## 責務
 
@@ -14,11 +14,11 @@ specification: SPEC-COMBAT-CHOICE
 - `src/main.ts`: Phaser Scene、入力、Canvasテクスチャ、ground grid、wall描画とArcade Physics、追従camera、9基本敵・3ドローンの12敵個体の経路移動、弾プール、DOM HUD、リロード、敗北と再挑戦を統合する。
 - `tests/rules.test.ts`: 武器と弾種契約、敵種別ダメージ、合成横速度、武器別弾倉、リロード中断、敵個体別状態と戦闘初期化を検査する。
 - `tests/arena-map.test.ts`: seed決定性、再挑戦map差、部屋・通路・障害物、外周wall、floor連結性、BFS、spawn、再出現待ち時間を検査する。
-- `e2e/prototype.spec.ts`: 800×500px canvasのDOM順序・初期化後の固定表示、map HUDと移動、長押し射撃、ショットガンの発射待ち、リロード、敗北、異なるmapでの再挑戦を検査する。
+- `e2e/prototype.spec.ts`: 800×500px canvasのDOM順序・初期化後の固定表示、map HUDと移動、長押し射撃、ショットガンの発射待ち、model別weapon pickup、quick/backpackとTab詳細表示、リロード、敗北、異なるmapでの再挑戦を検査する。
 
 ## データと流れ
 
-`CombatState`は選択武器、武器別の残弾と`nextFireAt`、リロード対象、`rifle`、`shotgun`、`handgun`の所持数、`basic-1`〜`basic-9`、`drone-1`〜`drone-3`の個別HP/撃破状態を保持する。ライフルとショットガンは重複pickupを無視し、ハンドガンだけは所持数を加算しながら弾倉・予備弾・リロード状態を共有する。`WeaponDefinition`は弾種、入力方式、発射待ち、弾倉、リロード時間と弾道を持つ。純粋な`resolveDamage`は敵種、弾種、基礎ダメージから実ダメージと耐性表示要否を返す。
+`CombatState`は選択`WeaponId`、武器別の残弾と`nextFireAt`、リロード対象、3件のquick slot、10件のbackpack slot、選択quick slot、`basic-1`〜`basic-9`、`drone-1`〜`drone-3`の個別HP/撃破状態を保持する。`collectWeapon`は最初の空きquick slot、次の空きbackpack slotへ`WeaponModel`を1件ずつ格納し、満杯では無副作用にする。`weaponIdForModel`はhandgun、revolver、compact-pistolをhandgunへ解決するため、sidearm modelは弾倉・予備弾・リロード状態を共有する。`WeaponDefinition`は弾種、入力方式、発射待ち、弾倉、リロード時間と弾道を持つ。純粋な`resolveDamage`は敵種、弾種、基礎ダメージから実ダメージと耐性表示要否を返す。
 
 `ArenaMap`はseed、80×50（3200×2000px）のwall/floor配列、通常14部屋または3列×3行の中央開始8部屋fallback、通路、1タイル障害物、player開始tileを持つ。`generateArenaMap`は最大8候補とfallbackから連結済みmapを返す。`generateFallbackArenaMap`はfallback地形を決定的に返す。`generateNextArenaMap`は最大64候補から直前とtile配置が異なるmapを返す。`findPath`はfloorだけを通る4近傍BFS、`selectSpawnTile`は未占有floorからviewport外を優先する決定的選択、`respawnDelayFor`は敵種別範囲内の決定的待ち時間を返す。
 
@@ -30,8 +30,8 @@ Phaserの再利用Spriteには`Map`で弾メタデータを対応付け、弾種
 
 HUDがない場合は起動時に失敗する。map通常生成に失敗した場合は3列×3行の中央開始8部屋を上下左右へ幅2通路で接続するfallbackを使い、異なる再挑戦mapを64候補内で生成できない場合は明示的に失敗する。spawn候補がない敵はbodyを無効化し、初期配置・再出現とも1秒後に再試行する。death再出現では配置成功時だけ戦闘状態を復活させる。
 
-弾プールが上限に達した場合は発射しない。空弾倉とリロード中は弾を生成しない。武器切替・敗北・再挑戦ではリロードtimerを解除する。敗北では弾を無効化する。再挑戦ではmap世代を更新し、再出現・命中表示timer、旧wall、Graphics、path cache、stable 12体の敵、弾メタデータ、接触クールダウン、ノックバック、武器別残弾、発射待ち、HUDを初期化してから物理演算を再開する。旧timer callbackは世代番号が異なる状態を書き換えない。
+弾プールが上限に達した場合は発射しない。空弾倉とリロード中は弾を生成しない。異なる`WeaponId`への武器切替・敗北・再挑戦ではリロードtimerを解除する。同じhandgunのsidearm model切替はtimerを維持する。敗北では弾を無効化する。再挑戦ではmap世代を更新し、再出現・命中表示timer、旧wall、Graphics、path cache、stable 12体の敵、弾メタデータ、接触クールダウン、ノックバック、武器別残弾、発射待ち、HUDを初期化してから物理演算を再開する。旧timer callbackは世代番号が異なる状態を書き換えない。
 
 ## Ponytailの境界
 
-既存のPhaser、TypeScript、DOM、Canvas生成テクスチャだけを再利用する。生成は矩形部屋とL字通路、経路は4000tile・最大12敵に対するBFSへ限定する。新規npm依存、lockfile変更、A*、navmesh、汎用map/AI基盤、外部assetは追加しない。視界・霧、破壊可能地形、map保存、予備弾薬、追加敵種、ウェーブ、通信は対象外とする。実プレイで経路停止または生成の単調さが問題になった時点で、生成規則と経路探索の拡張を再検討する。
+既存のPhaser、TypeScript、DOM、Canvas生成テクスチャだけを再利用する。生成は矩形部屋とL字通路、経路は4000tile・最大12敵に対するBFSへ限定する。新規npm依存、lockfile変更、A*、navmesh、汎用map/AI基盤、外部assetは追加しない。drag & drop、slot間移動・並べ替え、個別弾薬、重量、容量拡張、通信、永続化は対象外とする。実プレイで武器枠の並べ替えまたは個別性能が必要になった時点で、inventory sliceの拡張を再検討する。

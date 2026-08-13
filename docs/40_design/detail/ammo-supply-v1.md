@@ -19,10 +19,10 @@ specification: SPEC-AMMO-SUPPLY
 
 ## リロード進捗表示
 
-リロード開始時はammo panel内のnative progress要素を表示し、既存Phaser TimerEventのgetProgress()を0..1で反映する。タイマー完了、武器切替による中断、敗北、retryではTimerEvent停止後に非表示・value=0へ戻す。表示更新は毎フレームのDOM同期だけで行い、独立した警告音・点滅状態は持たない。
+リロード開始時はammo panel内のnative progress要素を表示し、既存Phaser TimerEventのgetProgress()を0..1で反映する。タイマー完了、異なる`WeaponId`への切替による中断、敗北、retryではTimerEvent停止後に非表示・value=0へ戻す。同じhandgunのsidearm model切替は進捗を維持する。表示更新は毎フレームのDOM同期だけで行い、独立した警告音・点滅状態は持たない。
 ## 箱配置
 
-`selectAmmoBoxTiles(map, occupied, count)` は `floorTiles(map)` を入力とし、開始位置と占有位置を除外する。候補を `seed` と座標から決まる順位でソートし、最大4個を返す。同じmapと引数では同じ結果になり、候補不足時は存在する数だけ返す。
+`selectAmmoBoxTiles(map, occupied, count)` は `floorTiles(map)` を入力とし、開始位置・占有位置・既選択箱の各3x3回収範囲を除外する。候補を `seed` と座標から決まる順位でソートし、最大4個を返す。同じmapと引数では同じ結果になり、候補不足時は存在する数だけ返す。
 
 ## ゲーム統合と失敗時動作
 

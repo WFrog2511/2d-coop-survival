@@ -2,17 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { SCRAP_VISUAL_TIER_THRESHOLDS, scrapVisualTierFor } from '../src/game-data';
 import {
   AMMO_BOX_RESPAWN_MS,
+  BACKPACK_SLOT_COUNT,
   COMBAT_WAVE_DURATION_MS,
   DEFAULT_RUN_SCHEDULE,
   ENEMY_INSTANCE_IDS,
   HANDGUN_AMMO,
   INITIAL_STATE,
+  QUICK_SLOT_COUNT,
   REST_DURATION_MS,
   STABLE_ENEMY_SLOT_COUNT,
   SURVIVAL_LIMIT_MS,
   WAVE_COUNT,
   WAVE_DURATION_MS,
   WEAPONS,
+  WEAPON_MODELS,
   activeEnemyCount,
   advanceRunState,
   advanceSurvivalState,
@@ -47,7 +50,9 @@ import {
   retryRun,
   runDurationMs,
   selectWeapon,
+  selectQuickSlot,
   startReload,
+  weaponIdForModel,
 } from '../src/rules';
 
 describe('戦闘ルール', () => {
@@ -355,6 +360,23 @@ describe('戦闘ルール', () => {
     expect(completeReload(switched, 'shotgun')).toEqual(switched);
   });
 
+  it('同じhandgun WeaponIdのsidearm model切替は共有弾薬とリロードを維持する', () => {
+    const sidearms = collectWeapon(collectWeapon(INITIAL_STATE, 'revolver'), 'compact-pistol');
+    const revolver = selectQuickSlot(sidearms, 1);
+    expect(revolver.weapon).toBe('handgun');
+    const fired = fireWeapon(revolver, 0);
+    expect(fired.fired).toBe(true);
+    const reloading = startReload(fired.state);
+    expect(reloading.reloading).toBe('handgun');
+    const compactPistol = selectQuickSlot(reloading, 2);
+    expect(compactPistol.weapon).toBe(weaponIdForModel('compact-pistol'));
+    expect(compactPistol.inventory.selectedQuickSlot).toBe(2);
+    expect(compactPistol.ammo.handgun).toBe(reloading.ammo.handgun);
+    expect(compactPistol.reserve.handgun).toBe(reloading.reserve.handgun);
+    expect(compactPistol.reloading).toBe(reloading.reloading);
+    expect(compactPistol.nextFireAt.handgun).toBe(reloading.nextFireAt.handgun);
+  });
+
   it('基本敵9体とドローン3体を初期化し、対象だけへダメージと再出現を適用する', () => {
     const damaged = damageEnemy(INITIAL_STATE, 'basic-2', 9);
     expect(ENEMY_INSTANCE_IDS).toHaveLength(12);
@@ -375,24 +397,41 @@ describe('戦闘ルール', () => {
     expect(damagePlayer(INITIAL_STATE, 120)).toMatchObject({ playerHp: 0, defeated: true });
   });
 
-  it('未所持武器を選択せず、単発武器の重複pickupを無視してハンドガンだけを加算する', () => {
+  it('武器モデルを空きquick slot優先で非stack格納し、slot選択と満杯no-opを保つ', () => {
     expect(INITIAL_STATE.inventory).toEqual({
-      weaponCounts: { rifle: 1, shotgun: 0, handgun: 0 },
+      quickSlots: ['rifle', null, null],
+      backpackSlots: Array(BACKPACK_SLOT_COUNT).fill(null),
+      selectedQuickSlot: 0,
       materials: { scrap: 0 },
     });
-    expect(collectWeapon(INITIAL_STATE, 'rifle')).toBe(INITIAL_STATE);
-    expect(selectWeapon(INITIAL_STATE, 'shotgun')).toBe(INITIAL_STATE);
-    const collected = collectWeapon(INITIAL_STATE, 'shotgun');
-    expect(collected.inventory.weaponCounts.shotgun).toBe(INITIAL_STATE.inventory.weaponCounts.shotgun + 1);
-    expect(collectWeapon(collected, 'shotgun')).toBe(collected);
-    const selected = selectWeapon(collected, 'shotgun');
-    expect(selected.weapon).toBe('shotgun');
-    const firstHandgun = collectWeapon(selected, 'handgun');
-    const handgunAfterShot = fireWeapon(selectWeapon(firstHandgun, 'handgun'), 0).state;
-    const secondHandgun = collectWeapon(handgunAfterShot, 'handgun');
-    expect(secondHandgun.inventory.weaponCounts.handgun).toBe(firstHandgun.inventory.weaponCounts.handgun + 1);
-    expect(secondHandgun.ammo.handgun).toBe(handgunAfterShot.ammo.handgun);
-    expect(secondHandgun.reserve.handgun).toBe(handgunAfterShot.reserve.handgun);
+    expect(selectQuickSlot(INITIAL_STATE, 1)).toBe(INITIAL_STATE);
+    const shotgun = collectWeapon(INITIAL_STATE, 'shotgun');
+    const revolver = collectWeapon(shotgun, 'revolver');
+    const duplicateRevolver = collectWeapon(revolver, 'revolver');
+    expect(revolver.inventory.quickSlots).toEqual(['rifle', 'shotgun', 'revolver']);
+    expect(duplicateRevolver.inventory.backpackSlots[0]).toBe('revolver');
+    expect(weaponIdForModel('revolver')).toBe('handgun');
+    expect(weaponIdForModel('compact-pistol')).toBe('handgun');
+    const selected = selectQuickSlot(duplicateRevolver, 2);
+    expect(selected.weapon).toBe('handgun');
+    expect(selected.inventory.selectedQuickSlot).toBe(2);
+    expect(selectWeapon(selected, 'shotgun').inventory.selectedQuickSlot).toBe(1);
+
+    const models = Object.keys(WEAPON_MODELS) as (keyof typeof WEAPON_MODELS)[];
+    let full = INITIAL_STATE;
+    for (let index = 1; index < QUICK_SLOT_COUNT + BACKPACK_SLOT_COUNT; index += 1) {
+      const model = models[index % models.length];
+      if (!model)
+        throw new Error('武器モデル設定が空です。');
+      full = collectWeapon(full, model);
+    }
+    expect(full.inventory.quickSlots).not.toContain(null);
+    expect(full.inventory.backpackSlots).not.toContain(null);
+    const firstModel = models[0];
+    if (!firstModel)
+      throw new Error('武器モデル設定が空です。');
+    expect(collectWeapon(full, firstModel)).toBe(full);
+
     const first = collectMaterial(selected, 'scrap', 1);
     const second = collectMaterial(first, 'scrap', 1);
     expect(second.inventory.materials.scrap).toBeGreaterThan(first.inventory.materials.scrap);
@@ -409,7 +448,8 @@ describe('戦闘ルール', () => {
     expect(retried).toEqual(INITIAL_STATE);
     expect(retried.victory).toBe(false);
     expect(retried.inventory).not.toBe(INITIAL_STATE.inventory);
-    expect(retried.inventory.weaponCounts).not.toBe(INITIAL_STATE.inventory.weaponCounts);
+    expect(retried.inventory.quickSlots).not.toBe(INITIAL_STATE.inventory.quickSlots);
+    expect(retried.inventory.backpackSlots).not.toBe(INITIAL_STATE.inventory.backpackSlots);
     expect(retried.inventory.materials).not.toBe(INITIAL_STATE.inventory.materials);
     expect(retried.ammo).not.toBe(INITIAL_STATE.ammo);
     expect(retried.nextFireAt).not.toBe(INITIAL_STATE.nextFireAt);

@@ -3,7 +3,6 @@ export const ARENA_WIDTH_TILES = 80;
 export const ARENA_HEIGHT_TILES = 50;
 export const AMMO_BOX_COUNT = 4;
 export const SPAWN_PHASE_MS = 60_000;
-const INITIAL_WEAPON_PICKUP_MAX_PATH_DISTANCE = 4;
 export const SPAWN_DIRECTIONS = ['up', 'right', 'down', 'left'] as const;
 
 const NORMAL_ROOM_COUNT = 14;
@@ -301,27 +300,35 @@ export function allFloorsReachable(map: ArenaMap): boolean {
 }
 
 /**
- * 弾薬箱を置く重複しない床tileを決定的に選ぶ。
+ * 弾薬箱を置く3x3取得範囲が重ならない床tileを決定的に選ぶ。
  *
  * @param map 選択対象のアリーナ地形。
- * @param occupied すでに使用中として除外するtile座標。
+ * @param occupied すでに使用中として、その3x3取得範囲を除外するtile座標。
  * @param count 選択する弾薬箱の数。
- * @returns seed順で選んだ弾薬箱のtile座標。
+ * @returns seed順で選んだ、3x3取得範囲が重ならない弾薬箱のtile座標。
  */
 export function selectAmmoBoxTiles(
   map: ArenaMap,
   occupied: readonly TilePosition[] = [],
   count = AMMO_BOX_COUNT,
 ): TilePosition[] {
-  const occupiedKeys = new Set<string>([positionKey(map.start), ...occupied.map(positionKey)]);
-  return floorTiles(map)
-    .filter(position => !occupiedKeys.has(positionKey(position)))
+  const excluded = [map.start, ...occupied];
+  const ordered = floorTiles(map)
+    .filter(position => !excluded.some(other =>
+      Math.abs(other.x - position.x) <= 1 && Math.abs(other.y - position.y) <= 1))
     .sort((left, right) => {
       const leftRank = mixSeed(map.seed, 'ammo-box:' + positionKey(left));
       const rightRank = mixSeed(map.seed, 'ammo-box:' + positionKey(right));
       return leftRank - rightRank || left.y - right.y || left.x - right.x;
-    })
-    .slice(0, Math.max(0, count));
+    });
+  const selected: TilePosition[] = [];
+  for (const candidate of ordered) {
+    const overlapsPickupRange = selected.some(tile =>
+      Math.abs(tile.x - candidate.x) <= 1 && Math.abs(tile.y - candidate.y) <= 1);
+    if (!overlapsPickupRange)
+      selected.push(candidate);
+  }
+  return selected.slice(0, Math.max(0, count));
 }
 
 /**
@@ -330,32 +337,30 @@ export function selectAmmoBoxTiles(
  * @param map 選択対象のアリーナ地形。
  * @param occupied 弾薬箱など、同一または近傍を避けるtile座標。
  * @param count 選択するpickup数。
- * @returns 近い候補を優先した、回収範囲が重ならない到達可能tile群。
+ * @returns 3x3取得範囲が重ならない到達可能tile群。
  */
 export function selectInitialWeaponPickupTiles(
   map: ArenaMap,
   occupied: readonly TilePosition[] = [],
   count = 1,
 ): TilePosition[] {
-  const occupiedKeys = new Set([positionKey(map.start), ...occupied.map(positionKey)]);
+  const excluded = [map.start, ...occupied];
+  const occupiedKeys = new Set(excluded.map(positionKey));
   const distances = pathDistances(map, map.start);
   const candidates = floorTiles(map).flatMap((position) => {
     const distance = distances.get(positionKey(position));
-    const nearOccupied = occupied.some(other => Math.abs(other.x - position.x) <= 1 && Math.abs(other.y - position.y) <= 1);
+    const nearOccupied = excluded.some(other => Math.abs(other.x - position.x) <= 1 && Math.abs(other.y - position.y) <= 1);
     return distance === undefined || distance === 0 || occupiedKeys.has(positionKey(position)) || nearOccupied
       ? []
       : [{ position, distance }];
   });
-  const nearby = candidates.filter(candidate => candidate.distance <= INITIAL_WEAPON_PICKUP_MAX_PATH_DISTANCE);
   const normalizedCount = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
   const compareCandidates = (left: { position: TilePosition; distance: number }, right: { position: TilePosition; distance: number }): number => {
     const rank = mixSeed(map.seed, 'initial-weapon:' + positionKey(left.position))
       - mixSeed(map.seed, 'initial-weapon:' + positionKey(right.position));
-    return left.distance - right.distance || rank || left.position.y - right.position.y || left.position.x - right.position.x;
+    return rank || left.position.y - right.position.y || left.position.x - right.position.x;
   };
-  const ordered = nearby.length > 0
-    ? [...nearby.sort(compareCandidates), ...candidates.filter(candidate => candidate.distance > INITIAL_WEAPON_PICKUP_MAX_PATH_DISTANCE).sort(compareCandidates)]
-    : candidates.sort(compareCandidates);
+  const ordered = candidates.sort(compareCandidates);
   const selected: TilePosition[] = [];
   for (const candidate of ordered) {
     const overlapsPickupRange = selected.some(tile =>
@@ -372,7 +377,7 @@ export function selectInitialWeaponPickupTiles(
 }
 
 /**
- * 開始位置から到達できる近い初期武器pickupのtileを決定的に選ぶ。
+ * 開始位置から到達できる全floorから初期武器pickupのtileを決定的に選ぶ。
  *
  * @param map 選択対象のアリーナ地形。
  * @param occupied 弾薬箱など、同一または近傍を避けるtile座標。

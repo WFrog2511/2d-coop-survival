@@ -1,6 +1,6 @@
 # 2D協力メカサバイバル
 
-ブラウザから1〜4人で参加し、視界と情報を共有しながら暴走機械群に対処して全員生還を目指す、見下ろし型2D協力サバイバルゲームです。現在のローカル1人用prototypeは、enemy-freeの1分準備、各2分30秒の3 combat waveとその間の各1分rest（既定10:30 run）、finite ammo、combat開始からの60秒directional spawnに加え、初期8体から12体への段階投入、死角recycle、基本敵の分散経路、ショットガン・8個のハンドガン・スクラップpickupを実装しています。
+ブラウザから1〜4人で参加し、視界と情報を共有しながら暴走機械群に対処して全員生還を目指す、見下ろし型2D協力サバイバルゲームです。現在のローカル1人用prototypeは、enemy-freeの1分準備、各2分30秒の3 combat waveとその間の各1分rest（既定10:30 run）、finite ammo、combat開始からの60秒directional spawnに加え、初期8体から12体への段階投入、死角recycle、基本敵の分散経路、ショットガン・3種を混在させた8件のsidearm・スクラップpickupと、3クイックスロット・10バックパックの閲覧専用inventoryを実装しています。
 
 合意済みの範囲は[Definition of Delivery Issue #12](https://github.com/WFrog2511/2d-coop-survival/issues/12)、[combat-choice-v1要件](docs/20_requirements/combat-choice-v1.md)、[Issue #22 DOD comment](https://github.com/WFrog2511/2d-coop-survival/issues/22#issuecomment-5222574276)、[directional-spawn-v1要件](docs/20_requirements/directional-spawn-v1.md)、[wave-progression-v1要件](docs/20_requirements/wave-progression-v1.md)、[inventory-v1要件](docs/20_requirements/inventory-v1.md)を参照してください。[docs/企画書.md](docs/企画書.md)は企画入力であり、完了判断の正本ではありません。
 
@@ -45,12 +45,12 @@ Viteが表示するローカルURL（通常は`http://127.0.0.1:5173/`）をPC�
 - 開始: 役職を1つ選択して「開始」ボタンを押す（現時点ではHUD表示だけ）
 - 移動: WASD または矢印キー
 - 回避: Space または Shift（照準方向へ80px、再使用待ち2秒）
-- 武器: 1 アサルトライフル（初期所持、左ボタン長押しで自動射撃） / 2 ショットガン（world pickup取得後、1クリック1射） / 3 ハンドガン（8個のworld pickup取得後、共有弾薬で1クリック1射）
+- 武器: 1〜3でクイックスロットを選択（初期所持はライフル）。ショットガンは1クリック1射、ハンドガン・リボルバー・コンパクトピストルは同じ共有弾薬で1クリック1射
 - 照準: マウス移動
 - リロード: R（選択武器の残弾を補充。リロード中の射撃不可）
-- pickup: 3x3近傍で表示されるE案内中に、弾薬箱・ショットガン・ハンドガン・スクラップを1件取得
+- pickup: 3x3近傍で表示される対象名・操作の2行E案内中に、弾薬箱・weapon model・スクラップを1件取得。空きクイックスロット、次にバックパックへ非stackで格納する
 - 敵balance: 基本敵HP4。高速ドローンは高速だがHP2で、ライフル1発で撃破可能
-- Canvas HUD: 上中央はWave・昼（準備）/夜（戦闘）/昼（休憩）・現在フェーズ残り、右上はキル数、player HPは左下、weapon slot（所持数を含む）・スクラップ・ammoは右下
+- Canvas HUD: 上中央はWave・昼（準備）/夜（戦闘）/昼（休憩）・現在フェーズ残り、右上はキル数、player HPは左下、選択中weapon・スクラップ・ammoは右下。Tabで3クイックスロットと10バックパックを閲覧する（非modal）
 - 再挑戦: 敗北表示の「再挑戦」ボタン
 
 ## TypeScript品質ゲート
@@ -86,7 +86,7 @@ pnpm exec playwright install chromium
 pnpm test:e2e
 ```
 
-実際のブラウザ操作を表示する場合はheadedモードを使います。代表E2Eは、enemy-free初回準備、combat開始時の初期8体と3/6/9/12秒の段階投入、strict hidden spawn、combat epochからの60秒directional spawn phase、preparation/combat/rest境界と敵のcurrent phase respawn、時間/HP/weapon slot/ammo overlayを観測しながら、visibility、移動、射撃、有限弾薬、リロード、弾薬箱respawn、weapon・スクラップpickup、10:30既定runの勝利、敗北、retryを確認します。
+実際のブラウザ操作を表示する場合はheadedモードを使います。代表E2Eは、enemy-free初回準備、combat開始時の初期8体と3/6/9/12秒の段階投入、strict hidden spawn、combat epochからの60秒directional spawn phase、preparation/combat/rest境界と敵のcurrent phase respawn、時間/HP/quick slot/ammo overlayを観測しながら、visibility、移動、射撃、有限弾薬、リロード、弾薬箱respawn、weapon model・スクラップpickup、inventory閲覧、10:30既定runの勝利、敗北、retryを確認します。
 
 ```powershell
 pnpm test:e2e --headed --workers=1
