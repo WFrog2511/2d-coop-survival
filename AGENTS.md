@@ -74,6 +74,10 @@ PR番号、open / mergeable状態、現在head SHAをリポジトリ文書へ転
 
 Prototype standardでmatrix、release-readiness、evidenceを作成・更新するのは、Definition of DeliveryがDelivery-strictへ変更された場合だけとする。既存の`docs/70_delivery/*` matrixとreadinessは履歴であり、この方針への移行だけを理由に編集しない。
 
+### Prototype standardの試遊優先モード
+
+操作感、画面、ゲームバランスなど、プロジェクトオーナーが実際に触って方向を調整する変更では、Prototype standardの暫定local overrideとして[試遊優先モード](.agents/overrides/playtest-first.md)を選択できる。開始時にこのモードを使うことを明示し、方向性確認前の探索と、確認後の安定化を分ける。通常のPrototype standardやDelivery-strictのgateを恒久的に弱めるprofileではない。
+
 ### Codex Agent checkpoint
 
 `.codex/config.toml`と`.codex/agents/`はtrusted projectだけで有効になる。変更後は新しいtrusted taskを開始し、`terra_max_planner_reviewer`と`terra_max_writer`が使えることを確認してから依存する。最大sub-agent数は3とし、将来のproject sub-agentは`gpt-5.6-terra` / `max`を使う。SOL root orchestrator（`gpt-5.6-sol`）はtask / Issue / Git / GitHub / agent orchestrationを担当し、Terra Max planner/reviewerとsole writerはplan / write / review / unitを担当する。`gpt-5.6-terra`が使えない場合の別モデルへのfallbackはユーザー確認後だけ行う。
