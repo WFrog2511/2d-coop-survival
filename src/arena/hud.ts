@@ -1,7 +1,7 @@
 import type { EnemyVisibility, SpawnDirection, TilePosition } from '../arena-map';
 import { DIRECTION_LABELS, ENEMY_IDS } from '../game-data';
 import { PLAYER_ROLES, type PlayerRoleId } from '../player-data';
-import { AMMO_TYPES, AMMO_TYPE_ORDER, STABLE_ENEMY_SLOT_COUNT, WEAPON_MODELS, WEAPONS, activeEnemyCount, activeWeaponId, currentRunPhase, currentWaveNumber, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, weaponIdForModel, type AmmoType, type CombatState, type EnemyInstanceId, type InventorySlotRef, type RunState, type WeaponModel } from '../rules';
+import { AMMO_MATERIAL_ORDER, AMMO_MATERIALS, STABLE_ENEMY_SLOT_COUNT, WEAPONS, activeEnemyCount, activeWeapon, currentRunPhase, currentWaveNumber, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, type AmmoMaterial, type CombatState, type EnemyInstanceId, type InventorySlotRef, type RunState, type WeaponInstance } from '../rules';
 
 export type EnemyHudView = {
   stableId: string;
@@ -48,7 +48,7 @@ export type InventoryDropTarget = InventorySlotRef | 'world';
 /** 詳細インベントリからworldまたは武器枠へ移す対象。 */
 export type InventoryDragSource
   = | { kind: 'weapon'; slot: InventorySlotRef }
-    | { kind: 'ammo'; ammoType: AmmoType };
+    | { kind: 'material'; material: AmmoMaterial };
 
 function inventorySlotRefFromTarget(target: EventTarget | null): InventorySlotRef | undefined {
   if (!(target instanceof Element)) return undefined;
@@ -59,10 +59,10 @@ function inventorySlotRefFromTarget(target: EventTarget | null): InventorySlotRe
   return { container, index };
 }
 
-function ammoTypeFromTarget(target: EventTarget | null): AmmoType | undefined {
+function ammoMaterialFromTarget(target: EventTarget | null): AmmoMaterial | undefined {
   if (!(target instanceof Element)) return undefined;
-  const ammoType = target.closest<HTMLOutputElement>('[data-ammo-type]')?.dataset.ammoType;
-  return AMMO_TYPE_ORDER.includes(ammoType as AmmoType) ? ammoType as AmmoType : undefined;
+  const material = target.closest<HTMLOutputElement>('[data-ammo-material]')?.dataset.ammoMaterial;
+  return AMMO_MATERIAL_ORDER.includes(material as AmmoMaterial) ? material as AmmoMaterial : undefined;
 }
 
 function sameInventorySlot(left: InventorySlotRef, right: InventorySlotRef): boolean {
@@ -94,7 +94,7 @@ export class ArenaHud {
   private readonly weaponHud = element<HTMLOutputElement>('[data-testid="weapon"]');
   private readonly ammoHud = element<HTMLOutputElement>('[data-testid="ammo"]');
   private readonly ammoPanelWeaponHud = element<HTMLOutputElement>('[data-testid="ammo-panel-weapon"]');
-  private readonly reserveHud = element<HTMLOutputElement>('[data-testid="ammo-reserve"]');
+  private readonly materialHud = element<HTMLOutputElement>('[data-testid="ammo-material"]');
   private readonly quickSlots = [
     element<HTMLOutputElement>('[data-testid="quick-slot-1"]'),
     element<HTMLOutputElement>('[data-testid="quick-slot-2"]'),
@@ -103,9 +103,9 @@ export class ArenaHud {
 
   private readonly inventoryDetail = element<HTMLElement>('[data-testid="inventory-detail"]');
   private readonly ammoPouch = element<HTMLElement>('[data-testid="ammo-pouch"]');
-  private readonly ammoPouchEntries: ReadonlyArray<{ type: AmmoType; output: HTMLOutputElement }> = AMMO_TYPE_ORDER.map(type => ({
-    type,
-    output: element<HTMLOutputElement>(`[data-testid="ammo-pouch-${type}"]`),
+  private readonly ammoPouchEntries: ReadonlyArray<{ material: AmmoMaterial; output: HTMLOutputElement }> = AMMO_MATERIAL_ORDER.map(material => ({
+    material,
+    output: element<HTMLOutputElement>(`[data-testid="ammo-pouch-${material}"]`),
   }));
 
   private readonly inventoryDetailQuickSlots = [
@@ -173,14 +173,14 @@ export class ArenaHud {
       }
       return;
     }
-    const ammoType = ammoTypeFromTarget(event.target);
-    if (!ammoType || !(event.target instanceof Node) || !this.ammoPouch.contains(event.target))
+    const material = ammoMaterialFromTarget(event.target);
+    if (!material || !(event.target instanceof Node) || !this.ammoPouch.contains(event.target))
       return;
-    this.dragSource = { kind: 'ammo', ammoType };
-    this.ammoPouch.dataset.dragSource = `ammo:${ammoType}`;
+    this.dragSource = { kind: 'material', material };
+    this.ammoPouch.dataset.dragSource = `material:${material}`;
     if (event.dataTransfer) {
       event.dataTransfer.effectAllowed = 'move';
-      event.dataTransfer.setData('text/plain', `ammo:${ammoType}`);
+      event.dataTransfer.setData('text/plain', `material:${material}`);
     }
   };
 
@@ -349,26 +349,28 @@ export class ArenaHud {
     ENEMY_IDS.forEach((id) => {
       this.enemyHp[id].value = String(view.state.enemies[id].hp);
     });
-    const selectedModel = view.state.inventory.quickSlots[view.state.inventory.selectedQuickSlot];
-    const weaponId = activeWeaponId(view.state);
-    const selectedLabel = selectedModel ? WEAPON_MODELS[selectedModel].label : '武器なし';
+    const selectedWeapon = view.state.inventory.quickSlots[view.state.inventory.selectedQuickSlot];
+    const weapon = activeWeapon(view.state);
+    const selectedLabel = selectedWeapon ? WEAPONS[selectedWeapon.model].label : '武器なし';
     this.weaponHud.value = selectedLabel;
     this.ammoPanelWeaponHud.value = selectedLabel;
-    if (weaponId) {
-      const weapon = WEAPONS[weaponId];
-      this.ammoHud.value = view.state.ammo[weaponId] + '/' + weapon.magazineSize;
-      this.reserveHud.value = '予備 ' + view.state.reserve[weaponId] + '/' + weapon.reserveMax;
-      this.ammoHud.dataset.magazine = String(view.state.ammo[weaponId]);
-      this.ammoHud.dataset.magazineCapacity = String(weapon.magazineSize);
-      this.reserveHud.dataset.reserve = String(view.state.reserve[weaponId]);
-      this.reserveHud.dataset.reserveCapacity = String(weapon.reserveMax);
+    if (weapon) {
+      const definition = WEAPONS[weapon.model];
+      const material = AMMO_MATERIALS[definition.material];
+      const quantity = view.state.inventory.materials[definition.material];
+      this.ammoHud.value = weapon.magazine + '/' + definition.magazineSize;
+      this.materialHud.value = `素材 ${material.label} ${quantity}`;
+      this.ammoHud.dataset.magazine = String(weapon.magazine);
+      this.ammoHud.dataset.magazineCapacity = String(definition.magazineSize);
+      this.materialHud.dataset.material = definition.material;
+      this.materialHud.dataset.quantity = String(quantity);
     } else {
       this.ammoHud.value = '-/-';
-      this.reserveHud.value = '予備 -/-';
+      this.materialHud.value = '素材 -';
       this.ammoHud.dataset.magazine = '';
       this.ammoHud.dataset.magazineCapacity = '';
-      this.reserveHud.dataset.reserve = '';
-      this.reserveHud.dataset.reserveCapacity = '';
+      this.materialHud.dataset.material = '';
+      this.materialHud.dataset.quantity = '';
     }
     this.updateInventory(view.state);
     this.updateAmmoPouch(view.state);
@@ -381,7 +383,11 @@ export class ArenaHud {
     this.ammoBoxCountHud.dataset.respawnBoxes = view.pendingAmmoBoxIds.join('|');
     this.ammoBoxCountHud.dataset.respawnTiles = view.pendingAmmoBoxOriginTiles.join('|');
     this.updateGunslinger(view.gunslingerCombo, view.gunslingerSpeedMultiplier, view.isGunslinger);
-    this.reloadHud.value = view.state.reloading === null ? '待機' : `リロード中: ${WEAPONS[view.state.reloading].label}`;
+    this.reloadHud.value = view.state.reloading === null
+      ? '待機'
+      : weapon?.id === view.state.reloading
+        ? `リロード中: ${WEAPONS[weapon.model].label}`
+        : 'リロード中';
     this.updateReloadProgress(view.reload);
     this.updateSurvival(view.remainingSurvivalMs);
     this.updateRun(view.runState);
@@ -391,65 +397,72 @@ export class ArenaHud {
   }
 
   private updateInventory(state: CombatState): void {
-    state.inventory.quickSlots.forEach((model, index) => {
+    state.inventory.quickSlots.forEach((weapon, index) => {
       const selected = state.inventory.selectedQuickSlot === index;
       const quickSlot = this.quickSlots[index];
       if (quickSlot)
-        this.updateWeaponSlot(quickSlot, model, index, selected);
+        this.updateWeaponSlot(quickSlot, weapon, index, selected);
       const inventoryDetailQuickSlot = this.inventoryDetailQuickSlots[index];
       if (inventoryDetailQuickSlot)
-        this.updateWeaponSlot(inventoryDetailQuickSlot, model, index, selected, 'quick');
+        this.updateWeaponSlot(inventoryDetailQuickSlot, weapon, index, selected, 'quick');
     });
-    state.inventory.backpackSlots.forEach((model, index) => {
+    state.inventory.backpackSlots.forEach((weapon, index) => {
       const slot = this.backpackSlots[index];
       if (!slot)
         return;
-      const label = model ? WEAPON_MODELS[model].label : '空き';
+      const label = weapon ? WEAPONS[weapon.model].label : '空き';
       slot.value = `${index + 1} ${label}`;
       slot.dataset.index = String(index);
-      slot.dataset.model = model ?? '';
-      slot.dataset.weapon = model ? weaponIdForModel(model) : '';
-      slot.dataset.empty = String(model === null);
+      slot.dataset.model = weapon?.model ?? '';
+      slot.dataset.weaponInstance = weapon?.id ?? '';
+      slot.dataset.magazine = weapon ? String(weapon.magazine) : '';
+      delete slot.dataset.weapon;
+      slot.dataset.empty = String(weapon === null);
       slot.dataset.inventoryContainer = 'backpack';
-      slot.draggable = model !== null;
+      slot.draggable = weapon !== null;
     });
     this.inventoryDetail.dataset.selectedQuickSlot = String(state.inventory.selectedQuickSlot);
     this.scrapHud.value = `スクラップ ${state.inventory.materials.scrap}`;
     this.scrapHud.dataset.count = String(state.inventory.materials.scrap);
   }
 
-  /** 弾薬ポーチは既存の武器種ごとの予備弾薬だけを一覧表示する。 */
+  /** 弾薬ポーチは3素材の所持数とworld drop情報を一覧表示する。 */
   private updateAmmoPouch(state: CombatState): void {
-    this.ammoPouchEntries.forEach(({ type, output }) => {
-      const ammo = AMMO_TYPES[type];
-      output.value = `${ammo.icon} ${ammo.label} ${state.reserve[ammo.weapon]}`;
-      output.dataset.ammoType = type;
-      output.dataset.weapon = ammo.weapon;
-      output.dataset.reserve = String(state.reserve[ammo.weapon]);
+    this.ammoPouchEntries.forEach(({ material, output }) => {
+      const ammo = AMMO_MATERIALS[material];
+      output.value = `${ammo.icon} ${ammo.label} ${state.inventory.materials[material]}`;
+      output.dataset.ammoMaterial = material;
+      output.dataset.material = material;
+      output.dataset.quantity = String(state.inventory.materials[material]);
       output.dataset.boxQuantity = String(ammo.boxQuantity);
       output.dataset.worldColor = ammo.worldColor;
-      output.dataset.dragKind = 'ammo';
+      output.dataset.dragKind = 'material';
+      delete output.dataset.ammoType;
+      delete output.dataset.weapon;
+      delete output.dataset.reserve;
       output.draggable = true;
     });
   }
 
   private updateWeaponSlot(
     slot: HTMLOutputElement,
-    model: WeaponModel | null,
+    weapon: WeaponInstance | null,
     index: number,
     selected: boolean,
     inventoryContainer?: InventorySlotRef['container'],
   ): void {
-    const label = model ? WEAPON_MODELS[model].label : '空き';
+    const label = weapon ? WEAPONS[weapon.model].label : '空き';
     slot.value = `${index + 1} ${label}${selected ? '（選択中）' : ''}`;
     slot.dataset.index = String(index);
-    slot.dataset.model = model ?? '';
-    slot.dataset.weapon = model ? weaponIdForModel(model) : '';
-    slot.dataset.empty = String(model === null);
+    slot.dataset.model = weapon?.model ?? '';
+    slot.dataset.weaponInstance = weapon?.id ?? '';
+    slot.dataset.magazine = weapon ? String(weapon.magazine) : '';
+    delete slot.dataset.weapon;
+    slot.dataset.empty = String(weapon === null);
     slot.dataset.selected = String(selected);
     if (inventoryContainer) {
       slot.dataset.inventoryContainer = inventoryContainer;
-      slot.draggable = model !== null;
+      slot.draggable = weapon !== null;
     } else {
       delete slot.dataset.inventoryContainer;
       slot.draggable = false;

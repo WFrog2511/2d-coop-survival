@@ -6,6 +6,8 @@ specification: SPEC-AMMO-SUPPLY
 
 # ammo-supply-v1 基本設計
 
+> **履歴化:** 本書全体は [DESIGN-BASIC-AMMO-MATERIAL-V1](ammo-material-v1.md) と [Issue #77](https://github.com/WFrog2511/2d-coop-survival/issues/77) により supersede された。AmmoType、weapon別reserve、共有弾倉を前提にした設計は過去sliceの履歴として保持する。
+
 既存の戦闘状態、リロード、Phaserの物理overlap、Canvas生成texture、DOM診断HUDを拡張する。新しいinventory・loot基盤や外部assetは導入しない。
 
 | 責務 | 実装経路 |

@@ -45,17 +45,17 @@
           <aside id="ammo-panel" data-testid="ammo-panel" aria-label="弾数">
             <span class="ammo-panel-caption">弾薬</span>
             <output class="ammo-panel-weapon" data-testid="ammo-panel-weapon">アサルトライフル</output>
-            <output class="ammo-panel-magazine" data-testid="ammo">20/20</output>
-            <output class="ammo-panel-reserve" data-testid="ammo-reserve">予備 40/60</output>
+            <output class="ammo-panel-magazine" data-testid="ammo">-/-</output>
+            <output class="ammo-panel-material" data-testid="ammo-material">素材 -</output>
             <span class="ammo-panel-reload-label" data-testid="reload-progress-label" hidden>リロード中</span>
             <progress class="ammo-panel-reload" data-testid="reload-progress" max="1" value="0" hidden aria-label="リロード進捗"></progress>
             <output data-testid="ammo-box-count" hidden>4</output>
           </aside>
           <aside id="inventory-panel" data-testid="inventory-panel" aria-label="クイックスロットと素材">
             <div class="quickbar-slots" aria-label="武器クイックスロット">
-              <output data-testid="quick-slot-1" data-index="0" data-model="rifle" data-weapon="rifle" data-empty="false" data-selected="true">1 アサルトライフル（選択中）</output>
-              <output data-testid="quick-slot-2" data-index="1" data-model="" data-weapon="" data-empty="true" data-selected="false">2 空き</output>
-              <output data-testid="quick-slot-3" data-index="2" data-model="" data-weapon="" data-empty="true" data-selected="false">3 空き</output>
+              <output data-testid="quick-slot-1" data-index="0" data-model="rifle" data-weapon-instance="starter-rifle" data-magazine="" data-empty="false" data-selected="true">1 アサルトライフル（選択中）</output>
+              <output data-testid="quick-slot-2" data-index="1" data-model="" data-weapon-instance="" data-magazine="" data-empty="true" data-selected="false">2 空き</output>
+              <output data-testid="quick-slot-3" data-index="2" data-model="" data-weapon-instance="" data-magazine="" data-empty="true" data-selected="false">3 空き</output>
             </div>
             <output data-testid="scrap" data-count="0">スクラップ 0</output>
           </aside>
@@ -63,31 +63,31 @@
             <h2>インベントリ</h2>
             <section aria-label="クイックスロット">
               <span class="inventory-panel-caption">クイックスロット</span>
-              <output data-testid="inventory-quick-slot-1" data-inventory-container="quick" data-index="0" data-model="rifle" data-weapon="rifle" data-empty="false" data-selected="true" draggable="true">1 アサルトライフル（選択中）</output>
-              <output data-testid="inventory-quick-slot-2" data-inventory-container="quick" data-index="1" data-model="" data-weapon="" data-empty="true" data-selected="false">2 空き</output>
-              <output data-testid="inventory-quick-slot-3" data-inventory-container="quick" data-index="2" data-model="" data-weapon="" data-empty="true" data-selected="false">3 空き</output>
+              <output data-testid="inventory-quick-slot-1" data-inventory-container="quick" data-index="0" data-model="rifle" data-weapon-instance="starter-rifle" data-magazine="" data-empty="false" data-selected="true" draggable="true">1 アサルトライフル（選択中）</output>
+              <output data-testid="inventory-quick-slot-2" data-inventory-container="quick" data-index="1" data-model="" data-weapon-instance="" data-magazine="" data-empty="true" data-selected="false">2 空き</output>
+              <output data-testid="inventory-quick-slot-3" data-inventory-container="quick" data-index="2" data-model="" data-weapon-instance="" data-magazine="" data-empty="true" data-selected="false">3 空き</output>
             </section>
             <section aria-label="バックパック">
               <span class="inventory-panel-caption">バックパック</span>
               <div class="backpack-grid" data-testid="backpack-slots">
-                <output data-testid="backpack-slot-1" data-inventory-container="backpack" data-index="0" data-model="" data-weapon="" data-empty="true">1 空き</output>
-                <output data-testid="backpack-slot-2" data-inventory-container="backpack" data-index="1" data-model="" data-weapon="" data-empty="true">2 空き</output>
-                <output data-testid="backpack-slot-3" data-inventory-container="backpack" data-index="2" data-model="" data-weapon="" data-empty="true">3 空き</output>
-                <output data-testid="backpack-slot-4" data-inventory-container="backpack" data-index="3" data-model="" data-weapon="" data-empty="true">4 空き</output>
-                <output data-testid="backpack-slot-5" data-inventory-container="backpack" data-index="4" data-model="" data-weapon="" data-empty="true">5 空き</output>
-                <output data-testid="backpack-slot-6" data-inventory-container="backpack" data-index="5" data-model="" data-weapon="" data-empty="true">6 空き</output>
-                <output data-testid="backpack-slot-7" data-inventory-container="backpack" data-index="6" data-model="" data-weapon="" data-empty="true">7 空き</output>
-                <output data-testid="backpack-slot-8" data-inventory-container="backpack" data-index="7" data-model="" data-weapon="" data-empty="true">8 空き</output>
-                <output data-testid="backpack-slot-9" data-inventory-container="backpack" data-index="8" data-model="" data-weapon="" data-empty="true">9 空き</output>
-                <output data-testid="backpack-slot-10" data-inventory-container="backpack" data-index="9" data-model="" data-weapon="" data-empty="true">10 空き</output>
+                <output data-testid="backpack-slot-1" data-inventory-container="backpack" data-index="0" data-model="" data-weapon-instance="" data-magazine="" data-empty="true">1 空き</output>
+                <output data-testid="backpack-slot-2" data-inventory-container="backpack" data-index="1" data-model="" data-weapon-instance="" data-magazine="" data-empty="true">2 空き</output>
+                <output data-testid="backpack-slot-3" data-inventory-container="backpack" data-index="2" data-model="" data-weapon-instance="" data-magazine="" data-empty="true">3 空き</output>
+                <output data-testid="backpack-slot-4" data-inventory-container="backpack" data-index="3" data-model="" data-weapon-instance="" data-magazine="" data-empty="true">4 空き</output>
+                <output data-testid="backpack-slot-5" data-inventory-container="backpack" data-index="4" data-model="" data-weapon-instance="" data-magazine="" data-empty="true">5 空き</output>
+                <output data-testid="backpack-slot-6" data-inventory-container="backpack" data-index="5" data-model="" data-weapon-instance="" data-magazine="" data-empty="true">6 空き</output>
+                <output data-testid="backpack-slot-7" data-inventory-container="backpack" data-index="6" data-model="" data-weapon-instance="" data-magazine="" data-empty="true">7 空き</output>
+                <output data-testid="backpack-slot-8" data-inventory-container="backpack" data-index="7" data-model="" data-weapon-instance="" data-magazine="" data-empty="true">8 空き</output>
+                <output data-testid="backpack-slot-9" data-inventory-container="backpack" data-index="8" data-model="" data-weapon-instance="" data-magazine="" data-empty="true">9 空き</output>
+                <output data-testid="backpack-slot-10" data-inventory-container="backpack" data-index="9" data-model="" data-weapon-instance="" data-magazine="" data-empty="true">10 空き</output>
               </div>
             </section>
           </aside>
           <aside id="ammo-pouch" class="game-overlay" data-testid="ammo-pouch" data-open="false" hidden aria-label="弾薬ポーチ">
             <h2>弾薬ポーチ</h2>
-            <output data-testid="ammo-pouch-rifle-ammo" data-ammo-type="rifle-ammo" data-weapon="rifle" data-reserve="" draggable="true">▰ ライフル弾</output>
-            <output data-testid="ammo-pouch-shotgun-ammo" data-ammo-type="shotgun-ammo" data-weapon="shotgun" data-reserve="" draggable="true">◀ ショットガン弾</output>
-            <output data-testid="ammo-pouch-handgun-ammo" data-ammo-type="handgun-ammo" data-weapon="handgun" data-reserve="" draggable="true">▪ ハンドガン弾</output>
+            <output data-testid="ammo-pouch-ballistic-material" data-ammo-material="ballistic-material" data-material="ballistic-material" data-quantity="" draggable="true">▰ 実弾マテリアル</output>
+            <output data-testid="ammo-pouch-projectile-material" data-ammo-material="projectile-material" data-material="projectile-material" data-quantity="" draggable="true">➤ 投射マテリアル</output>
+            <output data-testid="ammo-pouch-special-cell" data-ammo-material="special-cell" data-material="special-cell" data-quantity="" draggable="true">▣ 特殊セル</output>
           </aside>
           <output id="world-item-count" data-testid="world-item-count" data-world-items="" hidden aria-hidden="true">1</output>
         </div>

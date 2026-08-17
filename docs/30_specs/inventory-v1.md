@@ -5,6 +5,10 @@ requirements: REQ-INVENTORY-V1
 
 # inventory-v1 仕様
 
+## Issue #77の限定supersede
+
+[SPEC-AMMO-MATERIAL-V1](ammo-material-v1.md) は、WeaponModel またはnullを枠そのものとして扱う記述、shared sidearm ammo、AmmoType、pouch reserve、world ammo、terminal/retry時の旧ammo初期化だけを supersede する。現行の枠値はWeaponInstanceまたはnullであり、3マテリアルと個別magazine、nextFireAtを保持する。quick/backpackの枠数、move/swap、weapon drag and drop、配置不能時の無作用、world weaponの非stack契約は維持する。
+
 ## 状態
 
 - `CombatState.inventory` は3件の`quickSlots`、10件の`backpackSlots`、`selectedQuickSlot`、素材種別ごとの`materials`を保持する純粋stateである。各武器枠は`WeaponModel | null`で、初期値はquick slot 1のrifle、残り12枠は空、スクラップ0個とする。

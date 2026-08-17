@@ -8,6 +8,10 @@ definition_of_delivery: https://github.com/WFrog2511/2d-coop-survival/issues/12
 
 # combat-choice-v1 要件
 
+## Issue #77の限定supersede
+
+[REQ-AMMO-MATERIAL-V1](ammo-material-v1.md) は、WeaponId別shared ammo、5武器表、shared nextFireAtとreload、retry時の旧ammo表現だけを supersede する。現行は7 WeaponModel、3マテリアル、WeaponInstanceごとのmagazineとnextFireAtを使う。移動、敵、壁、map、照準、入力、既存のbullet/collider/range/hit/effect経路は本書の契約を維持する。
+
 ## 目的
 
 prototype-v0を拡張し、初期ライフルとworld pickupで取得するショットガン・sidearm model、9体の基本敵・3体の高速ドローンを、遮蔽物を持つ自動生成アリーナで選択・識別・撃破できる最小戦闘ループを提供する。

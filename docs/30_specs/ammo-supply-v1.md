@@ -5,6 +5,8 @@ requirements: REQ-AMMO-SUPPLY
 
 # ammo-supply-v1 仕様
 
+> **履歴化:** 本書全体は [SPEC-AMMO-MATERIAL-V1](ammo-material-v1.md) と [Issue #77](https://github.com/WFrog2511/2d-coop-survival/issues/77) により supersede された。AmmoType、weapon別reserve、共有弾倉の記述は現行仕様ではなく、過去sliceの履歴として保持する。
+
 ## 状態
 
 `CombatState`は各`WeaponId`（rifle、shotgun、handgun）ごとの `ammo`（弾倉）と `reserve`（予備弾薬）を保持する。`AmmoType`（rifle-ammo、shotgun-ammo、handgun-ammo）はそれぞれの既存`WeaponId`へ一意に対応し、追加の弾薬stateを作らない。`AMMO_TYPES`はlabel、icon、WeaponId、直接調整する`boxQuantity`、worldColorを一元化する。ハンドガン、リボルバー、コンパクトピストルは1組のhandgun弾倉・予備弾薬・リロード状態を共有する。

@@ -6,6 +6,10 @@ specification: SPEC-SURVIVAL-TIME-LIMIT
 
 # survival-time-limit-v1 詳細設計
 
+## Issue #77の限定同期
+
+[DESIGN-DETAIL-AMMO-MATERIAL-V1](ammo-material-v1.md) を、AmmoType、reserve、旧world ammo、初期ammo表現の現行詳細として参照する。本書のTimerEvent、generation guard、terminal、retry、stable box respawnの詳細は維持し、全体を supersede しない。
+
 ## メタ情報
 
 | 項目 | 内容 |

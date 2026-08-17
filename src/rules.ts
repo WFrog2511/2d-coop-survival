@@ -1,43 +1,48 @@
-/** プレイヤーが選択できる武器の識別子。 */
-export type WeaponId = 'rifle' | 'shotgun' | 'handgun';
+import {
+  AMMO_MATERIALS,
+  WEAPONS,
+  type AmmoMaterial,
+  type DamageType,
+  type WeaponModel,
+} from './ammo-data';
 
-/** 予備弾薬表示で使う弾薬種の識別子。 */
-export type AmmoType = 'rifle-ammo' | 'shotgun-ammo' | 'handgun-ammo';
-
-/** 弾薬ポーチへ常に並べる既存弾薬種の順序。 */
-export const AMMO_TYPE_ORDER: readonly AmmoType[] = ['rifle-ammo', 'shotgun-ammo', 'handgun-ammo'];
-
-/** 所持品の一枠に入る武器モデルの識別子。 */
-export type WeaponModel = 'rifle' | 'shotgun' | 'handgun' | 'revolver' | 'compact-pistol';
-
-/** 武器モデルの表示名と戦闘上の武器種を対応付ける。 */
-export const WEAPON_MODELS: Record<WeaponModel, { label: string; weapon: WeaponId }> = {
-  'rifle': { label: 'アサルトライフル', weapon: 'rifle' },
-  'shotgun': { label: 'ショットガン', weapon: 'shotgun' },
-  'handgun': { label: 'ハンドガン', weapon: 'handgun' },
-  'revolver': { label: 'リボルバー', weapon: 'handgun' },
-  'compact-pistol': { label: 'コンパクトピストル', weapon: 'handgun' },
-};
-
-/**
- * 武器モデルが利用する既存の戦闘上の武器種を返す。
- * @param model 所持品にある武器モデル。
- * @returns 戦闘と弾薬で共有する武器種。
- */
-export function weaponIdForModel(model: WeaponModel): WeaponId {
-  return WEAPON_MODELS[model].weapon;
-}
+export {
+  AMMO_MATERIAL_BOX_CYCLE,
+  AMMO_MATERIAL_ORDER,
+  AMMO_MATERIALS,
+  WEAPON_MODELS,
+  WEAPON_MODEL_ORDER,
+  WEAPONS,
+} from './ammo-data';
+export type {
+  AmmoMaterial,
+  AmmoMaterialDefinition,
+  DamageType,
+  WeaponDefinition,
+  WeaponModel,
+} from './ammo-data';
 
 export const QUICK_SLOT_COUNT = 3;
 export const BACKPACK_SLOT_COUNT = 10;
 
 /** 最小インベントリで扱う素材の識別子。 */
-export type MaterialId = 'scrap';
+export type MaterialId = 'scrap' | AmmoMaterial;
+
+/** 個別の弾倉と射撃待ちを持つ武器の恒久識別子。 */
+export type WeaponInstanceId = string;
+
+/** world、クイックスロット、バックパック間を同じまま移動する武器状態。 */
+export type WeaponInstance = {
+  id: WeaponInstanceId;
+  model: WeaponModel;
+  magazine: number;
+  nextFireAt: number;
+};
 
 /** 個別武器モデルと素材数だけを保持する最小インベントリ状態。 */
 export type InventoryState = {
-  quickSlots: Array<WeaponModel | null>;
-  backpackSlots: Array<WeaponModel | null>;
+  quickSlots: Array<WeaponInstance | null>;
+  backpackSlots: Array<WeaponInstance | null>;
   selectedQuickSlot: number;
   materials: Record<MaterialId, number>;
 };
@@ -51,8 +56,6 @@ export type InventorySlotRef = {
 /** 戦闘中の敵の基本種別。 */
 export type EnemyKind = 'basic' | 'drone';
 
-/** 武器攻撃を倍率解決へ渡すダメージ種別。 */
-export type DamageType = 'smallCaliber' | 'scatter';
 export const ENEMY_INSTANCE_IDS = [
   'basic-1',
   'basic-2',
@@ -112,30 +115,6 @@ export type RunState = {
   enemySlots: Record<EnemyInstanceId, RunEnemySlotStatus>;
 };
 
-/** 発射、装弾、補給を決める武器の静的定義。 */
-export type WeaponDefinition = {
-  label: string;
-  damageType: DamageType;
-  automatic: boolean;
-  fireIntervalMs: number;
-  magazineSize: number;
-  reserveInitial: number;
-  reserveMax: number;
-  reloadMs: number;
-  pellets: number;
-  damage: number;
-  speed: number;
-  range: number;
-  spread: number;
-  knockback: number;
-};
-
-/** ハンドガンの予備弾薬を調整する設定。 */
-export const HANDGUN_AMMO = {
-  reserveInitial: 30,
-  reserveMax: 60,
-} as const;
-
 /** 一体の敵に保持する戦闘状態。 */
 export type EnemyState = {
   kind: EnemyKind;
@@ -149,24 +128,13 @@ export type CombatState = {
   playerHp: number;
   defeated: boolean;
   victory: boolean;
-  weapon: WeaponId | null;
   inventory: InventoryState;
-  ammo: Record<WeaponId, number>;
-  reserve: Record<WeaponId, number>;
-  nextFireAt: Record<WeaponId, number>;
-  reloading: WeaponId | null;
+  reloading: WeaponInstanceId | null;
   enemies: Record<EnemyInstanceId, EnemyState>;
 };
 
-/** 種類別弾薬箱の取得量と残量を返す。 */
-export type TypedAmmoBoxResult = {
-  state: CombatState;
-  collected: number;
-  remaining: number;
-};
-
 /** 弾薬ポーチからworldへ出す量を返す。 */
-export type AmmoDropResult = {
+export type MaterialDropResult = {
   state: CombatState;
   dropped: number;
 };
@@ -177,97 +145,9 @@ export type FireResult = {
   fired: boolean;
 };
 
-export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
-  rifle: {
-    label: 'アサルトライフル',
-    damageType: 'smallCaliber',
-    automatic: true,
-    fireIntervalMs: 150,
-    magazineSize: 20,
-    reserveInitial: 40,
-    reserveMax: 60,
-    reloadMs: 1200,
-    pellets: 1,
-    damage: 2,
-    speed: 600,
-    range: 520,
-    spread: 0,
-    knockback: 0,
-  },
-  shotgun: {
-    label: 'ショットガン',
-    damageType: 'scatter',
-    automatic: false,
-    fireIntervalMs: 750,
-    magazineSize: 4,
-    reserveInitial: 8,
-    reserveMax: 12,
-    reloadMs: 1600,
-    pellets: 5,
-    damage: 2,
-    speed: 420,
-    range: 220,
-    spread: 0.2,
-    knockback: 240,
-  },
-  handgun: {
-    label: 'ハンドガン',
-    damageType: 'smallCaliber',
-    automatic: false,
-    fireIntervalMs: 150,
-    magazineSize: 10,
-    reserveInitial: HANDGUN_AMMO.reserveInitial,
-    reserveMax: HANDGUN_AMMO.reserveMax,
-    reloadMs: 1200,
-    pellets: 1,
-    damage: 2,
-    speed: 600,
-    range: 520,
-    spread: 0,
-    knockback: 0,
-  },
-};
-
-/** 弾薬ポーチ、弾薬箱、world表示で共有する種類別設定。 */
-export type AmmoTypeDefinition = {
-  label: string;
-  icon: string;
-  weapon: WeaponId;
-  boxQuantity: number;
-  worldColor: string;
-};
-
-/** 箱量を含む、種類別弾薬の唯一の調整設定。 */
-export const AMMO_TYPES: Record<AmmoType, AmmoTypeDefinition> = {
-  'rifle-ammo': {
-    label: 'ライフル弾', icon: '▰', weapon: 'rifle',
-    boxQuantity: 20, worldColor: '#55d6ff',
-  },
-  'shotgun-ammo': {
-    label: 'ショットガン弾', icon: '◀', weapon: 'shotgun',
-    boxQuantity: 4, worldColor: '#f28a3f',
-  },
-  'handgun-ammo': {
-    label: 'ハンドガン弾', icon: '▪', weapon: 'handgun',
-    boxQuantity: 10, worldColor: '#f2d75d',
-  },
-};
-
-/**
- * 戦闘上の武器種に対応する弾薬種を唯一の弾薬設定から返す。
- * @param weapon 戦闘で共有する武器種。
- * @returns 対応する弾薬種。
- */
-export function ammoTypeForWeapon(weapon: WeaponId): AmmoType {
-  const type = AMMO_TYPE_ORDER.find(candidate => AMMO_TYPES[candidate].weapon === weapon);
-  if (!type)
-    throw new Error(`対応する弾薬種がありません: ${weapon}`);
-  return type;
-}
-
 const DAMAGE_MULTIPLIERS: Record<EnemyKind, Record<DamageType, number>> = {
-  basic: { smallCaliber: 1, scatter: 1 },
-  drone: { smallCaliber: 1, scatter: 1 },
+  basic: { smallCaliber: 1, scatter: 1, flame: 1 },
+  drone: { smallCaliber: 1, scatter: 1, flame: 1 },
 };
 
 /**
@@ -307,33 +187,69 @@ function createInitialEnemies(): Record<EnemyInstanceId, EnemyState> {
 
 const INITIAL_ENEMIES = createInitialEnemies();
 
+/**
+ * 武器設定の上限内へ初期またはpickup時の弾倉数を正規化する。
+ *
+ * @param id 個別武器を識別するID。
+ * @param model 設定を参照する武器モデル。
+ * @param magazine 初期弾倉数。
+ * @param nextFireAt 次回発射可能な時刻。
+ * @returns 正規化済みの個別武器状態。
+ */
+export function createWeaponInstance(
+  id: WeaponInstanceId,
+  model: WeaponModel,
+  magazine = WEAPONS[model].magazineSize,
+  nextFireAt = 0,
+): WeaponInstance {
+  const definition = WEAPONS[model];
+  return {
+    id,
+    model,
+    magazine: Number.isSafeInteger(magazine)
+      ? Math.min(definition.magazineSize, Math.max(0, magazine))
+      : definition.magazineSize,
+    nextFireAt: Number.isFinite(nextFireAt) ? nextFireAt : 0,
+  };
+}
+
+function createInitialMaterials(): Record<MaterialId, number> {
+  return {
+    scrap: 0,
+    ...Object.fromEntries(
+      Object.entries(AMMO_MATERIALS).map(([material, definition]) => [material, definition.initialQuantity]),
+    ),
+  } as Record<MaterialId, number>;
+}
+
 const INITIAL_INVENTORY: InventoryState = {
-  quickSlots: ['rifle', null, null],
-  backpackSlots: Array<WeaponModel | null>(BACKPACK_SLOT_COUNT).fill(null),
+  quickSlots: [createWeaponInstance('starter-rifle', 'rifle'), null, null],
+  backpackSlots: Array<WeaponInstance | null>(BACKPACK_SLOT_COUNT).fill(null),
   selectedQuickSlot: 0,
-  materials: { scrap: 0 },
+  materials: createInitialMaterials(),
 };
 
 export const INITIAL_STATE: CombatState = {
   playerHp: 100,
   defeated: false,
   victory: false,
-  weapon: 'rifle',
   inventory: INITIAL_INVENTORY,
-  ammo: {
-    rifle: WEAPONS.rifle.magazineSize,
-    shotgun: WEAPONS.shotgun.magazineSize,
-    handgun: WEAPONS.handgun.magazineSize,
-  },
-  reserve: {
-    rifle: WEAPONS.rifle.reserveInitial,
-    shotgun: WEAPONS.shotgun.reserveInitial,
-    handgun: WEAPONS.handgun.reserveInitial,
-  },
-  nextFireAt: { rifle: 0, shotgun: 0, handgun: 0 },
   reloading: null,
   enemies: INITIAL_ENEMIES,
 };
+
+function cloneWeaponInstance(weapon: WeaponInstance | null): WeaponInstance | null {
+  return weapon ? { ...weapon } : null;
+}
+
+function cloneInventory(inventory: InventoryState): InventoryState {
+  return {
+    quickSlots: inventory.quickSlots.map(cloneWeaponInstance),
+    backpackSlots: inventory.backpackSlots.map(cloneWeaponInstance),
+    selectedQuickSlot: inventory.selectedQuickSlot,
+    materials: { ...inventory.materials },
+  };
+}
 
 function cloneEnemies(enemies: Record<EnemyInstanceId, EnemyState>): Record<EnemyInstanceId, EnemyState> {
   return Object.fromEntries(ENEMY_INSTANCE_IDS.map(id => [id, { ...enemies[id] }])) as Record<EnemyInstanceId, EnemyState>;
@@ -652,7 +568,7 @@ export function damagePlayer(state: CombatState, amount: number): CombatState {
   if (state.defeated || state.victory)
     return state;
   const playerHp = Math.max(0, state.playerHp - amount);
-  return { ...state, playerHp, defeated: playerHp === 0 };
+  return { ...state, playerHp, defeated: playerHp === 0, reloading: playerHp === 0 ? null : state.reloading };
 }
 
 function isInventorySlotRef(slot: InventorySlotRef): boolean {
@@ -661,7 +577,7 @@ function isInventorySlotRef(slot: InventorySlotRef): boolean {
   return Number.isInteger(slot.index) && slot.index >= 0 && slot.index < count;
 }
 
-function weaponModelAt(inventory: InventoryState, slot: InventorySlotRef): WeaponModel | null {
+function weaponInstanceAt(inventory: InventoryState, slot: InventorySlotRef): WeaponInstance | null {
   if (!isInventorySlotRef(slot)) return null;
   return slot.container === 'quick'
     ? inventory.quickSlots[slot.index] ?? null
@@ -671,55 +587,52 @@ function weaponModelAt(inventory: InventoryState, slot: InventorySlotRef): Weapo
 function inventoryWithWeaponAt(
   inventory: InventoryState,
   slot: InventorySlotRef,
-  model: WeaponModel | null,
+  weapon: WeaponInstance | null,
 ): InventoryState {
   if (slot.container === 'quick') {
     const quickSlots = [...inventory.quickSlots];
-    quickSlots[slot.index] = model;
+    quickSlots[slot.index] = weapon;
     return { ...inventory, quickSlots };
   }
   const backpackSlots = [...inventory.backpackSlots];
-  backpackSlots[slot.index] = model;
+  backpackSlots[slot.index] = weapon;
   return { ...inventory, backpackSlots };
 }
 
-function activeWeaponIdForInventory(inventory: InventoryState): WeaponId | null {
-  const model = inventory.quickSlots[inventory.selectedQuickSlot];
-  return model ? weaponIdForModel(model) : null;
+function activeWeaponForInventory(inventory: InventoryState): WeaponInstance | null {
+  return inventory.quickSlots[inventory.selectedQuickSlot] ?? null;
 }
 
 function withInventory(state: CombatState, inventory: InventoryState): CombatState {
-  const weapon = activeWeaponIdForInventory(inventory);
+  const weapon = activeWeaponForInventory(inventory);
   return {
     ...state,
-    weapon,
-    reloading: weapon !== null && weapon === state.weapon ? state.reloading : null,
+    reloading: weapon?.id === state.reloading ? state.reloading : null,
     inventory,
   };
 }
 
 /**
- * 選択中クイックスロットから現在発射可能な武器種を求める。
+ * 選択中クイックスロットから現在発射可能な武器個体を求める。
  *
- * `CombatState.weapon`が古い値でも、空き選択枠を武器として使わないために
- * 戦闘処理はこの導出値を使う。
+ * 空き選択枠を武器として使わないために、戦闘処理はこの導出値を使う。
  *
  * @param state 現在の戦闘状態。
- * @returns 選択枠に武器があればその武器種、空ならnull。
+ * @returns 選択枠に武器があればその個体、空ならnull。
  */
-export function activeWeaponId(state: CombatState): WeaponId | null {
-  return activeWeaponIdForInventory(state.inventory);
+export function activeWeapon(state: CombatState): WeaponInstance | null {
+  return activeWeaponForInventory(state.inventory);
 }
 
 /**
- * 指定した詳細インベントリ枠の武器モデルを返す。
+ * 指定した詳細インベントリ枠の武器個体を返す。
  *
  * @param state 現在の戦闘状態。
  * @param slot 読み取る枠。
- * @returns 枠内の武器モデル。無効または空きならnull。
+ * @returns 枠内の武器個体。無効または空きならnull。
  */
-export function inventoryWeaponAt(state: CombatState, slot: InventorySlotRef): WeaponModel | null {
-  return weaponModelAt(state.inventory, slot);
+export function inventoryWeaponAt(state: CombatState, slot: InventorySlotRef): WeaponInstance | null {
+  return weaponInstanceAt(state.inventory, slot);
 }
 
 /**
@@ -742,11 +655,11 @@ export function moveInventoryWeapon(
     || !isInventorySlotRef(target)
     || (source.container === target.container && source.index === target.index)
   ) return state;
-  const sourceModel = weaponModelAt(state.inventory, source);
-  if (!sourceModel) return state;
-  const targetModel = weaponModelAt(state.inventory, target);
-  const emptied = inventoryWithWeaponAt(state.inventory, source, targetModel);
-  return withInventory(state, inventoryWithWeaponAt(emptied, target, sourceModel));
+  const sourceWeapon = weaponInstanceAt(state.inventory, source);
+  if (!sourceWeapon) return state;
+  const targetWeapon = weaponInstanceAt(state.inventory, target);
+  const emptied = inventoryWithWeaponAt(state.inventory, source, targetWeapon);
+  return withInventory(state, inventoryWithWeaponAt(emptied, target, sourceWeapon));
 }
 
 /**
@@ -757,7 +670,7 @@ export function moveInventoryWeapon(
  * @returns 成功時だけ選択武器を同期した状態。
  */
 export function removeInventoryWeapon(state: CombatState, source: InventorySlotRef): CombatState {
-  if (state.defeated || state.victory || !isInventorySlotRef(source) || !weaponModelAt(state.inventory, source))
+  if (state.defeated || state.victory || !isInventorySlotRef(source) || !weaponInstanceAt(state.inventory, source))
     return state;
   return withInventory(state, inventoryWithWeaponAt(state.inventory, source, null));
 }
@@ -772,21 +685,21 @@ export function removeInventoryWeapon(state: CombatState, source: InventorySlotR
 export function selectQuickSlot(state: CombatState, slot: number): CombatState {
   if (state.defeated || state.victory || !Number.isInteger(slot) || slot < 0 || slot >= QUICK_SLOT_COUNT)
     return state;
-  const model = state.inventory.quickSlots[slot];
-  if (!model || state.inventory.selectedQuickSlot === slot)
+  const weapon = state.inventory.quickSlots[slot];
+  if (!weapon || state.inventory.selectedQuickSlot === slot)
     return state;
   return withInventory(state, { ...state.inventory, selectedQuickSlot: slot });
 }
 
 /**
- * 戦闘上の武器種を持つ最初のクイックスロットを選択する。
+ * 指定modelを持つ最初のクイックスロットを選択する。
  *
  * @param state 現在の戦闘状態。
- * @param weapon 選択する戦闘上の武器種。
+ * @param model 選択する武器model。
  * @returns 対応するクイックスロットを選択した状態。
  */
-export function selectWeapon(state: CombatState, weapon: WeaponId): CombatState {
-  const slot = state.inventory.quickSlots.findIndex(model => model !== null && weaponIdForModel(model) === weapon);
+export function selectWeapon(state: CombatState, model: WeaponModel): CombatState {
+  const slot = state.inventory.quickSlots.findIndex(weapon => weapon?.model === model);
   return slot < 0 ? state : selectQuickSlot(state, slot);
 }
 
@@ -794,20 +707,20 @@ export function selectWeapon(state: CombatState, weapon: WeaponId): CombatState 
  * 武器pickupを最初の空きクイックスロット、次にバックパックへ個別に格納する。
  *
  * @param state 現在の戦闘状態。
- * @param model 取得する武器モデル。
+ * @param weapon 取得する武器個体。
  * @returns 格納結果を反映した戦闘状態。満杯またはterminalなら元の状態。
  */
-export function collectWeapon(state: CombatState, model: WeaponModel): CombatState {
+export function collectWeapon(state: CombatState, weapon: WeaponInstance): CombatState {
   if (state.defeated || state.victory)
     return state;
   const quickSlot = state.inventory.quickSlots.indexOf(null);
   if (quickSlot >= 0) {
-    return withInventory(state, inventoryWithWeaponAt(state.inventory, { container: 'quick', index: quickSlot }, model));
+    return withInventory(state, inventoryWithWeaponAt(state.inventory, { container: 'quick', index: quickSlot }, { ...weapon }));
   }
   const backpackSlot = state.inventory.backpackSlots.indexOf(null);
   if (backpackSlot < 0)
     return state;
-  return withInventory(state, inventoryWithWeaponAt(state.inventory, { container: 'backpack', index: backpackSlot }, model));
+  return withInventory(state, inventoryWithWeaponAt(state.inventory, { container: 'backpack', index: backpackSlot }, { ...weapon }));
 }
 
 /**
@@ -838,13 +751,17 @@ export function collectMaterial(state: CombatState, material: MaterialId, amount
  * @returns 発射可能なら真。
  */
 export function canFireAt(state: CombatState, now: number): boolean {
-  const weapon = activeWeaponId(state);
+  const weapon = activeWeapon(state);
   return !state.defeated
     && !state.victory
     && weapon !== null
     && state.reloading === null
-    && state.ammo[weapon] > 0
-    && now >= state.nextFireAt[weapon];
+    && weapon.magazine > 0
+    && now >= weapon.nextFireAt;
+}
+
+function inventoryWithActiveWeapon(inventory: InventoryState, weapon: WeaponInstance): InventoryState {
+  return inventoryWithWeaponAt(inventory, { container: 'quick', index: inventory.selectedQuickSlot }, weapon);
 }
 
 /**
@@ -856,14 +773,18 @@ export function canFireAt(state: CombatState, now: number): boolean {
  */
 export function fireWeapon(state: CombatState, now: number): FireResult {
   if (!canFireAt(state, now)) return { state, fired: false };
-  const weapon = activeWeaponId(state);
+  const weapon = activeWeapon(state);
   if (!weapon) return { state, fired: false };
+  const definition = WEAPONS[weapon.model];
   return {
     fired: true,
     state: {
       ...state,
-      ammo: { ...state.ammo, [weapon]: state.ammo[weapon] - 1 },
-      nextFireAt: { ...state.nextFireAt, [weapon]: now + WEAPONS[weapon].fireIntervalMs },
+      inventory: inventoryWithActiveWeapon(state.inventory, {
+        ...weapon,
+        magazine: weapon.magazine - 1,
+        nextFireAt: now + definition.fireIntervalMs,
+      }),
     },
   };
 }
@@ -875,16 +796,18 @@ export function fireWeapon(state: CombatState, now: number): FireResult {
  * @returns 開始可能な場合にリロード中を反映した戦闘状態。
  */
 export function startReload(state: CombatState): CombatState {
-  const weapon = activeWeaponId(state);
+  const weapon = activeWeapon(state);
+  const definition = weapon ? WEAPONS[weapon.model] : undefined;
   if (
     state.defeated
     || state.victory
     || weapon === null
+    || definition === undefined
     || state.reloading !== null
-    || state.ammo[weapon] >= WEAPONS[weapon].magazineSize
-    || state.reserve[weapon] <= 0
+    || weapon.magazine >= definition.magazineSize
+    || state.inventory.materials[definition.material] < definition.materialCostPerShot
   ) return state;
-  return { ...state, reloading: weapon };
+  return { ...state, reloading: weapon.id };
 }
 
 /**
@@ -898,71 +821,60 @@ export function cancelReload(state: CombatState): CombatState {
 }
 
 /**
- * 指定武器のリロードを完了して予備弾薬を移す。
+ * 指定個体のリロードを完了し、実際に装填した分だけ素材を消費する。
  *
  * @param state 現在の戦闘状態。
- * @param weapon 完了対象の武器。
- * @returns 装填済み弾薬と予備弾薬を更新した戦闘状態。
+ * @param weaponId 完了対象の武器個体ID。
+ * @returns 個別弾倉と素材数を更新した戦闘状態。
  */
-export function completeReload(state: CombatState, weapon: WeaponId): CombatState {
-  if (state.defeated || state.victory || state.reloading !== weapon || activeWeaponId(state) !== weapon) return state;
-  const magazine = state.ammo[weapon];
-  const amount = Math.min(
-    WEAPONS[weapon].magazineSize - magazine,
-    state.reserve[weapon],
-  );
+export function completeReload(state: CombatState, weaponId: WeaponInstanceId): CombatState {
+  const weapon = activeWeapon(state);
+  if (
+    state.defeated
+    || state.victory
+    || !weapon
+    || state.reloading !== weaponId
+    || weapon.id !== weaponId
+  ) return state;
+  const definition = WEAPONS[weapon.model];
+  const materialQuantity = state.inventory.materials[definition.material];
+  const availableRounds = Math.floor(materialQuantity / definition.materialCostPerShot);
+  const loaded = Math.min(definition.magazineSize - weapon.magazine, availableRounds);
+  if (loaded <= 0)
+    return { ...state, reloading: null };
   return {
     ...state,
-    ammo: { ...state.ammo, [weapon]: magazine + amount },
-    reserve: { ...state.reserve, [weapon]: state.reserve[weapon] - amount },
+    inventory: {
+      ...inventoryWithActiveWeapon(state.inventory, { ...weapon, magazine: weapon.magazine + loaded }),
+      materials: {
+        ...state.inventory.materials,
+        [definition.material]: materialQuantity - loaded * definition.materialCostPerShot,
+      },
+    },
     reloading: null,
   };
 }
 
 /**
- * 種類別弾薬箱から、対象武器の予備弾薬だけを上限まで移す。
+ * 弾薬素材ポーチから設定済みの一箱分以下をworldへ出す。
  *
  * @param state 現在の戦闘状態。
- * @param ammoType 取得する弾薬の種類。
- * @param quantity 箱に残っている安全な正整数の弾数。
- * @returns 取得量、箱の残量、更新後の戦闘状態。
+ * @param material worldへ置く弾薬素材。
+ * @returns 出した個数と更新後の戦闘状態。
  */
-export function collectTypedAmmoBox(state: CombatState, ammoType: AmmoType, quantity: number): TypedAmmoBoxResult {
-  const remaining = Number.isSafeInteger(quantity) && quantity > 0 ? quantity : 0;
-  if (state.defeated || state.victory || remaining === 0)
-    return { state, collected: 0, remaining };
-  const weapon = AMMO_TYPES[ammoType].weapon;
-  const collected = Math.min(remaining, WEAPONS[weapon].reserveMax - state.reserve[weapon]);
-  if (collected <= 0)
-    return { state, collected: 0, remaining };
-  return {
-    state: {
-      ...state,
-      reserve: { ...state.reserve, [weapon]: state.reserve[weapon] + collected },
-    },
-    collected,
-    remaining: remaining - collected,
-  };
-}
-
-/**
- * 弾薬ポーチから設定済みの一箱分以下をworldへ出す。
- *
- * @param state 現在の戦闘状態。
- * @param ammoType worldへ置く弾薬の種類。
- * @returns 出した弾数と更新後の戦闘状態。
- */
-export function dropAmmoBox(state: CombatState, ammoType: AmmoType): AmmoDropResult {
+export function dropAmmoMaterial(state: CombatState, material: AmmoMaterial): MaterialDropResult {
   if (state.defeated || state.victory)
     return { state, dropped: 0 };
-  const { weapon, boxQuantity } = AMMO_TYPES[ammoType];
-  const dropped = Math.min(state.reserve[weapon], boxQuantity);
+  const dropped = Math.min(state.inventory.materials[material], AMMO_MATERIALS[material].boxQuantity);
   if (dropped <= 0)
     return { state, dropped: 0 };
   return {
     state: {
       ...state,
-      reserve: { ...state.reserve, [weapon]: state.reserve[weapon] - dropped },
+      inventory: {
+        ...state.inventory,
+        materials: { ...state.inventory.materials, [material]: state.inventory.materials[material] - dropped },
+      },
     },
     dropped,
   };
@@ -1023,15 +935,7 @@ export function respawnEnemy(state: CombatState, enemyId: EnemyInstanceId): Comb
 export function retryCombat(): CombatState {
   return {
     ...INITIAL_STATE,
-    inventory: {
-      quickSlots: [...INITIAL_STATE.inventory.quickSlots],
-      backpackSlots: [...INITIAL_STATE.inventory.backpackSlots],
-      selectedQuickSlot: INITIAL_STATE.inventory.selectedQuickSlot,
-      materials: { ...INITIAL_STATE.inventory.materials },
-    },
-    ammo: { ...INITIAL_STATE.ammo },
-    reserve: { ...INITIAL_STATE.reserve },
-    nextFireAt: { ...INITIAL_STATE.nextFireAt },
+    inventory: cloneInventory(INITIAL_STATE.inventory),
     enemies: cloneEnemies(INITIAL_STATE.enemies),
   };
 }

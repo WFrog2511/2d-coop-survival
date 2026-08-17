@@ -6,6 +6,10 @@ specification: SPEC-SURVIVAL-TIME-LIMIT
 
 # survival-time-limit-v1 基本設計
 
+## Issue #77の限定同期
+
+[DESIGN-BASIC-AMMO-MATERIAL-V1](ammo-material-v1.md) を、AmmoType、reserve、旧world ammo、初期ammo表現の現行設計として参照する。本書のtimer、generation、terminal、retry、box respawnの実装境界は維持し、全体を supersede しない。
+
 ## 方針
 
 既存のCombatState、Phaser SceneのTimerEvent、generation、respawns、flashes、reloadTimer、ammoBoxes、DOM HUDを再利用する。新しいゲーム基盤や依存は導入しない。TypeScript設計は手動同期とし、新しいDOCGEN transformは追加しない。

@@ -14,7 +14,7 @@ import {
   type SoundEffectProfile,
 } from '../game-data';
 import { PLAYER_DASH_SOUND } from '../player-data';
-import type { EnemyKind, WeaponId } from '../rules';
+import type { EnemyKind, WeaponModel } from '../rules';
 
 export class ArenaEffects {
   private shakeCooldownUntil = 0;
@@ -42,7 +42,7 @@ export class ArenaEffects {
 
   public playWeaponFire(
     player: Phaser.Physics.Arcade.Sprite,
-    weapon: WeaponId,
+    weapon: WeaponModel,
     angle: number,
   ): void {
     this.shakeCamera(WEAPON_FIRE_SHAKE[weapon]);
@@ -53,7 +53,7 @@ export class ArenaEffects {
   public playEnemyImpact(
     enemy: Phaser.Physics.Arcade.Sprite,
     kind: EnemyKind,
-    weapon: WeaponId,
+    weapon: WeaponModel,
     defeated: boolean,
   ): void {
     this.playEnemyHitEffect(enemy, kind);
@@ -128,7 +128,7 @@ export class ArenaEffects {
 
   private playMuzzleFlash(
     player: Phaser.Physics.Arcade.Sprite,
-    weapon: WeaponId,
+    weapon: WeaponModel,
     angle: number,
   ): void {
     const flash = MUZZLE_FLASH[weapon];

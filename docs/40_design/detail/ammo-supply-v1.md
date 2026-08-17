@@ -6,6 +6,8 @@ specification: SPEC-AMMO-SUPPLY
 
 # ammo-supply-v1 詳細設計
 
+> **履歴化:** 本書全体は [DESIGN-DETAIL-AMMO-MATERIAL-V1](ammo-material-v1.md) と [Issue #77](https://github.com/WFrog2511/2d-coop-survival/issues/77) により supersede された。AmmoType、weapon別reserve、共有弾倉を前提にした詳細は過去sliceの履歴として保持する。
+
 ## 状態遷移
 
 通常状態では `ammo[weapon]` と `reserve[weapon]` を独立して保持する。`AmmoType`はrifle、shotgun、handgunの既存`WeaponId`へ一意に対応し、pouch表示も同じ`reserve[weapon]`を読む。`startReload` が成立すると `reloading` を設定し、既存タイマーの完了時に `completeReload` が不足分だけを移す。敗北・リロード中・満タン・予備0では開始要求を無副作用で終了する。

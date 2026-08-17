@@ -3,13 +3,13 @@ import { SPAWN_PHASE_MS, TILE_SIZE, WORLD_WEAPON_DROP_MAX_PATH_DISTANCE, enemyVi
 import { formatSurvivalTime } from '../src/arena/hud';
 import { INITIAL_WORLD_WEAPON_MODELS, SCRAP_DROP_AMOUNTS, SCRAP_VISUAL_TIER_THRESHOLDS, WORLD_SIDEARM_MODELS, scrapVisualTierFor } from '../src/game-data';
 import { GUNSLINGER_BOOT_KNIFE_DAMAGE, GUNSLINGER_COMBO_PER_EVENT, GUNSLINGER_COMBO_TIMEOUT_MS } from '../src/player-data';
-import { AMMO_BOX_RESPAWN_MS, AMMO_TYPES, AMMO_TYPE_ORDER, COMBAT_WAVE_DURATION_MS, ENEMY_INSTANCE_IDS, WEAPON_MODELS, WEAPONS, createRunSchedule, runDurationMs, weaponIdForModel } from '../src/rules';
+import { AMMO_BOX_RESPAWN_MS, AMMO_MATERIAL_BOX_CYCLE, AMMO_MATERIAL_ORDER, AMMO_MATERIALS, COMBAT_WAVE_DURATION_MS, ENEMY_INSTANCE_IDS, WEAPON_MODELS, WEAPONS, createRunSchedule, runDurationMs, type AmmoMaterial, type WeaponModel } from '../src/rules';
 
 type EnemyId = (typeof ENEMY_INSTANCE_IDS)[number];
 type EnemyPresentation = 'normal' | 'boundary' | 'hidden';
 type WorldItemEntry = {
   id: string;
-  kind: 'weapon' | 'material' | 'ammo';
+  kind: 'weapon' | 'material' | 'ammo-material';
   item: string;
   tile: TilePosition;
   quantity: number;
@@ -20,7 +20,7 @@ type WorldItemEntry = {
 type AmmoBoxEntry = {
   boxId: string;
   tile: TilePosition;
-  ammoType: (typeof AMMO_TYPE_ORDER)[number];
+  material: AmmoMaterial;
   quantity: number;
   worldColor: string;
   texture: string;
@@ -61,8 +61,10 @@ type ArenaDebugScene = {
   children: { getChildren: () => readonly { fillColor?: number }[] };
   player: { x: number; y: number; rotation: number; tintTopLeft: number };
   state: {
-    ammo: Record<'rifle' | 'shotgun' | 'handgun', number>;
-    reserve: Record<'rifle' | 'shotgun' | 'handgun', number>;
+    inventory: {
+      quickSlots: readonly ({ id: string; model: WeaponModel; magazine: number; nextFireAt: number } | null)[];
+      materials: Record<AmmoMaterial, number>;
+    };
   };
   enemyActors: Record<EnemyId, { sprite: ArenaDebugEnemy }>;
   textures: { get: (key: string) => { getSourceImage: () => HTMLCanvasElement } };
@@ -214,7 +216,7 @@ async function activeWorldItems(page: import('@playwright/test').Page): Promise<
     const [x, y] = tile?.split(',').map(Number) ?? [];
     if (
       !id
-      || (kind !== 'weapon' && kind !== 'material' && kind !== 'ammo')
+      || (kind !== 'weapon' && kind !== 'material' && kind !== 'ammo-material')
       || !item
       || !Number.isInteger(x)
       || !Number.isInteger(y)
@@ -236,11 +238,11 @@ async function activeWorldItems(page: import('@playwright/test').Page): Promise<
 async function activeAmmoBoxes(page: import('@playwright/test').Page): Promise<AmmoBoxEntry[]> {
   const value = await page.getByTestId('ammo-box-count').getAttribute('data-active-boxes');
   return tileKeysFromAttribute(value).map((entry) => {
-    const [boxId, tile, ammoType, quantity, worldColor, texture] = entry.split(':');
+    const [boxId, tile, material, quantity, worldColor, texture] = entry.split(':');
     const [x, y] = tile?.split(',').map(Number) ?? [];
     if (
       !boxId
-      || !AMMO_TYPE_ORDER.includes(ammoType as (typeof AMMO_TYPE_ORDER)[number])
+      || !AMMO_MATERIAL_ORDER.includes(material as AmmoMaterial)
       || !Number.isInteger(x)
       || !Number.isInteger(y)
       || !Number.isSafeInteger(Number(quantity))
@@ -250,7 +252,7 @@ async function activeAmmoBoxes(page: import('@playwright/test').Page): Promise<A
     return {
       boxId,
       tile: { x, y },
-      ammoType: ammoType as (typeof AMMO_TYPE_ORDER)[number],
+      material: material as AmmoMaterial,
       quantity: Number(quantity),
       worldColor,
       texture,
@@ -782,13 +784,13 @@ test('Tab詳細中は単発射撃と空ライフル弾倉の自動reloadを開�
   const reloadProgress = page.getByTestId('reload-progress');
   const selectedAmmoState = async (): Promise<{
     magazine: number;
-    reserve: string | null;
+    materialQuantity: string | null;
     reload: string | null;
     reloadProgressHidden: boolean;
     reloadProgressValue: number;
   }> => ({
     magazine: await currentAmmo(page),
-    reserve: await page.getByTestId('ammo-reserve').getAttribute('data-reserve'),
+    materialQuantity: await page.getByTestId('ammo-material').getAttribute('data-quantity'),
     reload: await reloadHud.textContent(),
     reloadProgressHidden: await reloadProgress.isHidden(),
     reloadProgressValue: await reloadProgress.evaluate(element =>
@@ -796,13 +798,13 @@ test('Tab詳細中は単発射撃と空ライフル弾倉の自動reloadを開�
   });
   const expectSelectedAmmoState = async (before: {
     magazine: number;
-    reserve: string | null;
+    materialQuantity: string | null;
     reload: string | null;
     reloadProgressHidden: boolean;
     reloadProgressValue: number;
   }): Promise<void> => {
     expect(await currentAmmo(page)).toBe(before.magazine);
-    expect(await page.getByTestId('ammo-reserve').getAttribute('data-reserve')).toBe(before.reserve);
+    expect(await page.getByTestId('ammo-material').getAttribute('data-quantity')).toBe(before.materialQuantity);
     expect(await reloadHud.textContent()).toBe(before.reload);
     expect(await reloadProgress.isHidden()).toBe(before.reloadProgressHidden);
     expect(await reloadProgress.evaluate(element => (element as HTMLProgressElement).value))
@@ -819,7 +821,9 @@ test('Tab詳細中は単発射撃と空ライフル弾倉の自動reloadを開�
   await page.evaluate(() => {
     const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
     if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
-    scene.state.ammo.rifle = 0;
+    const rifle = scene.state.inventory.quickSlots[0];
+    if (!rifle || rifle.model !== 'rifle') throw new Error('初期ライフルinstanceが必要です。');
+    rifle.magazine = 0;
     scene.refreshHud();
   });
 
@@ -835,8 +839,8 @@ test('Tab詳細中は単発射撃と空ライフル弾倉の自動reloadを開�
   await page.keyboard.press('Tab');
   await holdGameCanvasAt(page, tabCanvasPoint, WEAPONS.rifle.fireIntervalMs * 2);
   expect(await currentAmmo(page)).toBe(0);
-  expect(await page.getByTestId('ammo-reserve').getAttribute('data-reserve'))
-    .toBe(emptyRifleBeforeBlockedHold.reserve);
+  expect(await page.getByTestId('ammo-material').getAttribute('data-quantity'))
+    .toBe(emptyRifleBeforeBlockedHold.materialQuantity);
   await expect(reloadHud).toContainText('リロード中');
   await expect(reloadProgress).toBeVisible();
 });
@@ -932,7 +936,7 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
       await page.clock.runFor(WEAPONS.shotgun.fireIntervalMs * 2);
   }
   expect(await currentAmmo(page)).toBe(0);
-  const emptyShotgunReserve = await page.getByTestId('ammo-reserve').getAttribute('data-reserve');
+  const emptyShotgunMaterial = await page.getByTestId('ammo-material').getAttribute('data-quantity');
   const emptyShotgunReloadProgressWasHidden = await reloadProgress.isHidden();
   const emptyShotgunReloadProgressValueBefore = await reloadProgress.evaluate(element =>
     (element as HTMLProgressElement).value);
@@ -942,14 +946,14 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
   const emptyShotgunCanvasPoint = await findGameCanvasInputPoint(page);
   await clickGameCanvasAt(page, emptyShotgunCanvasPoint);
   expect(await currentAmmo(page)).toBe(0);
-  expect(await page.getByTestId('ammo-reserve').getAttribute('data-reserve')).toBe(emptyShotgunReserve);
+  expect(await page.getByTestId('ammo-material').getAttribute('data-quantity')).toBe(emptyShotgunMaterial);
   await expect(reloadHud).toHaveText('待機');
   expect(await reloadProgress.isHidden()).toBe(emptyShotgunReloadProgressWasHidden);
   expect(await reloadProgress.evaluate(element => (element as HTMLProgressElement).value))
     .toBe(emptyShotgunReloadProgressValueBefore);
   await holdGameCanvasAt(page, emptyShotgunCanvasPoint, WEAPONS.shotgun.fireIntervalMs);
   expect(await currentAmmo(page)).toBe(0);
-  expect(await page.getByTestId('ammo-reserve').getAttribute('data-reserve')).toBe(emptyShotgunReserve);
+  expect(await page.getByTestId('ammo-material').getAttribute('data-quantity')).toBe(emptyShotgunMaterial);
   await expect(reloadHud).toHaveText('待機');
   expect(await reloadProgress.isHidden()).toBe(emptyShotgunReloadProgressWasHidden);
   expect(await reloadProgress.evaluate(element => (element as HTMLProgressElement).value))
@@ -959,7 +963,7 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
   await expect(reloadHud).toContainText('リロード中');
   await expect(reloadProgress).toBeVisible();
   expect(await currentAmmo(page)).toBe(0);
-  expect(await page.getByTestId('ammo-reserve').getAttribute('data-reserve')).toBe(emptyShotgunReserve);
+  expect(await page.getByTestId('ammo-material').getAttribute('data-quantity')).toBe(emptyShotgunMaterial);
   await page.keyboard.press('1');
   await expect(reloadHud).toHaveText('待機');
   await expect(reloadProgress).toBeHidden();
@@ -989,7 +993,7 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
   await page.mouse.click(canvas.x + canvas.width / 2, canvas.y + canvas.height / 2);
   const sidearmAmmoAfterShot = await currentAmmo(page);
   expect(sidearmAmmoAfterShot).toBe(sidearmAmmoBeforeShot - 1);
-  expect(weaponIdForModel(duplicateModel)).toBe('handgun');
+  expect(WEAPONS[duplicateModel].material).toBe('ballistic-material');
   const secondSidearm = sidearms.find(item => item.id !== firstSidearm.id);
   if (!secondSidearm)
     throw new Error('追加取得用の同モデルsidearm pickupが必要です。');
@@ -1005,12 +1009,11 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
   await page.keyboard.press('Tab');
   await expect(detail).toBeVisible();
   await expect(ammoPouch).toBeVisible();
-  for (const type of AMMO_TYPE_ORDER) {
-    const ammo = AMMO_TYPES[type];
-    const pouchEntry = page.getByTestId(`ammo-pouch-${type}`);
-    await expect(pouchEntry).toHaveAttribute('data-ammo-type', type);
-    await expect(pouchEntry).toHaveAttribute('data-weapon', ammo.weapon);
-    await expect(pouchEntry).toHaveAttribute('data-reserve', /^\d+$/);
+  for (const material of AMMO_MATERIAL_ORDER) {
+    const ammo = AMMO_MATERIALS[material];
+    const pouchEntry = page.getByTestId(`ammo-pouch-${material}`);
+    await expect(pouchEntry).toHaveAttribute('data-material', material);
+    await expect(pouchEntry).toHaveAttribute('data-quantity', /^\d+$/);
     await expect(pouchEntry).toContainText(ammo.label);
   }
   await expect(page.getByTestId('inventory-quick-slot-3')).toHaveAttribute('data-model', duplicateModel);
@@ -1056,26 +1059,26 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
   await expect(detail).toBeHidden();
 });
 
-test('弾薬ポーチの種類別弾薬をworldへ置き、部分取得してEで回収できる', async ({ page }) => {
+test('弾薬ポーチの素材をworldへ置き、Eで回収できる', async ({ page }) => {
   test.setTimeout(30_000);
   await page.clock.install({ time: 15 });
   await page.clock.pauseAt(15);
   await page.goto(devStartUrl('/'));
   await setArenaPhysics(page, 'pause');
-  const ammoType = 'handgun-ammo' as const;
-  const ammo = AMMO_TYPES[ammoType];
+  const material: AmmoMaterial = 'projectile-material';
+  const ammo = AMMO_MATERIALS[material];
   const droppedQuantity = Math.max(1, Math.floor(ammo.boxQuantity / 2));
   if (droppedQuantity >= ammo.boxQuantity)
     throw new Error('less-than-chunk確認には弾薬箱の設定量が2以上必要です。');
-  await page.evaluate(({ weapon, reserve }) => {
+  await page.evaluate(({ material, quantity }) => {
     const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
     if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
-    scene.state.reserve[weapon] = reserve;
+    scene.state.inventory.materials[material] = quantity;
     scene.refreshHud();
-  }, { weapon: ammo.weapon, reserve: droppedQuantity });
+  }, { material, quantity: droppedQuantity });
 
   await page.keyboard.press('Tab');
-  const pouchEntry = page.getByTestId(`ammo-pouch-${ammoType}`);
+  const pouchEntry = page.getByTestId(`ammo-pouch-${material}`);
   await expect(pouchEntry).toHaveAttribute('draggable', 'true');
   await expect(pouchEntry).toHaveAttribute('data-box-quantity', String(ammo.boxQuantity));
   await expect(pouchEntry).toHaveAttribute('data-world-color', ammo.worldColor);
@@ -1091,9 +1094,9 @@ test('弾薬ポーチの種類別弾薬をworldへ置き、部分取得してE�
       y: canvasPoint.clientY - canvasBounds.y,
     },
   });
-  await expect(pouchEntry).toHaveAttribute('data-reserve', '0');
+  await expect(pouchEntry).toHaveAttribute('data-quantity', '0');
   const selectedAmmoBeforeClose = await currentAmmo(page);
-  const selectedReserveBeforeClose = await page.getByTestId('ammo-reserve').getAttribute('data-reserve');
+  const selectedMaterialBeforeClose = await page.getByTestId('ammo-material').getAttribute('data-quantity');
   const reloadHud = page.getByTestId('reload');
   const reloadBeforeClose = await reloadHud.textContent();
   const reloadProgress = page.getByTestId('reload-progress');
@@ -1108,8 +1111,8 @@ test('弾薬ポーチの種類別弾薬をworldへ置き、部分取得してE�
     await expect(pouchEntry).toBeHidden();
     await page.clock.runFor(WEAPONS.rifle.fireIntervalMs * 2);
     expect(await currentAmmo(page)).toBe(selectedAmmoBeforeClose);
-    expect(await page.getByTestId('ammo-reserve').getAttribute('data-reserve'))
-      .toBe(selectedReserveBeforeClose);
+    expect(await page.getByTestId('ammo-material').getAttribute('data-quantity'))
+      .toBe(selectedMaterialBeforeClose);
     expect(await reloadHud.textContent()).toBe(reloadBeforeClose);
     expect(await reloadProgress.isHidden()).toBe(reloadProgressWasHidden);
     expect(await reloadProgress.evaluate(element => (element as HTMLProgressElement).value))
@@ -1120,44 +1123,119 @@ test('弾薬ポーチの種類別弾薬をworldへ置き、部分取得してE�
   await holdGameCanvasAt(page, canvasPoint, WEAPONS.rifle.fireIntervalMs);
   await expect.poll(() => currentAmmo(page)).toBeLessThan(selectedAmmoBeforeClose);
 
-  const dropped = (await activeWorldItems(page)).find(item => item.id.startsWith('dropped-ammo-'));
-  if (!dropped || dropped.kind !== 'ammo')
-    throw new Error('worldへ置いた種類別弾薬が必要です。');
-  expect(dropped.item).toBe(ammoType);
+  const dropped = (await activeWorldItems(page)).find(item => item.id.startsWith('dropped-ammo-material-'));
+  if (!dropped || dropped.kind !== 'ammo-material')
+    throw new Error('worldへ置いた素材が必要です。');
+  expect(dropped.item).toBe(material);
   expect(dropped.quantity).toBe(droppedQuantity);
   expect(dropped.quantity).toBeLessThan(ammo.boxQuantity);
   expect(dropped.worldColor).toBe(ammo.worldColor);
-  expect(dropped.texture).toBe(`ammo-box-${ammoType}`);
+  expect(dropped.texture).toBe(`material-box-${material}`);
   await expect(page.getByTestId('pickup-prompt')).toBeVisible();
-  await expect(page.getByTestId('pickup-target')).toHaveText(`${ammo.label} ${dropped.quantity}発`);
+  await expect(page.getByTestId('pickup-target')).toHaveText(`${ammo.label} ${dropped.quantity}個`);
   await expect(page.getByTestId('pickup-action')).toHaveText('を拾う [E]');
-
-  const partialCapacity = dropped.quantity - 1;
-  if (partialCapacity <= 0)
-    throw new Error('部分取得確認にはworldへ置く弾薬が2発以上必要です。');
-  await page.evaluate(({ weapon, reserve }) => {
-    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
-    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
-    scene.state.reserve[weapon] = reserve;
-    scene.refreshHud();
-  }, { weapon: ammo.weapon, reserve: WEAPONS[ammo.weapon].reserveMax - partialCapacity });
-  await page.keyboard.press('e');
-  const remainingQuantity = dropped.quantity - partialCapacity;
-  const partiallyCollected = (await activeWorldItems(page)).find(item => item.id === dropped.id);
-  expect(partiallyCollected).toMatchObject({ kind: 'ammo', quantity: remainingQuantity });
-  await expect(pouchEntry).toHaveAttribute('data-reserve', String(WEAPONS[ammo.weapon].reserveMax));
-  await page.keyboard.press('e');
-  expect((await activeWorldItems(page)).find(item => item.id === dropped.id)).toMatchObject({ quantity: remainingQuantity });
-
-  await page.evaluate(({ weapon, reserve }) => {
-    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
-    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
-    scene.state.reserve[weapon] = reserve;
-    scene.refreshHud();
-  }, { weapon: ammo.weapon, reserve: WEAPONS[ammo.weapon].reserveMax - remainingQuantity });
   await page.keyboard.press('e');
   expect((await activeWorldItems(page)).some(item => item.id === dropped.id)).toBe(false);
-  await expect(pouchEntry).toHaveAttribute('data-reserve', String(WEAPONS[ammo.weapon].reserveMax));
+  await expect(pouchEntry).toHaveAttribute('data-quantity', String(droppedQuantity));
+});
+
+test('Issue #77: 連弩と火炎放射器は対応マテリアルからreloadして発射できる', async ({ page }) => {
+  test.setTimeout(45_000);
+  await page.clock.install({ time: 15 });
+  await page.clock.pauseAt(15);
+  await page.goto(devStartUrl('/'));
+  await setPlayerInvulnerable(page, true);
+  const canvasPoint = await findGameCanvasInputPoint(page);
+  const reloadHud = page.getByTestId('reload');
+
+  for (const [model, quickSlot] of [
+    ['repeating-crossbow', '2'],
+    ['flamethrower', '3'],
+  ] as const) {
+    const definition = WEAPONS[model];
+    const pickup = (await activeWorldItems(page)).find(item => item.kind === 'weapon' && item.item === model);
+    if (!pickup)
+      throw new Error(`${definition.label}のworld pickupが必要です。`);
+    await page.evaluate((tile) => {
+      const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+      if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+      scene.debugMovePlayerTo(tile);
+    }, pickup.tile);
+    await page.keyboard.press('e');
+    await expect(page.getByTestId(`quick-slot-${quickSlot}`)).toHaveAttribute('data-model', model);
+    await page.keyboard.press(quickSlot);
+    await expect(page.getByTestId('ammo-material')).toHaveAttribute('data-material', definition.material);
+
+    await aimPlayer(page, { x: 1, y: 0 });
+    await holdGameCanvasAt(
+      page,
+      canvasPoint,
+      definition.fireIntervalMs * (definition.magazineSize + 1),
+    );
+    await expect.poll(() => currentAmmo(page)).toBe(0);
+    const materialBeforeReload = Number(await page.getByTestId('ammo-material').getAttribute('data-quantity'));
+    if (!Number.isSafeInteger(materialBeforeReload))
+      throw new Error(`${definition.label}のreload前マテリアル数が必要です。`);
+
+    await page.keyboard.press('r');
+    await expect(reloadHud).toContainText('リロード中');
+    await page.clock.runFor(definition.reloadMs + 100);
+    await expect(reloadHud).toHaveText('待機');
+    const loaded = await currentAmmo(page);
+    expect(loaded).toBeGreaterThan(0);
+    const materialAfterReload = Number(await page.getByTestId('ammo-material').getAttribute('data-quantity'));
+    expect(materialAfterReload).toBe(materialBeforeReload - loaded * definition.materialCostPerShot);
+
+    await holdGameCanvasAt(page, canvasPoint, definition.fireIntervalMs + 50);
+    await expect.poll(() => currentAmmo(page)).toBeLessThan(loaded);
+  }
+});
+
+test('Issue #77: terminal/retry後に旧reload callbackは新runの初期状態を変えない', async ({ page }) => {
+  test.setTimeout(45_000);
+  const definition = WEAPONS.rifle;
+  const initialMaterial = AMMO_MATERIALS[definition.material].initialQuantity;
+  await page.clock.install({ time: 15 });
+  await page.clock.pauseAt(15);
+  await page.goto(devStartUrl('/'));
+  const reloadHud = page.getByTestId('reload');
+  const reloadProgress = page.getByTestId('reload-progress');
+
+  await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    const rifle = scene.state.inventory.quickSlots[0];
+    if (!rifle || rifle.model !== 'rifle') throw new Error('初期ライフルinstanceが必要です。');
+    rifle.magazine = 0;
+    scene.refreshHud();
+  });
+  await expect.poll(() => currentAmmo(page)).toBe(0);
+  await expect(page.getByTestId('ammo-material')).toHaveAttribute('data-quantity', String(initialMaterial));
+
+  await page.keyboard.press('r');
+  await expect(reloadHud).toContainText('リロード中');
+  await expect(reloadProgress).toBeVisible();
+
+  await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    (scene as unknown as { enterTerminal: (result: 'defeat') => void }).enterTerminal('defeat');
+  });
+  await expect(page.getByTestId('defeat')).toBeVisible();
+  await page.getByTestId('retry').click();
+
+  await expect(page.getByTestId('defeat')).toBeHidden();
+  await expect.poll(() => currentAmmo(page)).toBe(definition.magazineSize);
+  await expect(page.getByTestId('ammo-material')).toHaveAttribute('data-material', definition.material);
+  await expect(page.getByTestId('ammo-material')).toHaveAttribute('data-quantity', String(initialMaterial));
+  await expect(reloadHud).toHaveText('待機');
+  await expect(reloadProgress).toBeHidden();
+
+  await page.clock.runFor(definition.reloadMs + 1);
+  await expect.poll(() => currentAmmo(page)).toBe(definition.magazineSize);
+  await expect(page.getByTestId('ammo-material')).toHaveAttribute('data-quantity', String(initialMaterial));
+  await expect(reloadHud).toHaveText('待機');
+  await expect(reloadProgress).toBeHidden();
 });
 
 test('同じtileのスクラップは数量と見た目を集約しEで取得できる', async ({ page }) => {
@@ -1268,19 +1346,19 @@ test('world weaponと弾薬を置けない場合はinventoryとworldを変えず
   await expect(page.getByTestId('quick-slot-2')).toHaveAttribute('data-model', 'shotgun');
   expect(await activeWorldItems(page)).toEqual(worldItemsBeforeDrop);
 
-  const ammoType = 'rifle-ammo' as const;
+  const material: AmmoMaterial = 'ballistic-material';
   const pouch = page.getByTestId('ammo-pouch');
-  const pouchEntry = page.getByTestId(`ammo-pouch-${ammoType}`);
-  const reserveBeforeAmmoDrop = await pouchEntry.getAttribute('data-reserve');
-  await beginInventoryDrag(page, `ammo-pouch-${ammoType}`);
-  await expect(pouch).toHaveAttribute('data-drag-source', `ammo:${ammoType}`);
-  await dragInventorySlot(page, `ammo-pouch-${ammoType}`, '#game');
+  const pouchEntry = page.getByTestId(`ammo-pouch-${material}`);
+  const materialBeforeAmmoDrop = await pouchEntry.getAttribute('data-quantity');
+  await beginInventoryDrag(page, `ammo-pouch-${material}`);
+  await expect(pouch).toHaveAttribute('data-drag-source', `material:${material}`);
+  await dragInventorySlot(page, `ammo-pouch-${material}`, '#game');
   await expect(page.getByTestId('feedback')).toHaveText('置ける場所がありません');
-  await expect(pouchEntry).toHaveAttribute('data-reserve', reserveBeforeAmmoDrop ?? '');
+  await expect(pouchEntry).toHaveAttribute('data-quantity', materialBeforeAmmoDrop ?? '');
   expect(await activeWorldItems(page)).toEqual(worldItemsBeforeDrop);
 });
 
-test('満タン弾薬箱と同tileのスクラップをEで取得できる', async ({ page }) => {
+test('素材箱と同tileのスクラップをEで取得できる', async ({ page }) => {
   const schedule = createRunSchedule(15_000, 1_000);
   await page.clock.install({ time: 15 });
   await page.clock.pauseAt(15);
@@ -1295,13 +1373,6 @@ test('満タン弾薬箱と同tileのスクラップをEで取得できる', asy
     throw new Error('満タン競合確認用の弾薬箱が必要です。');
   const ammoBoxCount = page.getByTestId('ammo-box-count');
   const targetBoxKey = `${targetBox.x},${targetBox.y}`;
-  await page.evaluate((weapons) => {
-    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
-    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
-    for (const [weapon, definition] of Object.entries(weapons))
-      scene.state.reserve[weapon as 'rifle' | 'shotgun' | 'handgun'] = definition.reserveMax;
-    scene.refreshHud();
-  }, WEAPONS);
   await expect.poll(async () => tileKeysFromAttribute(await ammoBoxCount.getAttribute('data-active-tiles'))).toContain(targetBoxKey);
 
   await moveEnemyToTile(page, 'basic-1', targetBox);
@@ -1315,9 +1386,11 @@ test('満タン弾薬箱と同tileのスクラップをEで取得できる', asy
   }, targetBox);
   await expect(page.getByTestId('pickup-prompt')).toBeVisible();
   await page.keyboard.press('e');
+  await expect(ammoBoxCount).toHaveText('3');
+  await page.keyboard.press('e');
   await expect(page.getByTestId('scrap')).toHaveAttribute('data-count', /[1-9]/);
   expect((await activeWorldItems(page)).some(item => item.id === scrap.id)).toBe(false);
-  await expect.poll(async () => tileKeysFromAttribute(await ammoBoxCount.getAttribute('data-active-tiles'))).toContain(targetBoxKey);
+  await expect.poll(async () => tileKeysFromAttribute(await ammoBoxCount.getAttribute('data-active-tiles'))).not.toContain(targetBoxKey);
 });
 
 test('terminal中はpickupを止め、retryで所持品とworld itemを初期化する', async ({ page }) => {
@@ -1341,10 +1414,10 @@ test('terminal中はpickupを止め、retryで所持品とworld itemを初期化
   await page.keyboard.press('Tab');
   await expect(inventoryDetail).toBeVisible();
   await expect(ammoPouch).toBeVisible();
-  await dragInventorySlot(page, 'ammo-pouch-handgun-ammo', '#game');
-  const droppedAmmo = (await activeWorldItems(page)).find(item => item.id.startsWith('dropped-ammo-'));
-  if (!droppedAmmo || droppedAmmo.kind !== 'ammo')
-    throw new Error('retry初期化確認用のworld弾薬が必要です。');
+  await dragInventorySlot(page, 'ammo-pouch-projectile-material', '#game');
+  const droppedAmmo = (await activeWorldItems(page)).find(item => item.id.startsWith('dropped-ammo-material-'));
+  if (!droppedAmmo || droppedAmmo.kind !== 'ammo-material')
+    throw new Error('retry初期化確認用のworld素材が必要です。');
   await beginInventoryDrag(page, 'inventory-quick-slot-1');
   await expect(inventoryDetail).toHaveAttribute('data-drag-source', 'quick:0');
   await page.clock.fastForward(runDurationMs(schedule));
@@ -1373,9 +1446,9 @@ test('terminal中はpickupを止め、retryで所持品とworld itemを初期化
   await page.keyboard.press('Tab');
   await expect(inventoryDetail).toBeVisible();
   await expect(ammoPouch).toBeVisible();
-  for (const type of AMMO_TYPE_ORDER) {
-    const weapon = AMMO_TYPES[type].weapon;
-    await expect(page.getByTestId(`ammo-pouch-${type}`)).toHaveAttribute('data-reserve', String(WEAPONS[weapon].reserveInitial));
+  for (const material of AMMO_MATERIAL_ORDER) {
+    await expect(page.getByTestId(`ammo-pouch-${material}`))
+      .toHaveAttribute('data-quantity', String(AMMO_MATERIALS[material].initialQuantity));
   }
   const retriedItems = await activeWorldItems(page);
   expect(retriedItems.filter(item => item.kind === 'weapon').map(item => item.item).sort()).toEqual([...INITIAL_WORLD_WEAPON_MODELS].sort());
@@ -1384,12 +1457,12 @@ test('terminal中はpickupを止め、retryで所持品とworld itemを初期化
   const retriedBoxes = await activeAmmoBoxes(page);
   expect(retriedBoxes).toHaveLength(selectAmmoBoxTiles(generateArenaMap(Number(await page.getByTestId('map-seed').textContent()))).length);
   retriedBoxes.forEach((box, index) => {
-    const expectedType = AMMO_TYPE_ORDER[index % AMMO_TYPE_ORDER.length];
-    if (!expectedType) throw new Error('弾薬種の設定が必要です。');
-    expect(box.ammoType).toBe(expectedType);
-    expect(box.quantity).toBe(AMMO_TYPES[expectedType].boxQuantity);
-    expect(box.worldColor).toBe(AMMO_TYPES[expectedType].worldColor);
-    expect(box.texture).toBe(`ammo-box-${expectedType}`);
+    const expectedMaterial = AMMO_MATERIAL_BOX_CYCLE[index % AMMO_MATERIAL_BOX_CYCLE.length];
+    if (!expectedMaterial) throw new Error('弾薬素材の設定が必要です。');
+    expect(box.material).toBe(expectedMaterial);
+    expect(box.quantity).toBe(AMMO_MATERIALS[expectedMaterial].boxQuantity);
+    expect(box.worldColor).toBe(AMMO_MATERIALS[expectedMaterial].worldColor);
+    expect(box.texture).toBe(`material-box-${expectedMaterial}`);
   });
 });
 
@@ -1642,7 +1715,7 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expect(reloadProgress).toHaveAttribute('max', '1');
   await expect.poll(async () => reloadProgress.evaluate(element => (element as HTMLProgressElement).value)).toBe(0);
   await expect(ammoPanel.getByTestId('ammo-panel-weapon')).toHaveText('アサルトライフル');
-  await expect(page.getByTestId('ammo-reserve')).toHaveText('予備 40/60');
+  await expect(page.getByTestId('ammo-material')).toHaveText(`素材 ${AMMO_MATERIALS['ballistic-material'].label} ${AMMO_MATERIALS['ballistic-material'].initialQuantity}`);
   await expect(page.getByTestId('ammo-box-count')).toHaveText('4');
   await expect(page.getByTestId('reload')).toHaveText('待機');
   await expect(reloadProgress).toBeHidden();
@@ -1723,10 +1796,10 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   const firstAmmoBox = (await activeAmmoBoxes(page)).find(entry =>
     entry.boxId === `ammo-box-${boxTiles.findIndex(tile => tile.x === firstBox.x && tile.y === firstBox.y) + 1}`);
   if (!firstAmmoBox) throw new Error('種類別弾薬箱の観測値が必要です。');
-  const reservesBeforeAmmoPickup = Object.fromEntries(await Promise.all(AMMO_TYPE_ORDER.map(async type => [
-    type,
-    Number(await page.getByTestId(`ammo-pouch-${type}`).getAttribute('data-reserve')),
-  ]))) as Record<(typeof AMMO_TYPE_ORDER)[number], number>;
+  const materialsBeforeAmmoPickup = Object.fromEntries(await Promise.all(AMMO_MATERIAL_ORDER.map(async material => [
+    material,
+    Number(await page.getByTestId(`ammo-pouch-${material}`).getAttribute('data-quantity')),
+  ]))) as Record<AmmoMaterial, number>;
   await page.evaluate((tile) => {
     const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
     if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
@@ -1734,7 +1807,7 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   }, firstBox);
   await expect(page.getByTestId('ammo-box-count')).toHaveText('4');
   await expect(page.getByTestId('pickup-prompt')).toBeVisible();
-  await expect(page.getByTestId('pickup-target')).toHaveText(`${AMMO_TYPES[firstAmmoBox.ammoType].label} ${firstAmmoBox.quantity}発`);
+  await expect(page.getByTestId('pickup-target')).toHaveText(`${AMMO_MATERIALS[firstAmmoBox.material].label} ${firstAmmoBox.quantity}個`);
   await expect(page.getByTestId('pickup-action')).toHaveText('を拾う [E]');
   await page.keyboard.press('e');
   await expect(page.getByTestId('ammo-box-count')).toHaveText('3');
@@ -1744,12 +1817,11 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   const ammoPouch = page.getByTestId('ammo-pouch');
   await page.keyboard.press('Tab');
   await expect(ammoPouch).toBeVisible();
-  for (const type of AMMO_TYPE_ORDER) {
-    const weapon = AMMO_TYPES[type].weapon;
-    const expectedReserve = type === firstAmmoBox.ammoType
-      ? Math.min(reservesBeforeAmmoPickup[type] + firstAmmoBox.quantity, WEAPONS[weapon].reserveMax)
-      : reservesBeforeAmmoPickup[type];
-    await expect(page.getByTestId(`ammo-pouch-${type}`)).toHaveAttribute('data-reserve', String(expectedReserve));
+  for (const material of AMMO_MATERIAL_ORDER) {
+    const expectedQuantity = material === firstAmmoBox.material
+      ? materialsBeforeAmmoPickup[material] + firstAmmoBox.quantity
+      : materialsBeforeAmmoPickup[material];
+    await expect(page.getByTestId(`ammo-pouch-${material}`)).toHaveAttribute('data-quantity', String(expectedQuantity));
   }
   await page.keyboard.press('Tab');
   await expect(ammoPouch).toBeHidden();
@@ -1757,11 +1829,11 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expect(page.getByTestId('ammo-box-count')).toHaveText('3');
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-active-tiles', waitingBoxKeys ?? '');
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-respawn-tiles', firstBoxKey);
-  await expect(page.getByTestId('ammo-reserve')).toHaveAttribute(
-    'data-reserve',
-    String(firstAmmoBox.ammoType === 'rifle-ammo'
-      ? Math.min(reservesBeforeAmmoPickup['rifle-ammo'] + firstAmmoBox.quantity, WEAPONS.rifle.reserveMax)
-      : reservesBeforeAmmoPickup['rifle-ammo']),
+  await expect(page.getByTestId('ammo-material')).toHaveAttribute(
+    'data-quantity',
+    String(firstAmmoBox.material === 'ballistic-material'
+      ? materialsBeforeAmmoPickup['ballistic-material'] + firstAmmoBox.quantity
+      : materialsBeforeAmmoPickup['ballistic-material']),
   );
 
   await setArenaPhysics(page, 'pause');
@@ -1769,7 +1841,7 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await page.keyboard.press('2');
   await expect(page.getByTestId('weapon')).toHaveText('ショットガン');
   await expect(page.getByTestId('ammo')).toHaveText('4/4');
-  await expect(page.getByTestId('ammo-reserve')).toHaveText('予備 12/12');
+  await expect(page.getByTestId('ammo-material')).toHaveText(/素材 実弾マテリアル \d+/);
   for (let index = 0; index < 3; index += 1)
     await page.mouse.click(bounds.x + (bounds.width * 90) / 800, bounds.y + (bounds.height * 90) / 500);
   await expect(page.getByTestId('ammo')).toHaveText('3/4');
@@ -1793,7 +1865,7 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expect(reloadProgress).toBeHidden();
   await expect.poll(async () => reloadProgress.evaluate(element => (element as HTMLProgressElement).value)).toBe(0);
   await expect(page.getByTestId('ammo')).toHaveText('4/4');
-  await expect(page.getByTestId('ammo-reserve')).toHaveText('予備 8/12');
+  await expect(page.getByTestId('ammo-material')).toHaveText(/素材 実弾マテリアル \d+/);
   await page.mouse.click(bounds.x + (bounds.width * 90) / 800, bounds.y + (bounds.height * 90) / 500);
   await expect(page.getByTestId('ammo')).toHaveText('3/4');
   await page.keyboard.press('r');
@@ -1823,7 +1895,7 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expect(page.getByTestId('survival-time')).toHaveText(/^0[67]:\d\d$/);
   await expect(page.getByTestId('weapon')).toHaveText('アサルトライフル');
   await expect(page.getByTestId('ammo')).toHaveText('20/20');
-  await expect(page.getByTestId('ammo-reserve')).toHaveText('予備 40/60');
+  await expect(page.getByTestId('ammo-material')).toHaveText(`素材 ${AMMO_MATERIALS['ballistic-material'].label} ${AMMO_MATERIALS['ballistic-material'].initialQuantity}`);
   await expect(page.getByTestId('ammo-box-count')).toHaveText('4');
   await expect(page.getByTestId('reload')).toHaveText('待機');
   await expect(reloadProgress).toBeHidden();
@@ -2348,9 +2420,9 @@ test('弾薬箱は取得後30秒で同じboxIdのまま新しい画面外floor�
   await expect(boxCount).toHaveAttribute('data-active-boxes', new RegExp(boxId + ':' + firstBoxKey));
   const initialBox = (await activeAmmoBoxes(page)).find(entry => entry.boxId === boxId);
   if (!initialBox) throw new Error('初期種類別弾薬箱が必要です。');
-  expect(initialBox.quantity).toBe(AMMO_TYPES[initialBox.ammoType].boxQuantity);
-  expect(initialBox.worldColor).toBe(AMMO_TYPES[initialBox.ammoType].worldColor);
-  expect(initialBox.texture).toBe(`ammo-box-${initialBox.ammoType}`);
+  expect(initialBox.quantity).toBe(AMMO_MATERIALS[initialBox.material].boxQuantity);
+  expect(initialBox.worldColor).toBe(AMMO_MATERIALS[initialBox.material].worldColor);
+  expect(initialBox.texture).toBe(`material-box-${initialBox.material}`);
   await collectAmmoBoxWithClock(page, firstBox, boxCount);
   await expect(boxCount).toHaveText('3');
   await expect(boxCount).toHaveAttribute('data-respawn-boxes', boxId);
@@ -2364,8 +2436,8 @@ test('弾薬箱は取得後30秒で同じboxIdのまま新しい画面外floor�
   if (!respawnedEntry) throw new Error('復活した種類別弾薬箱のboxIdが必要です。');
   const respawnedKey = `${respawnedEntry.tile.x},${respawnedEntry.tile.y}`;
   expect(respawnedKey).not.toBe(firstBoxKey);
-  expect(respawnedEntry.ammoType).toBe(initialBox.ammoType);
-  expect(respawnedEntry.quantity).toBe(AMMO_TYPES[initialBox.ammoType].boxQuantity);
+  expect(respawnedEntry.material).toBe(initialBox.material);
+  expect(respawnedEntry.quantity).toBe(AMMO_MATERIALS[initialBox.material].boxQuantity);
   expect(respawnedEntry.worldColor).toBe(initialBox.worldColor);
   expect(respawnedEntry.texture).toBe(initialBox.texture);
   expect(initialWorldItemTiles.has(respawnedKey)).toBe(false);

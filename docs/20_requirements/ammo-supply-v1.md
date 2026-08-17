@@ -7,6 +7,8 @@ implementation_task: https://github.com/WFrog2511/2d-coop-survival/issues/21
 
 # ammo-supply-v1 要件
 
+> **履歴化:** 本書全体は [REQ-AMMO-MATERIAL-V1](ammo-material-v1.md) と [Issue #77](https://github.com/WFrog2511/2d-coop-survival/issues/77) により supersede された。AmmoType、weapon別reserve、共有弾倉の記述は現行契約ではなく、過去sliceの履歴として保持する。
+
 ## 成果物段階
 
 Prototype standard のローカル検証用プロトタイプとする。実行中のゲーム状態はブラウザ内だけで扱い、永続化・通信同期は行わない。
