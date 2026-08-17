@@ -64,7 +64,7 @@ type ArenaDebugScene = {
     ammo: Record<'rifle' | 'shotgun' | 'handgun', number>;
     reserve: Record<'rifle' | 'shotgun' | 'handgun', number>;
   };
-  enemies: Record<EnemyId, ArenaDebugEnemy>;
+  enemyActors: Record<EnemyId, { sprite: ArenaDebugEnemy }>;
   textures: { get: (key: string) => { getSourceImage: () => HTMLCanvasElement } };
   debugRespawnEnemy: (id: EnemyId) => void;
   debugSetHiddenRecycleEnabled: (enabled: boolean) => void;
@@ -339,7 +339,7 @@ async function moveEnemyToTile(
   await page.evaluate(({ enemyId, targetTile, tileSize }) => {
     const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
     if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
-    const enemy = scene.enemies[enemyId];
+    const enemy = scene.enemyActors[enemyId].sprite;
     if (!enemy.active) throw new Error(`${enemyId}がactiveではありません。`);
     const x = targetTile.x * tileSize + tileSize / 2;
     const y = targetTile.y * tileSize + tileSize / 2;
@@ -621,7 +621,7 @@ async function expectCurrentEnemyPresentations(
     const position = await page.evaluate((enemyId) => {
       const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
       if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
-      const enemy = scene.enemies[enemyId];
+      const enemy = scene.enemyActors[enemyId].sprite;
       return { x: enemy.x, y: enemy.y };
     }, id);
     const enemyTile = {
