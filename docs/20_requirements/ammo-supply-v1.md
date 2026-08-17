@@ -15,16 +15,17 @@ Prototype standard のローカル検証用プロトタイプとする。実行�
 
 - ライフルは弾倉20発、予備弾薬の初期値40発、上限60発、弾薬箱1回の回復量20発とする。
 - ショットガンは弾倉4発、予備弾薬の初期値8発、上限12発、弾薬箱1回の回復量4発とする。
-- マップごとに武器共通の弾薬箱を4個配置する。箱は床タイル上に重複なく配置し、開始位置と壁には配置しない。
-- 弾薬箱は取得後30秒で同じ`boxId`のまま新しい画面外floorへ再出現する。terminalとretryでは旧runの再出現待ちを解除し、retryでは4個を再配置する。
-- 弾薬箱への接触だけでは取得しない。プレイヤーの3x3近傍で`E`案内を表示し、`E`入力で取得する。
-- 右下のDOM ammo panelに選択武器名、弾倉残数/上限、予備弾薬/上限を表示する。既存の診断HUDは維持する。
-- 弾倉が空の状態で左クリックした場合、既存のreload処理を1回だけ開始する。予備弾薬が0ならタイマーと弾薬を生成しない。`R`キーの手動リロードは維持する。
+- handgunは弾倉10発、`HANDGUN_AMMO`で予備弾薬の初期値30発・上限60発、`AMMO_TYPES['handgun-ammo'].boxQuantity`で弾薬箱1回の回復量10発を定める。ハンドガン、リボルバー、コンパクトピストルは同じhandgunの弾倉・予備弾薬・リロード状態を共有する。
+- マップごとに4個のstableな種類別弾薬箱を決定的に配置する。各箱は`AmmoType`、対応する`WeaponId`、その`AMMO_TYPES[ammoType].boxQuantity`から得る数量を持ち、箱の種類・色・表示は`AMMO_TYPES`を唯一の設定とする。箱は床タイル上に重複なく配置し、開始位置・他の弾薬箱との3x3回収範囲を避け、壁には配置しない。
+- `E`取得は選択した箱の種類だけを対応するreserve上限まで移す。部分取得では箱と残量を残し、対象reserveが満タンなら候補にしない。箱を空にした場合だけ30秒後に同じ`boxId`・種類・設定数量で新しい画面外floorへ再出現する。terminalとretryでは旧runの再出現待ちを解除し、retryでは4個を初期状態へ再配置する。
+- 弾薬箱とworldへ置いた弾薬への接触だけでは取得しない。プレイヤーの3x3近傍で弾薬名称と数量、`を拾う [E]`の2行案内を表示し、`E`入力で取得する。
+- 右下のDOM ammo panelに選択武器名、弾倉残数/上限、予備弾薬/上限を表示する。Issue #71追加sliceではTab詳細画面の右隣に、rifle、shotgun、handgunの各`AmmoType`のicon、名称、既存`reserve`だけを表示する弾薬ポーチを併置する。sidearmは同じhandgun行を共有し、弾倉はpouchへ表示しない。pouchの行はworldへだけnative drag & dropでき、現在reserveと設定済み箱量の小さい方を、候補確定後にstable ID付きworld弾薬として置く。既存の診断HUDと右下panelは維持する。
+- 弾倉が空の状態で左クリックした場合、詳細画面が閉じていれば既存のreload処理を1回だけ開始する。詳細画面を開いている間はpointerdownと自動射撃のいずれも無作用で、弾薬とreload状態を変えない。予備弾薬が0ならタイマーと弾薬を生成しない。`R`キーの手動リロードは維持する。
 
-- リロード中は右下ammo panel内にdeterminate progress barを表示し、既存タイマーの進捗に合わせて0から1へ更新する。リロード完了・武器切替による中断・敗北・retryでは非表示または0へ初期化する。
+- リロード中は右下ammo panel内にdeterminate progress barを表示し、既存タイマーの進捗に合わせて0から1へ更新する。リロード完了・異なる`WeaponId`への切替による中断・敗北・retryでは非表示または0へ初期化する。同じhandgunのsidearm model切替は進捗を維持する。
 ## 対象外
 
-汎用inventory・loot・item基盤、武器別箱、wave補充・drop、外部asset、点滅警告、新規npm依存、balance変更、永続化、マルチ同期、Issue #22、matrix/readiness/evidence、新しいDOCGEN transformは対象外とする。
+汎用inventory・loot・item基盤、弾薬の枠間drop・stack分割・個別弾倉、wave補充、外部asset、点滅警告、新規npm依存、balance変更、永続化、マルチ同期、Issue #22、matrix/readiness/evidence、新しいDOCGEN transformは対象外とする。
 
 ## 人間確認
 

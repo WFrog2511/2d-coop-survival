@@ -1,7 +1,7 @@
 import type { EnemyVisibility, SpawnDirection, TilePosition } from '../arena-map';
 import { DIRECTION_LABELS, ENEMY_IDS } from '../game-data';
 import { PLAYER_ROLES, type PlayerRoleId } from '../player-data';
-import { STABLE_ENEMY_SLOT_COUNT, WEAPONS, activeEnemyCount, currentRunPhase, currentWaveNumber, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, type CombatState, type EnemyInstanceId, type RunState } from '../rules';
+import { AMMO_TYPES, AMMO_TYPE_ORDER, STABLE_ENEMY_SLOT_COUNT, WEAPON_MODELS, WEAPONS, activeEnemyCount, activeWeaponId, currentRunPhase, currentWaveNumber, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, weaponIdForModel, type AmmoType, type CombatState, type EnemyInstanceId, type InventorySlotRef, type RunState, type WeaponModel } from '../rules';
 
 export type EnemyHudView = {
   stableId: string;
@@ -27,6 +27,7 @@ export type ArenaHudView = {
   ammoBoxCount: number;
   activeAmmoBoxTiles: readonly string[];
   activeAmmoBoxEntries: readonly string[];
+  activeWorldItemEntries: readonly string[];
   offscreenAmmoBoxIds: readonly string[];
   pendingAmmoBoxIds: readonly string[];
   pendingAmmoBoxOriginTiles: readonly string[];
@@ -41,6 +42,33 @@ export type ArenaHudView = {
   playerTile: TilePosition;
 };
 
+/** 詳細インベントリから移動する武器のDOM上の行き先。 */
+export type InventoryDropTarget = InventorySlotRef | 'world';
+
+/** 詳細インベントリからworldまたは武器枠へ移す対象。 */
+export type InventoryDragSource
+  = | { kind: 'weapon'; slot: InventorySlotRef }
+    | { kind: 'ammo'; ammoType: AmmoType };
+
+function inventorySlotRefFromTarget(target: EventTarget | null): InventorySlotRef | undefined {
+  if (!(target instanceof Element)) return undefined;
+  const slot = target.closest<HTMLElement>('[data-inventory-container][data-index]');
+  const container = slot?.dataset.inventoryContainer;
+  const index = Number(slot?.dataset.index);
+  if ((container !== 'quick' && container !== 'backpack') || !Number.isInteger(index)) return undefined;
+  return { container, index };
+}
+
+function ammoTypeFromTarget(target: EventTarget | null): AmmoType | undefined {
+  if (!(target instanceof Element)) return undefined;
+  const ammoType = target.closest<HTMLOutputElement>('[data-ammo-type]')?.dataset.ammoType;
+  return AMMO_TYPE_ORDER.includes(ammoType as AmmoType) ? ammoType as AmmoType : undefined;
+}
+
+function sameInventorySlot(left: InventorySlotRef, right: InventorySlotRef): boolean {
+  return left.container === right.container && left.index === right.index;
+}
+
 function enemyRecord<T>(create: (id: EnemyInstanceId) => T): Record<EnemyInstanceId, T> {
   return Object.fromEntries(ENEMY_IDS.map(id => [id, create(id)])) as Record<EnemyInstanceId, T>;
 }
@@ -52,7 +80,7 @@ function element<T extends Element>(selector: string): T {
   return value;
 }
 
-function formatSurvivalTime(remainingMs: number): string {
+export function formatSurvivalTime(remainingMs: number): string {
   const totalSeconds = Math.ceil(remainingMs / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
@@ -60,15 +88,42 @@ function formatSurvivalTime(remainingMs: number): string {
 }
 
 export class ArenaHud {
+  private readonly game = element<HTMLElement>('#game');
   private readonly playerHp = element<HTMLOutputElement>('[data-testid="hp"]');
   private readonly playerHpBar = element<HTMLProgressElement>('[data-testid="hp-bar"]');
   private readonly weaponHud = element<HTMLOutputElement>('[data-testid="weapon"]');
   private readonly ammoHud = element<HTMLOutputElement>('[data-testid="ammo"]');
   private readonly ammoPanelWeaponHud = element<HTMLOutputElement>('[data-testid="ammo-panel-weapon"]');
   private readonly reserveHud = element<HTMLOutputElement>('[data-testid="ammo-reserve"]');
+  private readonly quickSlots = [
+    element<HTMLOutputElement>('[data-testid="quick-slot-1"]'),
+    element<HTMLOutputElement>('[data-testid="quick-slot-2"]'),
+    element<HTMLOutputElement>('[data-testid="quick-slot-3"]'),
+  ];
+
+  private readonly inventoryDetail = element<HTMLElement>('[data-testid="inventory-detail"]');
+  private readonly ammoPouch = element<HTMLElement>('[data-testid="ammo-pouch"]');
+  private readonly ammoPouchEntries: ReadonlyArray<{ type: AmmoType; output: HTMLOutputElement }> = AMMO_TYPE_ORDER.map(type => ({
+    type,
+    output: element<HTMLOutputElement>(`[data-testid="ammo-pouch-${type}"]`),
+  }));
+
+  private readonly inventoryDetailQuickSlots = [
+    element<HTMLOutputElement>('[data-testid="inventory-quick-slot-1"]'),
+    element<HTMLOutputElement>('[data-testid="inventory-quick-slot-2"]'),
+    element<HTMLOutputElement>('[data-testid="inventory-quick-slot-3"]'),
+  ];
+
+  private readonly backpackSlots = Array.from({ length: 10 }, (_, index) =>
+    element<HTMLOutputElement>(`[data-testid="backpack-slot-${index + 1}"]`));
+
+  private readonly scrapHud = element<HTMLOutputElement>('[data-testid="scrap"]');
+  private readonly worldItemCountHud = element<HTMLOutputElement>('[data-testid="world-item-count"]');
   private readonly ammoBoxCountHud = element<HTMLOutputElement>('[data-testid="ammo-box-count"]');
   private readonly playerRoleHud = element<HTMLOutputElement>('[data-testid="role"]');
   private readonly pickupPrompt = element<HTMLElement>('[data-testid="pickup-prompt"]');
+  private readonly pickupTarget = element<HTMLElement>('[data-testid="pickup-target"]');
+  private readonly pickupAction = element<HTMLElement>('[data-testid="pickup-action"]');
   private readonly reloadProgressLabel = element<HTMLElement>('[data-testid="reload-progress-label"]');
   private readonly reloadProgressHud = element<HTMLProgressElement>('[data-testid="reload-progress"]');
   private readonly reloadHud = element<HTMLOutputElement>('[data-testid="reload"]');
@@ -96,14 +151,99 @@ export class ArenaHud {
   private readonly victory = element<HTMLElement>('[data-testid="victory"]');
   private readonly retry = element<HTMLButtonElement>('[data-testid="retry"]');
   private readonly enemyHp = enemyRecord(id => element<HTMLOutputElement>(`[data-testid="${id}-hp"]`));
+  private inventoryDropListener: ((source: InventoryDragSource, target: InventoryDropTarget) => void) | undefined;
+  private dragSource: InventoryDragSource | undefined;
+  private inventoryDragMessage = false;
+
+  private readonly onInventoryDragStart = (event: DragEvent): void => {
+    if (!this.inventoryDropListener)
+      return;
+    const slot = inventorySlotRefFromTarget(event.target);
+    const sourceSlot = event.target instanceof Element
+      ? event.target.closest<HTMLElement>('[data-inventory-container][data-index]')
+      : undefined;
+    if (slot && sourceSlot && this.inventoryDetail.contains(sourceSlot)) {
+      if (sourceSlot.dataset.empty === 'true')
+        return;
+      this.dragSource = { kind: 'weapon', slot };
+      this.inventoryDetail.dataset.dragSource = `${slot.container}:${slot.index}`;
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', `weapon:${slot.container}:${slot.index}`);
+      }
+      return;
+    }
+    const ammoType = ammoTypeFromTarget(event.target);
+    if (!ammoType || !(event.target instanceof Node) || !this.ammoPouch.contains(event.target))
+      return;
+    this.dragSource = { kind: 'ammo', ammoType };
+    this.ammoPouch.dataset.dragSource = `ammo:${ammoType}`;
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', `ammo:${ammoType}`);
+    }
+  };
+
+  private readonly onInventoryDragEnd = (): void => this.clearInventoryDrag();
+
+  private readonly onInventoryDragOver = (event: DragEvent): void => {
+    const target = inventorySlotRefFromTarget(event.target);
+    if (!this.dragSource || this.dragSource.kind !== 'weapon' || !target)
+      return;
+    event.preventDefault();
+    if (event.dataTransfer)
+      event.dataTransfer.dropEffect = 'move';
+    this.setInventoryDropTarget(target);
+  };
+
+  private readonly onInventoryDrop = (event: DragEvent): void => {
+    const source = this.dragSource;
+    const target = inventorySlotRefFromTarget(event.target);
+    if (!source || source.kind !== 'weapon' || !target)
+      return;
+    event.preventDefault();
+    this.inventoryDropListener?.(source, target);
+    this.clearInventoryDrag();
+  };
+
+  private readonly onGameDragOver = (event: DragEvent): void => {
+    if (!this.dragSource)
+      return;
+    event.preventDefault();
+    if (event.dataTransfer)
+      event.dataTransfer.dropEffect = 'move';
+    this.game.dataset.weaponDropTarget = 'true';
+  };
+
+  private readonly onGameDrop = (event: DragEvent): void => {
+    const source = this.dragSource;
+    if (!source)
+      return;
+    event.preventDefault();
+    this.inventoryDropListener?.(source, 'world');
+    this.clearInventoryDrag();
+  };
 
   constructor(spawnConfig: string, runConfig: string) {
     this.spawnPhaseHud.dataset.spawnConfig = spawnConfig;
     this.runPanel.dataset.runConfig = runConfig;
+    this.inventoryDetail.addEventListener('dragstart', this.onInventoryDragStart);
+    this.inventoryDetail.addEventListener('dragend', this.onInventoryDragEnd);
+    this.inventoryDetail.addEventListener('dragover', this.onInventoryDragOver);
+    this.inventoryDetail.addEventListener('drop', this.onInventoryDrop);
+    this.ammoPouch.addEventListener('dragstart', this.onInventoryDragStart);
+    this.ammoPouch.addEventListener('dragend', this.onInventoryDragEnd);
+    this.game.addEventListener('dragover', this.onGameDragOver);
+    this.game.addEventListener('drop', this.onGameDrop);
   }
 
   public onRetry(listener: () => void): void {
     this.retry.addEventListener('click', listener);
+  }
+
+  /** Sceneごとに差し替える詳細インベントリのdrop処理を登録する。 */
+  public setInventoryDropListener(listener: ((source: InventoryDragSource, target: InventoryDropTarget) => void) | undefined): void {
+    this.inventoryDropListener = listener;
   }
 
   public setPlayerRole(roleId: PlayerRoleId): void {
@@ -115,8 +255,19 @@ export class ArenaHud {
     this.playerRoleHud.style.color = role.accent;
   }
 
-  public setPickupPrompt(visible: boolean): void {
-    this.pickupPrompt.hidden = !visible;
+  public setPickupPrompt(prompt: { target: string; action: string } | undefined): void {
+    this.pickupPrompt.hidden = prompt === undefined;
+    this.pickupTarget.textContent = prompt?.target ?? '';
+    this.pickupAction.textContent = prompt?.action ?? '';
+  }
+
+  public setInventoryOpen(open: boolean): void {
+    this.inventoryDetail.hidden = !open;
+    this.inventoryDetail.dataset.open = String(open);
+    this.ammoPouch.hidden = !open;
+    this.ammoPouch.dataset.open = String(open);
+    if (!open)
+      this.clearInventoryDrag();
   }
 
   public updateFps(value: number): void {
@@ -124,6 +275,7 @@ export class ArenaHud {
   }
 
   public setPlaying(): void {
+    this.clearInventoryDrag(true);
     this.feedback.textContent = '-';
     this.resultPanel.hidden = true;
     this.resultPanel.dataset.state = 'playing';
@@ -132,6 +284,7 @@ export class ArenaHud {
   }
 
   public showResult(result: 'defeat' | 'victory'): void {
+    this.clearInventoryDrag(true);
     this.resultPanel.hidden = false;
     this.resultPanel.dataset.state = result;
     this.defeat.hidden = result !== 'defeat';
@@ -140,7 +293,29 @@ export class ArenaHud {
   }
 
   public setFeedback(message: string): void {
+    this.inventoryDragMessage = false;
     this.feedback.textContent = message;
+  }
+
+  /** worldへ置けないときだけ、次のrun境界で消す一時メッセージを表示する。 */
+  public setInventoryDragMessage(message: string): void {
+    this.feedback.textContent = message;
+    this.inventoryDragMessage = true;
+  }
+
+  /** drag sourceとdrop強調を消し、run境界では一時メッセージも消す。 */
+  public clearInventoryDrag(clearMessage = false): void {
+    this.dragSource = undefined;
+    delete this.inventoryDetail.dataset.dragSource;
+    delete this.ammoPouch.dataset.dragSource;
+    delete this.game.dataset.weaponDropTarget;
+    this.inventoryDetail.querySelectorAll<HTMLElement>('[data-drop-target]').forEach((slot) => {
+      delete slot.dataset.dropTarget;
+    });
+    if (clearMessage && this.inventoryDragMessage) {
+      this.feedback.textContent = '-';
+      this.inventoryDragMessage = false;
+    }
   }
 
   public updateVisibilityMask(alpha: number, obscuredTileCount: number, playerTile: TilePosition): void {
@@ -174,15 +349,31 @@ export class ArenaHud {
     ENEMY_IDS.forEach((id) => {
       this.enemyHp[id].value = String(view.state.enemies[id].hp);
     });
-    this.weaponHud.value = WEAPONS[view.state.weapon].label;
-    const weapon = WEAPONS[view.state.weapon];
-    this.ammoPanelWeaponHud.value = weapon.label;
-    this.ammoHud.value = view.state.ammo[view.state.weapon] + '/' + weapon.magazineSize;
-    this.reserveHud.value = '予備 ' + view.state.reserve[view.state.weapon] + '/' + weapon.reserveMax;
-    this.ammoHud.dataset.magazine = String(view.state.ammo[view.state.weapon]);
-    this.ammoHud.dataset.magazineCapacity = String(weapon.magazineSize);
-    this.reserveHud.dataset.reserve = String(view.state.reserve[view.state.weapon]);
-    this.reserveHud.dataset.reserveCapacity = String(weapon.reserveMax);
+    const selectedModel = view.state.inventory.quickSlots[view.state.inventory.selectedQuickSlot];
+    const weaponId = activeWeaponId(view.state);
+    const selectedLabel = selectedModel ? WEAPON_MODELS[selectedModel].label : '武器なし';
+    this.weaponHud.value = selectedLabel;
+    this.ammoPanelWeaponHud.value = selectedLabel;
+    if (weaponId) {
+      const weapon = WEAPONS[weaponId];
+      this.ammoHud.value = view.state.ammo[weaponId] + '/' + weapon.magazineSize;
+      this.reserveHud.value = '予備 ' + view.state.reserve[weaponId] + '/' + weapon.reserveMax;
+      this.ammoHud.dataset.magazine = String(view.state.ammo[weaponId]);
+      this.ammoHud.dataset.magazineCapacity = String(weapon.magazineSize);
+      this.reserveHud.dataset.reserve = String(view.state.reserve[weaponId]);
+      this.reserveHud.dataset.reserveCapacity = String(weapon.reserveMax);
+    } else {
+      this.ammoHud.value = '-/-';
+      this.reserveHud.value = '予備 -/-';
+      this.ammoHud.dataset.magazine = '';
+      this.ammoHud.dataset.magazineCapacity = '';
+      this.reserveHud.dataset.reserve = '';
+      this.reserveHud.dataset.reserveCapacity = '';
+    }
+    this.updateInventory(view.state);
+    this.updateAmmoPouch(view.state);
+    this.worldItemCountHud.value = String(view.activeWorldItemEntries.length);
+    this.worldItemCountHud.dataset.worldItems = view.activeWorldItemEntries.join('|');
     this.ammoBoxCountHud.value = String(view.ammoBoxCount);
     this.ammoBoxCountHud.dataset.activeTiles = view.activeAmmoBoxTiles.join('|');
     this.ammoBoxCountHud.dataset.activeBoxes = view.activeAmmoBoxEntries.join('|');
@@ -197,6 +388,82 @@ export class ArenaHud {
     this.updateSpawnPhase(view.spawnPhase, view.primaryDirection);
     this.mapSeedHud.value = String(view.mapSeed);
     this.updateTile(view.playerTile);
+  }
+
+  private updateInventory(state: CombatState): void {
+    state.inventory.quickSlots.forEach((model, index) => {
+      const selected = state.inventory.selectedQuickSlot === index;
+      const quickSlot = this.quickSlots[index];
+      if (quickSlot)
+        this.updateWeaponSlot(quickSlot, model, index, selected);
+      const inventoryDetailQuickSlot = this.inventoryDetailQuickSlots[index];
+      if (inventoryDetailQuickSlot)
+        this.updateWeaponSlot(inventoryDetailQuickSlot, model, index, selected, 'quick');
+    });
+    state.inventory.backpackSlots.forEach((model, index) => {
+      const slot = this.backpackSlots[index];
+      if (!slot)
+        return;
+      const label = model ? WEAPON_MODELS[model].label : '空き';
+      slot.value = `${index + 1} ${label}`;
+      slot.dataset.index = String(index);
+      slot.dataset.model = model ?? '';
+      slot.dataset.weapon = model ? weaponIdForModel(model) : '';
+      slot.dataset.empty = String(model === null);
+      slot.dataset.inventoryContainer = 'backpack';
+      slot.draggable = model !== null;
+    });
+    this.inventoryDetail.dataset.selectedQuickSlot = String(state.inventory.selectedQuickSlot);
+    this.scrapHud.value = `スクラップ ${state.inventory.materials.scrap}`;
+    this.scrapHud.dataset.count = String(state.inventory.materials.scrap);
+  }
+
+  /** 弾薬ポーチは既存の武器種ごとの予備弾薬だけを一覧表示する。 */
+  private updateAmmoPouch(state: CombatState): void {
+    this.ammoPouchEntries.forEach(({ type, output }) => {
+      const ammo = AMMO_TYPES[type];
+      output.value = `${ammo.icon} ${ammo.label} ${state.reserve[ammo.weapon]}`;
+      output.dataset.ammoType = type;
+      output.dataset.weapon = ammo.weapon;
+      output.dataset.reserve = String(state.reserve[ammo.weapon]);
+      output.dataset.boxQuantity = String(ammo.boxQuantity);
+      output.dataset.worldColor = ammo.worldColor;
+      output.dataset.dragKind = 'ammo';
+      output.draggable = true;
+    });
+  }
+
+  private updateWeaponSlot(
+    slot: HTMLOutputElement,
+    model: WeaponModel | null,
+    index: number,
+    selected: boolean,
+    inventoryContainer?: InventorySlotRef['container'],
+  ): void {
+    const label = model ? WEAPON_MODELS[model].label : '空き';
+    slot.value = `${index + 1} ${label}${selected ? '（選択中）' : ''}`;
+    slot.dataset.index = String(index);
+    slot.dataset.model = model ?? '';
+    slot.dataset.weapon = model ? weaponIdForModel(model) : '';
+    slot.dataset.empty = String(model === null);
+    slot.dataset.selected = String(selected);
+    if (inventoryContainer) {
+      slot.dataset.inventoryContainer = inventoryContainer;
+      slot.draggable = model !== null;
+    } else {
+      delete slot.dataset.inventoryContainer;
+      slot.draggable = false;
+    }
+  }
+
+  private setInventoryDropTarget(target: InventorySlotRef): void {
+    this.inventoryDetail.querySelectorAll<HTMLElement>('[data-drop-target]').forEach((slot) => {
+      delete slot.dataset.dropTarget;
+    });
+    const selector = `[data-inventory-container="${target.container}"][data-index="${target.index}"]`;
+    const slot = this.inventoryDetail.querySelector<HTMLElement>(selector);
+    if (slot && this.dragSource?.kind === 'weapon' && !sameInventorySlot(this.dragSource.slot, target))
+      slot.dataset.dropTarget = 'true';
   }
 
   public updateReloadProgress(reload: { active: boolean; progress: number }): void {
@@ -221,7 +488,11 @@ export class ArenaHud {
     this.waveHud.dataset.state = state.status;
     this.waveRemainingHud.value = formatSurvivalTime(remainingWaveMs(state));
     this.runPanel.dataset.phase = phase;
-    this.runPhaseHud.value = phase === 'combat' ? '夜（戦闘）' : '昼（休憩）';
+    this.runPhaseHud.value = phase === 'combat'
+      ? '夜（戦闘）'
+      : phase === 'preparation'
+        ? '昼（準備）'
+        : '昼（休憩）';
     this.runPhaseHud.dataset.phase = phase;
     this.phaseRemainingHud.value = formatSurvivalTime(remainingPhaseMs(state));
     this.enemyCurrentHud.value = String(activeEnemyCount(state));

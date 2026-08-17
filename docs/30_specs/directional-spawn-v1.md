@@ -14,17 +14,17 @@ requirements: REQ-DIRECTIONAL-SPAWN
 
 ## Issue #58の時間契約移行
 
-[SPEC-WAVE-PROGRESSION](wave-progression-v1.md)（Issue #58）は、Issue #34由来の180000ms（03:00）期限をdynamic RunState scheduleへ時間契約だけsupersedeする。既定は3 combat wave各150000ms、wave 1/2後のrest各60000ms、総570000msである。本書内の3分勝利・180000ms terminal記述は履歴として残し、現在の時間・phase残り・victory境界はSPEC-WAVE-PROGRESSIONを正本とする。60000ms spawn phase、方向計算、strict spawn、terminal/retryのgeneration guard、ammo box契約は変更しない。
+[SPEC-WAVE-PROGRESSION](wave-progression-v1.md)（Issue #71条件変更後）は、Issue #34由来の180000ms（03:00）期限だけでなく、本書の`run開始`をphase epochおよびinitial/stagger開始点とする記述・検証期待値も限定的にsupersedeする。既定はenemy-free初回準備60000ms、3 combat wave各150000ms、wave 1/2後のrest各60000ms、総630000msである。本書内の3分勝利・180000ms terminalと旧run開始時initial/stagger記述は#71前の履歴として残し、現在の時間・phase残り・victory境界はSPEC-WAVE-PROGRESSIONを正本とする。60000ms spawn phaseは初回combat開始をepochとし、`status=playing && elapsedMs >= restDurationMs`を満たす最初のupdateでcurrent phaseにかかわらず一度だけlifecycleを開始する。方向計算、strict spawn、terminal/retryのgeneration guard、ammo box契約は変更しない。
 
 ## phaseと主方向
 
-run開始時刻を`startedAt`、現在のゲーム時刻を`now`とし、0始まりのphaseを次で求める。
+enemy lifecycle開始後のcombat epochを`combatStartedAt`、現在のゲーム時刻を`now`とし、0始まりのphaseを次で求める。preparation中のHUDはphase 0を表示するが、このepochはまだ開始していない。
 
 ~~~text
-phase = floor(max(0, now - startedAt) / 60000)
+phase = floor(max(0, now - combatStartedAt) / 60000)
 ~~~
 
-`now <= startedAt`とrun開始直後はphase 0、`startedAt + 60000`の境界でphase 1とする。HUDの表示値は`phase + 1`とする。
+`now <= combatStartedAt`と初回combat直後はphase 0、`combatStartedAt + 60000`の境界でphase 1とする。HUDの表示値は`phase + 1`とする。
 
 方向の順序は`up`、`right`、`down`、`left`で固定する。主方向はmap seedをunsigned 32-bit値として扱い、`(seed + phase) % 4`に対応する方向を選ぶ。同じmap seedとphaseは常に同じ主方向となり、連続する4 phaseで4方向を決定的に一巡する。
 
@@ -41,7 +41,7 @@ phase = floor(max(0, now - startedAt) / 60000)
 
 ## Issue #38 populationと循環
 
-phase 0の初期対象は`basic-1`〜`basic-6`、`drone-1`〜`drone-2`の8体である。`basic-7`、`basic-8`、`basic-9`、`drone-3`をrun開始から3000/6000/9000/12000msで予約し、成功後にactive 12体とする。
+初回combat epochのphase 0の初期対象は`basic-1`〜`basic-6`、`drone-1`〜`drone-2`の8体である。`basic-7`、`basic-8`、`basic-9`、`drone-3`をcombat epochから3000/6000/9000/12000msで予約し、成功後にactive 12体とする。
 
 enemy専用`selectEnemySpawnTile`は到達可能、未占有、actual camera viewport外、`enemyVisibility(...)=hidden`、stable slotの割り当て方向をすべて必須とする。弾薬箱用`selectSpawnTile`のfallbackは変更しない。enemy候補なしではinactive/hiddenを維持し、同じspawn reasonを1000ms後に再試行する。
 
@@ -66,7 +66,7 @@ enemy用`selectEnemySpawnTile`は次の順で候補を絞り込む。
 
 弾薬箱用`selectSpawnTile`だけはviewport外なしで最遠floorへfallbackする。enemy用selectorはstrict条件を一つでも満たせなければ`null`を返す。
 
-敵spawn時の`occupied`は、現在のplayer tile、activeな弾薬箱tile、対象以外のactiveな敵tileとする。初期spawnでは先に生成した敵もactive enemyとして除外されるため、12体を相互に重複させない。
+敵spawn時の`occupied`は、現在のplayer tile、activeな弾薬箱tile、activeなworld item（weapon/material/ammo）のtile、対象以外のactiveな敵tileとする。初期spawnでは先に生成した敵もactive enemyとして除外されるため、12体を相互に重複させない。
 
 ## phase適用と状態更新
 
@@ -91,21 +91,21 @@ DEV環境だけ`window.__arenaScene`を公開する。production buildでは`win
 
 ## retry、terminal、generation、失敗時動作
 
-- retryはgenerationを増やし、stagger/retry/death/recycleを含む全enemy TimerEventを停止し、初期8体と段階投入予約を再構築する。
+- retryはgenerationを増やし、stagger/retry/death/recycleを含む全enemy TimerEventを停止してenemy-free preparationへ戻す。初期8体と段階投入予約は次の初回combat epochで再構築する。
 - victoryまたはdefeatでは全enemy TimerEventとrecycle lockを停止し、以後のcallbackをgeneration/terminal guardで拒否する。
 - timer callbackは登録時のgenerationと現在のgenerationが一致し、terminalでない場合だけ状態を変更する。旧generationのcallbackは現在runへ副作用を与えない。
 - `spawnEnemy`でstrict candidateがない場合はinactive/hiddenを維持し、同じreasonの1000ms retryを予約する。death stateは成功まで復活させず、recycle stateのHPは変更しない。
 
 ## 検証期待値
 
-- unit: `startedAt`より前と59999msではphase 0、60000ms境界ではphase 1、240000msではphase 4となる。
+- unit: `combatStartedAt`より前と59999msではphase 0、60000ms境界ではphase 1、240000msではphase 4となる。
 - unit: 同じseedとphaseは同じ主方向を返し、連続する4 phaseは4方向を一巡する。
 - unit: 12 stable slotは各主方向について主9・反3となり、`index % 4 === 3`だけが反対方向となる。
 - unit: enemy selectorは4方向それぞれでdirection、viewport外、hidden、reachable、unoccupiedを必須とし、候補なしは`null`である。弾薬箱fallbackは回帰させない。
 - unit/E2E: 初期8体と段階投入後12体の成功tileはplayer、弾薬箱、他enemyと重複しない。
 - E2E: 初期8 IDと4段階投入、strict offscreen/hidden/direction、HP 4/2、spawn reason、overlay位置を観測する。
 - E2E: 60000ms境界でHUDだけがphase 1へ進み、activeな12体のspawn metadataと位置は変化しない。DEV再出現させた1体だけがphase 1のmetadataと新しいtileを持つ。
-- E2E: retry後はphase 0、初期8体activeと4体のstagger予約、retry後map seedの主方向となり、旧generationからの副作用がない。
+- E2E: retry後はenemy-free preparationとphase 0表示、retry後map seedの主方向となる。次の初回combat epochで初期8体activeと4体のstagger予約が一度だけ作られ、旧generationからの副作用がない。
 - 既存回帰: enemy visibilityと暗転mask、有限弾薬、武器切替、射撃、リロード、ammo panel、3分勝利、弾薬箱respawn、defeat、retryを維持する。
 
 ## 対象外

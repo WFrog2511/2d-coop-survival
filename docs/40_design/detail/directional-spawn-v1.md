@@ -23,7 +23,7 @@ basic_design: DESIGN-BASIC-DIRECTIONAL-SPAWN
 
 ## 1. 目的
 
-60秒ごとにmap seedから決定的に切り替わる主方向と反対方向を、敵の初期spawnおよびrespawnへ適用する実装判断を定める。phase境界でactive enemyを再配置せず、既存の戦闘・索敵・有限弾薬・3分生存・弾薬箱respawnを維持しながら、位置取りの判断を加える。
+60秒ごとにmap seedから決定的に切り替わる主方向と反対方向を、初回combat epochからの敵初期spawnおよびrespawnへ適用する実装判断を定める。phase境界でactive enemyを再配置せず、既存の戦闘・索敵・有限弾薬・弾薬箱respawnを維持しながら、位置取りの判断を加える。
 
 本書は純粋関数、Phaser Scene、DOM HUD、DEV限定hook、失敗時復元、unit/E2Eが共有する期待値を固定する。
 
@@ -37,7 +37,7 @@ basic_design: DESIGN-BASIC-DIRECTIONAL-SPAWN
 
 ### Issue #58の時間契約移行
 
-[DESIGN-DETAIL-WAVE-PROGRESSION](wave-progression-v1.md)（Issue #58）は、Issue #34由来の180000ms（3分）生存期限をdynamic RunState scheduleへ時間契約だけsupersedeする。既定は3 combat wave各150000ms、wave 1/2後のrest各60000ms、総570000msである。本書の180000ms terminalと3分勝利の記述は履歴として残し、現在のrun時間・phase残り・victory境界はDESIGN-DETAIL-WAVE-PROGRESSIONを正本とする。60000ms spawn phase、主方向/反対方向の割り当て、strict spawn、terminal/retryのgeneration guard、ammo box respawn契約は維持する。
+[DESIGN-DETAIL-WAVE-PROGRESSION](wave-progression-v1.md)（Issue #71条件変更後）は、Issue #34由来の180000ms（3分）生存期限だけでなく、本書の`run開始`をdirectional spawn epochおよびinitial/stagger開始点とする旧規則も限定的にsupersedeする。既定はenemy-free初回準備60000ms、3 combat wave各150000ms、wave 1/2後のrest各60000ms、総630000msである。本書の180000ms terminal、3分勝利、下記の`startedAt`/run開始時initial/staggerを前提にする業務ルール、処理フロー、状態、受け入れ候補は#71前の履歴である。現在のrun時間・phase残り・victory境界とenemy lifecycleはDESIGN-DETAIL-WAVE-PROGRESSIONを正本とする。60000ms spawn phaseは初回combat開始をepochとし、`status=playing && elapsedMs >= restDurationMs`を満たす最初のupdateでcurrent phaseにかかわらず一度だけinitial/staggerを開始する。主方向/反対方向の割り当て、strict spawn、terminal/retryのgeneration guard、ammo box respawn契約は維持する。
 
 ## 2. 対象範囲
 
@@ -48,7 +48,7 @@ basic_design: DESIGN-BASIC-DIRECTIONAL-SPAWN
 | 対象ユースケース | 初期8体、4段階投入、60秒phase、death respawn、hidden recycle、retry |
 | 対象ロール | ローカル1人用プロトタイプのplayer、E2Eを実行する開発者 |
 | 対象画面/API | Phaser arena、診断HUD、TypeScript純粋関数、DEV限定`debugRespawnEnemy` |
-| 対象データ | map seed、run開始時刻、phase、stable slot、spawn方向、enemy metadata |
+| 対象データ | map seed、combat epoch、phase、stable slot、spawn方向、enemy metadata |
 
 ### 対象外
 
@@ -76,22 +76,23 @@ basic_design: DESIGN-BASIC-DIRECTIONAL-SPAWN
 
 | ルールID | ルール | 根拠 | 未決事項 |
 | --- | --- | --- | --- |
-| BR-DSP-001 | phaseは`floor(max(0, now - startedAt) / 60000)`とし、run開始時はphase 0とする | Issue #22 DOD | なし |
+| BR-DSP-001 | phaseは`floor(max(0, now - combatStartedAt) / 60000)`とし、初回combat epochではphase 0とする。preparationのHUDもphase 0を表示するがspawn epochではない | Issue #22 DOD / Issue #71 | なし |
 | BR-DSP-002 | 主方向は`up`、`right`、`down`、`left`をmap seedとphaseで決定的に循環させる | Issue #22 DOD | なし |
 | BR-DSP-003 | spawn方向はspawn時点のplayer tileを基準に判定する | Issue #22 DOD | なし |
 | BR-DSP-004 | stable slotは`index % 4 === 3`だけ反対方向、それ以外は主方向とし、12 slotで主9・反3とする | Issue #22 DOD | なし |
 | BR-DSP-005 | stable IDは`basic-1`〜`basic-9`、`drone-1`〜`drone-3`の12個とする | Issue #22 DOD | なし |
 | BR-DSP-006 | phase境界ではactive enemyを再配置せず、次のspawnまたはrespawnだけにcurrent phaseを適用する | Issue #22 DOD | なし |
-| BR-DSP-007 | retryは旧generationを無効化し、新runを新map seed、phase 0、初期8体と4段階投入予約で開始する | Issue #22 / #38 | なし |
+| BR-DSP-007 | retryは旧generationを無効化し、新runを新map seed、enemy-free preparation、phase 0表示で開始する。初期8体と4段階投入予約は次の初回combat epochで一度だけ開始する | Issue #22 / #38 / #71 | なし |
 
 ## 5. 利用者導線・処理フロー
 
 ```mermaid
 flowchart TD
-  start["run開始またはretry"] --> reset["generation更新・startedAt設定"]
+  start["run開始またはretry"] --> reset["generation更新・survivalStartedAt設定"]
   reset --> map["map・player・弾薬箱を構築"]
   map --> slots["12 stable slotを列挙"]
-  slots --> spawn["spawnEnemyをphase 0で実行"]
+  slots --> preparation["enemy-free preparation"]
+  preparation --> spawn["初回combat epochでspawnEnemyをphase 0で実行"]
   spawn --> playing["playing"]
   playing --> update["updateSpawnPhaseHud"]
   update --> phase{"60秒境界を越えたか"}
@@ -113,11 +114,12 @@ flowchart TD
 
 | ステップ | 操作者 | 入力 | システム処理 | 出力 |
 | ---: | --- | --- | --- | --- |
-| 1 | system | map seed、`startedAt` | phase 0の初期8体をspawnし、4体をstagger予約 | 初期population、phase HUD |
+| 1 | system | map seed、`survivalStartedAt` | enemy-free preparationを開始し、phase 0を表示 | 初期HUD、active enemy 0 |
+| 1a | system | 初回combat epoch | phase 0の初期8体をspawnし、4体をstagger予約 | 初期population、phase HUD |
 | 2 | player | 移動・戦闘 | active enemyを既存AIで更新 | 既存戦闘表示 |
 | 3 | system | `now` | 60秒境界でphaseと主方向HUDだけ更新 | 次回spawn用phase |
 | 4 | system | 敵撃破、respawn timer | generationとterminalを検査し`spawnEnemy`を再利用 | current phaseのrespawn |
-| 5 | player | retry | 全enemy timerと旧generationを破棄 | phase 0、新map、初期8体とstagger予約 |
+| 5 | player | retry | 全enemy timerと旧generationを破棄 | phase 0表示、新map、enemy-free preparation |
 
 ## 6. 状態遷移
 
@@ -133,9 +135,9 @@ stateDiagram-v2
 
 | 状態 | 意味 | 遷移条件 |
 | --- | --- | --- |
-| phase 0 | run開始から59999msまで。初期spawnのphase | reset完了 |
-| phase N | 0始まりのcurrent phase。HUDと新規spawn入力だけが変わる | `now >= startedAt + N * 60000` |
-| terminal | victoryまたはdefeat。spawn/respawn停止 | 180000ms到達またはplayer HP 0 |
+| phase 0 | 初回combat epochから59999msまでの初期spawn phase。preparation中のHUDも0を表示する | initial lifecycle開始 |
+| phase N | 0始まりのcurrent phase。HUDと新規spawn入力だけが変わる | `now >= combatStartedAt + N * 60000` |
+| terminal | victoryまたはdefeat。spawn/respawn停止 | dynamic run終端またはplayer HP 0 |
 
 phase遷移はactive enemyの再配置イベントではない。既にactiveなenemyはspawn時のphase、主方向、割り当て方向、tileを保持する。
 
@@ -146,7 +148,7 @@ phase遷移はactive enemyの再配置イベントではない。既にactiveな
 | データ | 型・値 | 設計方針 |
 | --- | --- | --- |
 | `SpawnDirection` | `'up' \| 'right' \| 'down' \| 'left'` | 順序を固定し、主方向の循環と反対方向計算へ共用する |
-| `phase` | 0以上の整数 | `startedAt`と`now`から都度算出し、永続化しない |
+| `phase` | 0以上の整数 | `combatStartedAt`と`now`から都度算出し、永続化しない。preparation中は0を表示する |
 | `stableSlot` | 0〜11の整数 | stable enemy ID配列のindexとし、run中に並び替えない |
 | `ENEMY_INSTANCE_IDS` | basic 9 ID、drone 3 ID | CombatState、sprite、HUD、slot割り当ての共通identityとする |
 | `SpawnRequest.direction` | optional `SpawnDirection` | 未指定時は既存offscreen selectorとして動作する |
@@ -173,7 +175,7 @@ phase遷移はactive enemyの再配置イベントではない。既にactiveな
 
 | サービス/API | 種別 | 入力 | 出力 | 責務・主なエラー |
 | --- | --- | --- | --- | --- |
-| `spawnPhaseAt(startedAt, now)` | pure function | Scene時刻2値 | 0以上のphase | 負の経過時間を0へclampし、60000msで除算してfloorする |
+| `spawnPhaseAt(combatStartedAt, now)` | pure function | Scene時刻2値 | 0以上のphase | 負の経過時間を0へclampし、60000msで除算してfloorする |
 | `primarySpawnDirection(seed, phase)` | pure function | map seed、phase | `SpawnDirection` | unsigned seedと0以上の整数phaseから4方向を決定的に循環させる |
 | `spawnDirectionForSlot(primary, stableSlot)` | pure function | 主方向、slot index | `SpawnDirection` | `index % 4 === 3`だけ反対方向を返す |
 | `selectEnemySpawnTile(map, request, seed)` | pure selector | map、player、viewport、occupied、required direction、seed | `TilePosition \| null` | strict hidden/offscreen/direction候補だけを返す |
@@ -196,7 +198,7 @@ phase遷移はactive enemyの再配置イベントではない。既にactiveな
 
 player基準方向は`dx = target.x - player.x`、`dy = target.y - player.y`で求める。`abs(dx) > abs(dy)`なら`dx`の符号で左右、それ以外は`dy`の符号で上下を選ぶ。同率は上下を優先する。
 
-enemy spawnの`occupied`にはspawn時点のplayer、activeな弾薬箱、対象以外のactive enemyを含める。初期spawnも先にspawnしたenemyを除外するため、12体を同じtileへ配置しない。
+enemy spawnの`occupied`にはspawn時点のplayer、activeな弾薬箱、activeなworld item（weapon/material/ammo）、対象以外のactive enemyを含める。初期spawnも先にspawnしたenemyを除外するため、12体を同じtileへ配置しない。
 
 ## 10. reset、update、spawn、respawn、terminal
 
@@ -206,7 +208,7 @@ enemy spawnの`occupied`にはspawn時点のplayer、activeな弾薬箱、対象
 2. survival、stagger/retry/death/recycle、flash、ammo box、reloadのTimerEventを停止・clearする。
 3. CombatState、時刻、death/recycle count、lastHit、hiddenSince、lock、path、visibility cacheを初期化する。
 4. 新map、player、visibility mask、camera、弾薬箱を構築する。
-5. 初期8 IDをstrict spawnし、失敗は1000ms retry、残り4 IDは指定時刻へstagger予約する。
+5. enemy-free preparationを開始し、初回combat epochで初期8 IDをstrict spawnする。失敗は1000ms retry、残り4 IDはcombat epochから指定時刻へstagger予約する。
 6. survival timer、DEV公開、HUDを初期化する。
 
 ### update
@@ -223,7 +225,7 @@ enemy spawnの`occupied`にはspawn時点のplayer、activeな弾薬箱、対象
 
 ### terminal
 
-victoryまたはdefeatでrun timerを停止し、player/enemy velocityを0、弾を無効化、physicsをpauseする。terminal後のrespawn callbackは実行しない。retryはresetへ戻りphase 0から新runを開始する。
+victoryまたはdefeatでrun timerを停止し、player/enemy velocityを0、弾を無効化、physicsをpauseする。terminal後のrespawn callbackは実行しない。retryはresetへ戻りenemy-free preparationとphase 0表示から新runを開始する。
 
 ## 11. バリデーション・エラーと復元
 
@@ -238,7 +240,7 @@ victoryまたはdefeatでrun timerを停止し、player/enemy velocityを0、弾
 | DEVでinactiveまたはterminal | 例外 | 有効なplaying状態で再実行 |
 | DEV再出現のcandidateなし | respawn count、元位置、spawn metadata、body、visibilityを復元後に例外 | 復元したplaying状態を維持 |
 
-失敗時にplayer、弾薬箱、他enemyと重複する位置へ強制spawnしない。通常respawn失敗時はCombatStateだけを復活させず、spriteとstateの不一致を避ける。
+失敗時にplayer、弾薬箱、activeなworld item（weapon/material/ammo）、他enemyと重複する位置へ強制spawnしない。通常respawn失敗時はCombatStateだけを復活させず、spriteとstateの不一致を避ける。
 
 ## 12. DEV/production境界と非機能要件
 
@@ -274,13 +276,13 @@ victoryまたはdefeatでrun timerを停止し、player/enemy velocityを0、弾
 | unit | stable slot | 12 slotで主方向9、反対方向3、`index % 4 === 3`だけ反対 |
 | unit | 方向判定 | 左右優先条件と同率時の上下優先が仕様どおり |
 | unit | strict enemy selector | up/right/down/leftでreachable、unoccupied、offscreen、hidden、direction一致を検証し、visible/wrong-direction/occupiedは`null` |
-| unit/E2E | population | 初期8体と段階投入後12体がplayer、弾薬箱、他enemyと非重複 |
+| unit/E2E | population | 初期8体と段階投入後12体がplayer、弾薬箱、activeなworld item（weapon/material/ammo）、他enemyと非重複 |
 | integration/E2E | population/phase | 初期8体、4段階投入後12体、phase境界でactive metadata不変 |
 | integration/E2E | DEV respawn | 1体だけが既存`spawnEnemy`経由でcurrent phase、方向、新tileを取得し、他11体は不変 |
 | E2E | retry/HUD | phase 0、初期8体、stagger予約、時間上中央・HP左下・ammo右下 |
 | 既存回帰 | Issue #20 | visibility、boundary silhouette、hidden、暗転maskを維持 |
 | 既存回帰 | Issue #21 | 有限弾薬、射撃、武器切替、リロード、ammo panelを維持 |
-| 既存回帰 | Issue #34 | 3分勝利、terminal停止、弾薬箱respawn、retryを維持 |
+| 既存回帰 | Issue #34 | #71前の3分勝利は履歴とし、terminal停止、弾薬箱respawn、retryを維持 |
 
 ## 14. Gherkin受け入れ条件候補
 
@@ -290,7 +292,7 @@ Feature: 方向別enemy spawn
   Scenario: 60秒境界ではactive enemyを再配置しない
     Given phase 0で段階投入完了後の12体がactiveである
     And 各enemyのstable ID、spawn phase、方向、spawn tileを記録している
-    When run開始から60000msの境界へ進む
+    When 初回combat epochから60000msの境界へ進む
     Then HUDのcurrent phaseはphase 1になる
     And 主方向はmap seedとphase 1に対応する方向になる
     And activeな12体の位置とspawn metadataは変わらない
@@ -299,15 +301,16 @@ Feature: 方向別enemy spawn
     Given phase 1で12体のenemyがactiveである
     When DEV環境で1体をdebugRespawnEnemyにより再出現させる
     Then その1体はphase 1の主方向とstable slotの割り当て方向を持つ
-    And その1体はplayer、弾薬箱、他enemyと重複しない到達可能tileにいる
+    And その1体はplayer、弾薬箱、activeなworld item（weapon/material/ammo）、他enemyと重複しない到達可能tileにいる
     And 他の11体のspawn metadataは変わらない
 
-  Scenario: retryはphase 0から新runを開始する
+  Scenario: retryはenemy-free preparationとphase 0表示から新runを開始する
     Given phase 1以降またはterminal状態である
     When playerがretryする
     Then run generationが更新される
     And current phaseはphase 0になる
-    And 新しいmap seedに対応する主方向、初期8体、4体のstagger予約が初期化される
+    And 新しいmap seedに対応する主方向、enemy-free preparationが初期化される
+    And 次の初回combat epochで初期8体、4体のstagger予約が一度だけ開始される
     And 旧generationのcallbackは新runへ副作用を与えない
 ```
 

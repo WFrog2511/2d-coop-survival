@@ -22,12 +22,12 @@ requirements: REQ-PLAYER-ACTIONS
 ## pickup選択と弾薬箱
 
 - `selectNearbyPickup(player, anchor, candidates)`はプレイヤータイルとの差分がx/yともに1以下の3x3近傍だけを候補にする純粋関数である。`anchor`はtile空間の小数座標で表したmuzzle位置とし、複数候補はanchor距離、プレイヤータイル距離、y、x、ID順で決定的に1件選ぶ。
-- `main.ts`は照準方向のmuzzle anchorとactiveな既存弾薬箱をこの関数へ渡す。物理overlapは取得を起動しない。候補がある間は`data-testid="pickup-prompt"`へ`E: 拾う`を表示し、`E`で選択された1箱だけへ既存`collectAmmoBox`状態遷移を適用する。
-- 弾薬箱以外のpickup状態は作らない。既存の`boxId`、30秒respawn、terminal/retryのtimer解除はそのまま使う。
+- `main.ts`は照準方向のmuzzle anchorとactiveな種類別弾薬箱・world弾薬をこの関数へ渡す。物理overlapは取得を起動しない。対象reserveに空きがある候補だけ、`pickup-target`へ弾薬名称と数量、`pickup-action`へ`を拾う [E]`を表示し、`E`で選択された1件へ`collectTypedAmmoBox`状態遷移を適用する。
+- weapon・materialを含むpickup状態、2行prompt、Tab詳細インベントリは[SPEC-INVENTORY-V1](inventory-v1.md)が追加する。stable boxの`boxId`、空になった後の30秒respawn、terminal/retryのtimer解除はそのまま使い、dropped ammoはrespawnしない。
 
 ## 検証対象
 
 - `tests/pickups.test.ts`: 3x3境界、muzzle anchorの方向優先、同距離の決定性、候補なし。
 - `tests/player-data.test.ts`: 回避方向の正規化、照準なし、任意deadlineのcooldown境界、役職別のdash中発砲可否、コンボと速度buffの状態遷移。
-- `e2e/prototype.spec.ts`: 役職選択後の開始、player tintと敵着弾effect色の一致、生成textureのグレースケール、マウス未移動中のrotation維持とpointermove後の更新、DEV明示開始経路、ガンスリンガー選択時のcombo panel可視と値更新、非ガンスリンガーのdash中無発砲、ガンスリンガーのdash中発砲、接触だけでは弾薬箱が消えず、E案内とE取得で消費されること。
+- `e2e/prototype.spec.ts`: 役職選択後の開始、player tintと敵着弾effect色の一致、生成textureのグレースケール、マウス未移動中のrotation維持とpointermove後の更新、DEV明示開始経路、ガンスリンガー選択時のcombo panel可視と値更新、非ガンスリンガーのdash中無発砲、ガンスリンガーのdash中発砲、接触だけでは弾薬候補が変わらず、E案内とtyped取得で残量だけが変わること。
 - 距離、速度、cooldown、弾薬量、役職色の調整値そのものは自動assertせず手動確認する。

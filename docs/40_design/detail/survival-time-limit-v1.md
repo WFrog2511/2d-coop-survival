@@ -10,7 +10,7 @@ specification: SPEC-SURVIVAL-TIME-LIMIT
 
 | 項目 | 内容 |
 | --- | --- |
-| 対象機能 | 3分生存制限、victory UI、ammo box復活 |
+| 対象機能 | #71前の3分生存制限、victory UI、ammo box復活 |
 | 対応Issue | #34 / comment 5220638729 / follow-up PR #36 |
 | 対応する要件 | REQ-SURVIVAL-TIME-LIMIT |
 | 対応する仕様 | SPEC-SURVIVAL-TIME-LIMIT |
@@ -19,13 +19,13 @@ specification: SPEC-SURVIVAL-TIME-LIMIT
 
 ## 0. #21/#35既存契約との境界
 
-[DESIGN-DETAIL-WAVE-PROGRESSION](wave-progression-v1.md)は、この詳細設計の180000ms生存timerと各60000ms waveを、3 combat wave各150000ms、wave 1/2後のrest各60000ms、dynamicな570000ms既定scheduleへsupersedeする。この文書の旧時間値と03:00前提のテスト期待値は履歴であり、現在の時間・phase・HUD設計はDESIGN-DETAIL-WAVE-PROGRESSIONを正本とする。victory、terminal、retry、ammo box復活は維持し、wave固有の新敵、quota、報酬、dropは追加しない。
+[DESIGN-DETAIL-WAVE-PROGRESSION](wave-progression-v1.md)は、この詳細設計の180000ms生存timerと各60000ms waveを、enemy-free初回準備60000ms、3 combat wave各150000ms、wave 1/2後のrest各60000ms、dynamicな630000ms既定scheduleへsupersedeする。この文書の旧時間値、03:00 HUD、下記の時間関数、Scene timer、terminal、検証期待値は#71前の履歴であり、現在の時間・phase・HUD設計はDESIGN-DETAIL-WAVE-PROGRESSIONを正本とする。victory、terminal guard、retry、ammo box復活は維持し、wave固有の新敵、quota、報酬、dropは追加しない。
 
 #21/#35のammo-supply-v1にある「同一run中は取得箱を再出現させない」は履歴契約として維持する。#34 follow-upが限定的にsupersedeするのはfield ammo box（map上のammo box）の再出現処理だけであり、既存の有限ammo契約、ammo/map配置文書、その他の#21/#35実装は変更しない。
 
-survival timerは180000ms、ammo box復活timerは取得から30000msである。victory/defeat/retryで復活timerを停止・clearするterminal優先を守り、pending callbackはそのrunのterminal後に実行させない。
+#71前のsurvival timerは180000msであり、ammo box復活timerは取得から30000msである。victory/defeat/retryで復活timerを停止・clearするterminal優先を守り、pending callbackはそのrunのterminal後に実行させない。
 
-## 1. データと純粋関数
+## 1. #71前のデータと純粋関数（履歴）
 
 CombatStateへvictory:booleanを追加し、INITIAL_STATEとretryCombatではfalseとする。SURVIVAL_LIMIT_MSは180000、AMMO_BOX_RESPAWN_MSは30000とする。
 
@@ -33,7 +33,7 @@ remainingSurvivalMs(startedAt, now)は残り時間を0〜180000msにclampする�
 
 terminal guardは射撃、武器切替、リロード開始・完了、プレイヤー被ダメージ、敵ダメージ・再出現、ammo box取得へ適用する。cancelReloadだけはterminal cleanupのためreloadingを解除できる。
 
-## 2. Scene timerとgeneration
+## 2. #71前のScene timerとgeneration（履歴）
 
 Arena.resetはgenerationを増加させ、survivalTimer、敵respawns、flashes、ammoBoxRespawns、reloadTimerを停止・clearする。retryCombat、survivalStartedAt、map、box group、enemy、bullet、HUDを初期化し、mapと敵の構築後に現runのsurvivalTimerを180000msで作成する。
 
@@ -41,19 +41,19 @@ updateは毎frame、純粋関数で期限を確認してHUDを更新する。期
 
 ## 3. 箱の識別と復活
 
-箱spriteにはstableなboxId、currentTileの複製、tile key（x,y）をdataとして持たせる。boxIdごとのstateはoriginTile、currentTile、respawnCountを保持し、tile keyはtimer identityには使わない。敵spawnのoccupied判定にはactive boxのcurrentTileだけを渡す。
+箱spriteにはstableなboxId、currentTileの複製、tile key（x,y）、AmmoType、現在数量をdataとして持たせる。boxIdごとのstateはoriginTile、currentTile、respawnCount、AmmoType、数量を保持し、tile keyはtimer identityには使わない。敵spawnのoccupied判定にはactive boxのcurrentTileだけを渡す。
 
 取得成功時の処理は次の順序とする。
 
 1. terminal、inactive、boxId/state data欠落、同boxIdの待機timerがあれば終了する。
-2. rulesのcollectAmmoBoxがcollected=trueを返した場合だけ状態を更新する。
-3. static groupから箱を削除する。
-4. 同boxIdのammoBoxRespawnsへ30000ms TimerEventを1つ登録する。
-5. HUDの残箱数、active boxId/current tile、pending boxIdを更新する。
+2. rulesのcollectTypedAmmoBoxが正の取得量を返した場合だけ対応reserveを更新する。
+3. partialなら同じ箱と残量を維持し、残量0だけstatic groupから削除する。
+4. 空になったstable boxだけ同boxIdのammoBoxRespawnsへ30000ms TimerEventを1つ登録する。
+5. HUDの残箱数、active boxId/current tile/type/quantity、pending boxIdを更新する。
 
-callbackではtimer mapからboxIdを先に削除し、generation一致かつ非terminalの場合だけ現在のplayer tile、camera viewport、active box、active enemyをoccupiedにしてselectSpawnTileを呼ぶ。selectSpawnTileは到達可能floorのviewport外を優先し、候補がなければ最遠floorへfallbackする。boxIdのoriginTileはoccupiedとして元位置への復活を避け、seedはnextSeedへmap seed、slot、respawnCountを渡してrun内で再現可能にする。spawnAmmoBoxはactiveな同boxIdまたは同tileの箱を検査してから生成するため、同じ箱の重複生成を防ぐ。terminalまたはretryの停止後はcallbackの世代が不一致となり副作用を持たない。
+callbackではtimer mapからboxIdを先に削除し、generation一致かつ非terminalの場合だけ現在のplayer tile、camera viewport、active box、active world item（weapon/material/ammo）、active enemyをoccupiedにしてselectSpawnTileを呼ぶ。selectSpawnTileは到達可能floorのviewport外を優先し、候補がなければ最遠floorへfallbackする。boxIdのoriginTileはoccupiedとして元位置への復活を避け、seedはnextSeedへmap seed、slot、respawnCountを渡してrun内で再現可能にする。spawnAmmoBoxはactiveな同boxIdまたは同tileの箱を検査してから生成するため、同じ箱の重複生成を防ぐ。terminalまたはretryの停止後はcallbackの世代が不一致となり副作用を持たない。
 
-## 4. terminalとUI
+## 4. #71前のterminalとUI（履歴）
 
 共通terminal処理はreloadTimer、敵respawn、flash、生存timer、箱復活timerを停止し、reloadingを解除する。player/enemy velocityを0、全弾をdisable、physics.pauseとする。result panelのstateをvictoryまたはdefeatへ設定し、一方の結果だけを表示してretryへfocusを移す。
 
@@ -65,7 +65,7 @@ map生成、敵spawn、既存ammo/reloadの失敗処理は既存経路を維持�
 
 recovery item、enemy time scaling、multiplayer sync、persistence、inventory/loot、wave固有の新敵、intermission、quota、報酬、drop、map配置変更、#21/#35の実装変更、既存ammo/map配置文書変更は対象外とする。
 
-## 6. 検証期待値
+## 6. #71前の検証期待値（時間契約は履歴）
 
 | レベル | ケース | 期待結果 |
 | --- | --- | --- |

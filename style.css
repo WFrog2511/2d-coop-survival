@@ -100,7 +100,9 @@ h1 {
 }
 
 .game-overlay,
-#ammo-panel {
+#ammo-panel,
+#inventory-panel,
+#inventory-detail {
   z-index: 1;
   pointer-events: none;
 }
@@ -109,6 +111,9 @@ h1 {
   position: absolute;
   bottom: 92px;
   left: 50%;
+  display: grid;
+  gap: 2px;
+  justify-items: center;
   padding: 6px 10px;
   border: 1px solid #ffef76;
   border-radius: 8px;
@@ -117,10 +122,22 @@ h1 {
   transform: translateX(-50%);
 }
 
-#pickup-prompt kbd {
-  padding: 1px 5px;
-  border: 1px solid currentcolor;
-  border-radius: 3px;
+#pickup-prompt[hidden],
+#inventory-detail[hidden],
+#ammo-pouch[hidden] {
+  display: none;
+}
+
+#world-item-count[hidden] {
+  display: none !important;
+}
+
+.pickup-prompt-target {
+  font-weight: 700;
+}
+
+.pickup-prompt-action {
+  font-size: 0.85rem;
 }
 
 #survival-panel {
@@ -149,7 +166,7 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
-#run-panel[data-phase='rest'] {
+#run-panel:is([data-phase='preparation'], [data-phase='rest']) {
   border-color: #e2bb78;
   background: rgb(107 87 59 / 88%);
 }
@@ -203,6 +220,181 @@ h1 {
   border-radius: 10px;
   background: rgb(16 24 39 / 88%);
   box-sizing: border-box;
+}
+
+#inventory-panel {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  max-width: calc(100% - 220px);
+  padding: 6px;
+  border: 1px solid #9e8cff;
+  border-radius: 10px;
+  background: rgb(16 24 39 / 88%);
+  box-sizing: border-box;
+  transform: translateX(-50%);
+}
+
+.quickbar-slots {
+  display: flex;
+  gap: 4px;
+}
+
+#inventory-panel output {
+  display: grid;
+  min-width: 64px;
+  max-width: 88px;
+  gap: 1px;
+  padding: 4px 5px;
+  overflow: hidden;
+  border: 1px solid #55728b;
+  border-radius: 6px;
+  font-size: 0.62rem;
+  line-height: 1.1;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#inventory-panel output::before {
+  color: #c7f7ff;
+  content: '▰';
+  font-size: 0.95rem;
+}
+
+#inventory-panel output[data-model='shotgun']::before {
+  content: '◀';
+}
+
+#inventory-panel output[data-model='handgun']::before,
+#inventory-panel output[data-model='revolver']::before,
+#inventory-panel output[data-model='compact-pistol']::before {
+  content: '▪';
+}
+
+#inventory-panel output[data-testid='scrap'] {
+  min-width: 48px;
+  max-width: 64px;
+  align-content: center;
+  color: #ffef76;
+}
+
+#inventory-panel output[data-testid='scrap']::before {
+  color: #ffef76;
+  content: '◆';
+}
+
+#inventory-detail {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  display: grid;
+  gap: 10px;
+  min-width: 280px;
+  padding: 14px;
+  border: 1px solid #9e8cff;
+  border-radius: 10px;
+  background: rgb(16 24 39 / 94%);
+  box-sizing: border-box;
+  pointer-events: auto;
+  transform: translateX(-50%);
+  user-select: none;
+}
+
+#inventory-detail h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+#ammo-pouch {
+  position: absolute;
+  top: 58px;
+  left: calc(50% + 154px);
+  display: grid;
+  gap: 5px;
+  min-width: 148px;
+  padding: 14px;
+  border: 1px solid #7ee7ff;
+  border-radius: 10px;
+  background: rgb(16 24 39 / 94%);
+  box-sizing: border-box;
+  pointer-events: auto;
+  user-select: none;
+}
+
+#ammo-pouch h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+#ammo-pouch output {
+  color: #c7f7ff;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  cursor: grab;
+}
+
+#ammo-pouch[data-drag-source] output[draggable="true"] {
+  opacity: 0.72;
+}
+
+#inventory-detail section {
+  display: grid;
+  gap: 4px;
+}
+
+.backpack-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.backpack-grid output {
+  padding: 3px 5px;
+  border: 1px solid #55728b;
+  border-radius: 4px;
+}
+
+#inventory-detail output[draggable='true'] {
+  cursor: grab;
+}
+
+#inventory-detail[data-drag-source] output[draggable='true'] {
+  opacity: 0.72;
+}
+
+#inventory-detail output[data-drop-target='true'] {
+  border-color: #ffef76;
+  background: rgb(255 239 118 / 16%);
+}
+
+#game[data-weapon-drop-target='true'] canvas {
+  outline: 2px dashed #ffef76;
+  outline-offset: -6px;
+}
+
+.inventory-panel-caption {
+  font-size: 0.75rem;
+  color: #c7f7ff;
+}
+
+#inventory-panel output[data-empty='true'],
+#inventory-detail output[data-empty='true'] {
+  color: #9ba9b4;
+}
+
+#inventory-panel output[data-selected='true'],
+#inventory-detail output[data-selected='true'] {
+  color: #ffef76;
+}
+
+#inventory-panel output[data-selected='true'] {
+  border-color: #ffef76;
+  background: rgb(255 239 118 / 14%);
+  box-shadow: 0 0 0 1px rgb(255 239 118 / 35%);
 }
 
 .ammo-panel-caption,

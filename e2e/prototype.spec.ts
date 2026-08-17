@@ -1,10 +1,30 @@
 import { expect, test } from '@playwright/test';
-import { SPAWN_PHASE_MS, TILE_SIZE, enemyVisibility, findPath, generateArenaMap, hasLineOfSight, hiddenRecycleThresholdFor, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, spawnDirectionForSlot, type SpawnDirection, type TilePosition, viewportTileRect } from '../src/arena-map';
+import { SPAWN_PHASE_MS, TILE_SIZE, WORLD_WEAPON_DROP_MAX_PATH_DISTANCE, enemyVisibility, findPath, generateArenaMap, hasLineOfSight, hiddenRecycleThresholdFor, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, spawnDirectionForSlot, type SpawnDirection, type TilePosition, viewportTileRect } from '../src/arena-map';
+import { formatSurvivalTime } from '../src/arena/hud';
+import { INITIAL_WORLD_WEAPON_MODELS, SCRAP_DROP_AMOUNTS, SCRAP_VISUAL_TIER_THRESHOLDS, WORLD_SIDEARM_MODELS, scrapVisualTierFor } from '../src/game-data';
 import { GUNSLINGER_BOOT_KNIFE_DAMAGE, GUNSLINGER_COMBO_PER_EVENT, GUNSLINGER_COMBO_TIMEOUT_MS } from '../src/player-data';
-import { AMMO_BOX_RESPAWN_MS, COMBAT_WAVE_DURATION_MS, ENEMY_INSTANCE_IDS, REST_DURATION_MS } from '../src/rules';
+import { AMMO_BOX_RESPAWN_MS, AMMO_TYPES, AMMO_TYPE_ORDER, COMBAT_WAVE_DURATION_MS, ENEMY_INSTANCE_IDS, WEAPON_MODELS, WEAPONS, createRunSchedule, runDurationMs, weaponIdForModel } from '../src/rules';
 
 type EnemyId = (typeof ENEMY_INSTANCE_IDS)[number];
 type EnemyPresentation = 'normal' | 'boundary' | 'hidden';
+type WorldItemEntry = {
+  id: string;
+  kind: 'weapon' | 'material' | 'ammo';
+  item: string;
+  tile: TilePosition;
+  quantity: number;
+  visualTier: string;
+  worldColor: string;
+  texture: string;
+};
+type AmmoBoxEntry = {
+  boxId: string;
+  tile: TilePosition;
+  ammoType: (typeof AMMO_TYPE_ORDER)[number];
+  quantity: number;
+  worldColor: string;
+  texture: string;
+};
 const INITIAL_ACTIVE_IDS: readonly EnemyId[] = ['basic-1', 'basic-2', 'basic-3', 'basic-4', 'basic-5', 'basic-6', 'drone-1', 'drone-2'];
 const STAGGERED_ENEMIES: readonly { id: EnemyId; delay: number }[] = [
   { id: 'basic-7', delay: 3000 },
@@ -29,6 +49,8 @@ type EnemySpawnMetadata = {
 };
 type ArenaDebugEnemy = {
   active: boolean;
+  x: number;
+  y: number;
   body?: { reset: (x: number, y: number) => void };
   setPosition: (x: number, y: number) => ArenaDebugEnemy;
   setVelocity: (x: number, y: number) => ArenaDebugEnemy;
@@ -38,6 +60,10 @@ type ArenaDebugScene = {
   cameras: { main: { worldView: { left: number; top: number; right: number; bottom: number } } };
   children: { getChildren: () => readonly { fillColor?: number }[] };
   player: { x: number; y: number; rotation: number; tintTopLeft: number };
+  state: {
+    ammo: Record<'rifle' | 'shotgun' | 'handgun', number>;
+    reserve: Record<'rifle' | 'shotgun' | 'handgun', number>;
+  };
   enemies: Record<EnemyId, ArenaDebugEnemy>;
   textures: { get: (key: string) => { getSourceImage: () => HTMLCanvasElement } };
   debugRespawnEnemy: (id: EnemyId) => void;
@@ -45,10 +71,19 @@ type ArenaDebugScene = {
   debugSetPlayerInvulnerable: (enabled: boolean) => void;
   debugMovePlayerTo: (tile: TilePosition) => void;
   debugDamageEnemy: (id: EnemyId, amount: number) => void;
+  refreshHud: () => void;
 };
 
 function devStartUrl(path: string): string {
   return path + (path.includes('?') ? '&' : '?') + 'start=dev';
+}
+
+async function startInitialCombat(
+  page: import('@playwright/test').Page,
+  preparationDurationMs: number,
+): Promise<void> {
+  await page.clock.fastForward(preparationDurationMs);
+  await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase', 'combat');
 }
 
 async function currentAmmo(page: import('@playwright/test').Page): Promise<number> {
@@ -94,6 +129,66 @@ async function documentBounds(locator: import('@playwright/test').Locator): Prom
   });
 }
 
+type CanvasInputPoint = { clientX: number; clientY: number };
+
+async function findGameCanvasInputPoint(
+  page: import('@playwright/test').Page,
+): Promise<CanvasInputPoint> {
+  return page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>('#game canvas');
+    if (!canvas) throw new Error('game canvasが見つかりません。');
+    const bounds = canvas.getBoundingClientRect();
+    const scanFractions = [0.1, 0.25, 0.5, 0.75, 0.9];
+    for (const y of scanFractions) {
+      for (const x of scanFractions) {
+        const clientX = bounds.left + bounds.width * x;
+        const clientY = bounds.top + bounds.height * y;
+        const element = document.elementFromPoint(clientX, clientY);
+        if (element === canvas || element?.closest('canvas') === canvas)
+          return { clientX, clientY };
+      }
+    }
+    throw new Error('Tab詳細表示中に#game canvasへ入力できる座標が見つかりません。');
+  });
+}
+
+async function expectGameCanvasAt(
+  page: import('@playwright/test').Page,
+  point: CanvasInputPoint,
+): Promise<void> {
+  const isCanvas = await page.evaluate(({ clientX, clientY }) => {
+    const canvas = document.querySelector<HTMLCanvasElement>('#game canvas');
+    if (!canvas) throw new Error('game canvasが見つかりません。');
+    const element = document.elementFromPoint(clientX, clientY);
+    return element === canvas || element?.closest('canvas') === canvas;
+  }, point);
+  expect(isCanvas).toBe(true);
+}
+
+async function clickGameCanvasAt(
+  page: import('@playwright/test').Page,
+  point: CanvasInputPoint,
+): Promise<void> {
+  await page.mouse.move(point.clientX, point.clientY);
+  await expectGameCanvasAt(page, point);
+  await page.mouse.click(point.clientX, point.clientY);
+}
+
+async function holdGameCanvasAt(
+  page: import('@playwright/test').Page,
+  point: CanvasInputPoint,
+  durationMs: number,
+): Promise<void> {
+  await page.mouse.move(point.clientX, point.clientY);
+  await expectGameCanvasAt(page, point);
+  await page.mouse.down();
+  try {
+    await page.clock.runFor(durationMs);
+  } finally {
+    await page.mouse.up();
+  }
+}
+
 async function expectAmmoBoxCount(
   boxCount: import('@playwright/test').Locator,
   expected: number,
@@ -112,6 +207,119 @@ function tileKeysFromAttribute(value: string | null): string[] {
   return value ? value.split('|').filter(key => key.length > 0) : [];
 }
 
+async function activeWorldItems(page: import('@playwright/test').Page): Promise<WorldItemEntry[]> {
+  const value = await page.getByTestId('world-item-count').getAttribute('data-world-items');
+  return tileKeysFromAttribute(value).map((entry) => {
+    const [id, kind, item, tile, quantity, visualTier, worldColor, texture] = entry.split(':');
+    const [x, y] = tile?.split(',').map(Number) ?? [];
+    if (
+      !id
+      || (kind !== 'weapon' && kind !== 'material' && kind !== 'ammo')
+      || !item
+      || !Number.isInteger(x)
+      || !Number.isInteger(y)
+      || !Number.isSafeInteger(Number(quantity))
+    ) throw new Error(`world itemの観測値が不正です: ${entry}`);
+    return {
+      id,
+      kind,
+      item,
+      tile: { x, y },
+      quantity: Number(quantity),
+      visualTier: visualTier ?? '',
+      worldColor: worldColor ?? '',
+      texture: texture ?? '',
+    };
+  });
+}
+
+async function activeAmmoBoxes(page: import('@playwright/test').Page): Promise<AmmoBoxEntry[]> {
+  const value = await page.getByTestId('ammo-box-count').getAttribute('data-active-boxes');
+  return tileKeysFromAttribute(value).map((entry) => {
+    const [boxId, tile, ammoType, quantity, worldColor, texture] = entry.split(':');
+    const [x, y] = tile?.split(',').map(Number) ?? [];
+    if (
+      !boxId
+      || !AMMO_TYPE_ORDER.includes(ammoType as (typeof AMMO_TYPE_ORDER)[number])
+      || !Number.isInteger(x)
+      || !Number.isInteger(y)
+      || !Number.isSafeInteger(Number(quantity))
+      || !worldColor
+      || !texture
+    ) throw new Error(`弾薬箱の観測値が不正です: ${entry}`);
+    return {
+      boxId,
+      tile: { x, y },
+      ammoType: ammoType as (typeof AMMO_TYPE_ORDER)[number],
+      quantity: Number(quantity),
+      worldColor,
+      texture,
+    };
+  });
+}
+
+async function dragInventorySlot(
+  page: import('@playwright/test').Page,
+  sourceTestId: string,
+  targetSelector: string,
+): Promise<void> {
+  await page.evaluate(({ sourceId, target }) => {
+    const source = document.querySelector<HTMLElement>(`[data-testid="${sourceId}"]`);
+    const destination = document.querySelector<HTMLElement>(target);
+    if (!source || !destination)
+      throw new Error('inventory drag/drop用のDOM要素が見つかりません。');
+    const dataTransfer = new DataTransfer();
+    source.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer }));
+    destination.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer }));
+    destination.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer }));
+    source.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer }));
+  }, { sourceId: sourceTestId, target: targetSelector });
+}
+
+async function expectTextSelectionClearedByPointer(
+  page: import('@playwright/test').Page,
+  locator: import('@playwright/test').Locator,
+): Promise<void> {
+  const bounds = await locator.boundingBox();
+  if (!bounds)
+    throw new Error('文字選択を確認する表示要素が必要です。');
+  await page.evaluate(() => window.getSelection()?.removeAllRanges());
+  const y = bounds.y + bounds.height / 2;
+  await page.mouse.move(bounds.x + 2, y);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + Math.max(3, bounds.width - 2), y, { steps: 4 });
+  await page.mouse.up();
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toBe('');
+}
+
+async function beginInventoryDrag(page: import('@playwright/test').Page, sourceTestId: string): Promise<void> {
+  await page.evaluate((sourceId) => {
+    const source = document.querySelector<HTMLElement>(`[data-testid="${sourceId}"]`);
+    if (!source)
+      throw new Error('inventory drag開始用のDOM要素が見つかりません。');
+    source.dispatchEvent(new DragEvent('dragstart', {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: new DataTransfer(),
+    }));
+  }, sourceTestId);
+}
+
+async function collectShotgunPickup(page: import('@playwright/test').Page): Promise<WorldItemEntry> {
+  const shotgun = (await activeWorldItems(page)).find(item => item.kind === 'weapon' && item.item === 'shotgun');
+  if (!shotgun)
+    throw new Error('初期ショットガンpickupが必要です。');
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, shotgun.tile);
+  await expect(page.getByTestId('pickup-prompt')).toBeVisible();
+  await page.keyboard.press('e');
+  await expect(page.getByTestId('quick-slot-2')).toHaveAttribute('data-model', 'shotgun');
+  return shotgun;
+}
+
 function expectedObscuredTileCount(
   map: ReturnType<typeof generateArenaMap>,
   player: TilePosition,
@@ -121,33 +329,6 @@ function expectedObscuredTileCount(
     for (let x = 0; x < map.width; x += 1)
       if (!hasLineOfSight(map, player, { x, y })) count += 1;
   return count;
-}
-
-async function moveToTile(
-  page: import('@playwright/test').Page,
-  map: ReturnType<typeof generateArenaMap>,
-  target: TilePosition,
-  playerTileHud: import('@playwright/test').Locator,
-): Promise<void> {
-  for (let step = 0; step < 300; step += 1) {
-    const currentText = await playerTileHud.textContent();
-    const currentParts = currentText?.split(',').map(Number) ?? [];
-    const current = { x: Number(currentParts[0]), y: Number(currentParts[1]) };
-    if (current.x === target.x && current.y === target.y) return;
-    const path = findPath(map, current, target);
-    if (path.length < 2) throw new Error('弾薬箱までの経路がありません。');
-    const next = path[1];
-    const dx = next.x - current.x;
-    const dy = next.y - current.y;
-    const key = dx > 0 ? 'd' : dx < 0 ? 'a' : dy > 0 ? 's' : 'w';
-    await page.keyboard.down(key);
-    try {
-      await expect(playerTileHud).not.toHaveText(current.x + ',' + current.y, { timeout: 2_000 });
-    } finally {
-      await page.keyboard.up(key);
-    }
-  }
-  throw new Error('弾薬箱までの移動が上限を超えました。');
 }
 
 async function moveEnemyToTile(
@@ -437,8 +618,17 @@ async function expectCurrentEnemyPresentations(
       await expect(hud).toHaveAttribute('data-visibility', 'hidden');
       continue;
     }
-    const spawnTile = parseFloorTile(map, await hud.getAttribute('data-spawn-tile'), `${id}の出現位置`);
-    await expectEnemyPresentation(page, id, enemyVisibility(map, player, spawnTile));
+    const position = await page.evaluate((enemyId) => {
+      const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+      if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+      const enemy = scene.enemies[enemyId];
+      return { x: enemy.x, y: enemy.y };
+    }, id);
+    const enemyTile = {
+      x: Math.max(0, Math.min(map.width - 1, Math.floor(position.x / TILE_SIZE))),
+      y: Math.max(0, Math.min(map.height - 1, Math.floor(position.y / TILE_SIZE))),
+    };
+    await expectEnemyPresentation(page, id, enemyVisibility(map, player, enemyTile));
   }
 }
 
@@ -474,7 +664,8 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('開始前のSpace選択を保ち、開始後のキーボード移動を受け付ける', async ({ page }) => {
-  await page.goto('/');
+  const schedule = createRunSchedule(COMBAT_WAVE_DURATION_MS, 500);
+  await page.goto(`/?restDurationMs=${schedule.restDurationMs}`);
   await expect(page.getByTestId('start-gate')).toBeVisible();
   await expect(page.locator('#game canvas')).toHaveCount(0);
   await expect(page.getByTestId('role-options').locator('input')).toHaveCount(5);
@@ -489,6 +680,7 @@ test('開始前のSpace選択を保ち、開始後のキーボード移動を受
 
   await expect(page.getByTestId('start-gate')).toBeHidden();
   await expect(page.locator('#game canvas')).toBeVisible();
+  await page.waitForTimeout(schedule.restDurationMs + 100);
   await expect(page.getByTestId('role')).toHaveText('スナイパー（紫）');
   await expect(page.getByTestId('role')).toHaveAttribute('data-role', 'sniper');
   const playerTint = await page.evaluate(() => {
@@ -541,6 +733,7 @@ test('通常役職は回避中に発砲しない', async ({ page }) => {
   await page.goto(devStartUrl('/'));
   await expect(page.locator('#game canvas')).toBeVisible();
   await setPlayerInvulnerable(page, true);
+  await collectShotgunPickup(page);
   await page.keyboard.press('2');
   await expect(page.getByTestId('weapon')).toHaveText('ショットガン');
   await aimPlayer(page, { x: 1, y: 0 });
@@ -560,6 +753,7 @@ test('ガンスリンガーは回避中に発砲できる', async ({ page }) => 
   await page.getByTestId('start').click();
   await expect(page.locator('#game canvas')).toBeVisible();
   await setPlayerInvulnerable(page, true);
+  await collectShotgunPickup(page);
   await page.keyboard.press('2');
   await expect(page.getByTestId('weapon')).toHaveText('ショットガン');
   await aimPlayer(page, { x: 1, y: 0 });
@@ -573,14 +767,642 @@ test('ガンスリンガーは回避中に発砲できる', async ({ page }) => 
   }
 });
 
+test('Tab詳細中は単発射撃と空ライフル弾倉の自動reloadを開始しない', async ({ page }) => {
+  await page.clock.install({ time: 15 });
+  await page.clock.pauseAt(15);
+  await page.goto(devStartUrl('/'));
+  await expect(page.locator('#game canvas')).toBeVisible();
+  await setArenaPhysics(page, 'pause');
+  await aimPlayer(page, { x: 1, y: 0 });
+  await collectShotgunPickup(page);
+  await page.keyboard.press('2');
+  await expect(page.getByTestId('weapon')).toHaveText(WEAPON_MODELS.shotgun.label);
+
+  const reloadHud = page.getByTestId('reload');
+  const reloadProgress = page.getByTestId('reload-progress');
+  const selectedAmmoState = async (): Promise<{
+    magazine: number;
+    reserve: string | null;
+    reload: string | null;
+    reloadProgressHidden: boolean;
+    reloadProgressValue: number;
+  }> => ({
+    magazine: await currentAmmo(page),
+    reserve: await page.getByTestId('ammo-reserve').getAttribute('data-reserve'),
+    reload: await reloadHud.textContent(),
+    reloadProgressHidden: await reloadProgress.isHidden(),
+    reloadProgressValue: await reloadProgress.evaluate(element =>
+      (element as HTMLProgressElement).value),
+  });
+  const expectSelectedAmmoState = async (before: {
+    magazine: number;
+    reserve: string | null;
+    reload: string | null;
+    reloadProgressHidden: boolean;
+    reloadProgressValue: number;
+  }): Promise<void> => {
+    expect(await currentAmmo(page)).toBe(before.magazine);
+    expect(await page.getByTestId('ammo-reserve').getAttribute('data-reserve')).toBe(before.reserve);
+    expect(await reloadHud.textContent()).toBe(before.reload);
+    expect(await reloadProgress.isHidden()).toBe(before.reloadProgressHidden);
+    expect(await reloadProgress.evaluate(element => (element as HTMLProgressElement).value))
+      .toBe(before.reloadProgressValue);
+  };
+
+  const shotgunBeforeBlockedClick = await selectedAmmoState();
+  await page.keyboard.press('Tab');
+  const tabCanvasPoint = await findGameCanvasInputPoint(page);
+  await clickGameCanvasAt(page, tabCanvasPoint);
+  await expectSelectedAmmoState(shotgunBeforeBlockedClick);
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('1');
+  await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.state.ammo.rifle = 0;
+    scene.refreshHud();
+  });
+
+  const emptyRifleBeforeBlockedHold = await selectedAmmoState();
+  expect(await currentAmmo(page)).toBe(0);
+  await expect(reloadHud).toHaveText('待機');
+  await expect(reloadProgress).toBeHidden();
+
+  await page.keyboard.press('Tab');
+  await holdGameCanvasAt(page, tabCanvasPoint, WEAPONS.rifle.fireIntervalMs * 2);
+  await expectSelectedAmmoState(emptyRifleBeforeBlockedHold);
+
+  await page.keyboard.press('Tab');
+  await holdGameCanvasAt(page, tabCanvasPoint, WEAPONS.rifle.fireIntervalMs * 2);
+  expect(await currentAmmo(page)).toBe(0);
+  expect(await page.getByTestId('ammo-reserve').getAttribute('data-reserve'))
+    .toBe(emptyRifleBeforeBlockedHold.reserve);
+  await expect(reloadHud).toContainText('リロード中');
+  await expect(reloadProgress).toBeVisible();
+});
+
+test('モデル別world weapon、クイックスロット、詳細インベントリをEで取得できる', async ({ page }) => {
+  test.setTimeout(45_000);
+  const schedule = createRunSchedule(15_000, 1_000);
+  await page.clock.install({ time: 15 });
+  await page.clock.pauseAt(15);
+  await page.goto(devStartUrl(
+    `/?enemyInitialCount=1&enemyStaggerIntervalMs=30000&combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+  ));
+  await setArenaPhysics(page, 'pause');
+  await startInitialCombat(page, schedule.restDurationMs);
+  const quickSlot1 = page.getByTestId('quick-slot-1');
+  const quickSlot2 = page.getByTestId('quick-slot-2');
+  const quickSlot3 = page.getByTestId('quick-slot-3');
+  const canvasLocator = page.locator('#game canvas');
+  await expect(quickSlot1).toHaveAttribute('data-model', 'rifle');
+  await expect(quickSlot1).toHaveAttribute('data-selected', 'true');
+  await expect(quickSlot2).toHaveAttribute('data-empty', 'true');
+  await expect(quickSlot3).toHaveAttribute('data-empty', 'true');
+  await expect(quickSlot1).toContainText(WEAPON_MODELS.rifle.label);
+  const quickbarBounds = await documentBounds(page.getByTestId('inventory-panel'));
+  const canvasBounds = await documentBounds(canvasLocator);
+  expect(quickbarBounds.x + quickbarBounds.width / 2).toBeCloseTo(canvasBounds.x + canvasBounds.width / 2, 1);
+  expect(quickbarBounds.y + quickbarBounds.height).toBeLessThanOrEqual(canvasBounds.y + canvasBounds.height);
+  await page.keyboard.press('Tab');
+  const detail = page.getByTestId('inventory-detail');
+  const ammoPouch = page.getByTestId('ammo-pouch');
+  await expect(detail).toBeVisible();
+  await expect(ammoPouch).toBeVisible();
+  for (const locator of [
+    detail.locator('h2'),
+    detail.locator('.inventory-panel-caption').first(),
+    page.getByTestId('quick-slot-2'),
+    page.getByTestId('inventory-quick-slot-2'),
+    page.getByTestId('inventory-quick-slot-3'),
+    detail.locator('.inventory-panel-caption').nth(1),
+    page.getByTestId('backpack-slot-1'),
+    ammoPouch.locator('h2'),
+  ]) await expectTextSelectionClearedByPointer(page, locator);
+  const inventoryQuickSlot1 = page.getByTestId('inventory-quick-slot-1');
+  const backpackSlot1 = page.getByTestId('backpack-slot-1');
+  await inventoryQuickSlot1.dragTo(backpackSlot1);
+  await expect(quickSlot1).toHaveAttribute('data-empty', 'true');
+  await expect(backpackSlot1).toHaveAttribute('data-model', 'rifle');
+  await backpackSlot1.dragTo(inventoryQuickSlot1);
+  await expect(quickSlot1).toHaveAttribute('data-model', 'rifle');
+  await expect(backpackSlot1).toHaveAttribute('data-empty', 'true');
+  await page.keyboard.press('Tab');
+  await expect(detail).toBeHidden();
+  await expect(page.getByTestId('scrap')).toHaveAttribute('data-count', '0');
+  const worldItemCount = page.getByTestId('world-item-count');
+  await expect(worldItemCount).toBeHidden();
+  await expect(worldItemCount).toHaveAttribute('data-world-items', /weapon/);
+  expect(await worldItemCount.evaluate(element => getComputedStyle(element).display)).toBe('none');
+  const mapSeed = Number(await page.getByTestId('map-seed').textContent());
+  const map = generateArenaMap(mapSeed);
+  const weaponPickups = (await activeWorldItems(page)).filter(item => item.kind === 'weapon');
+  expect(weaponPickups.map(item => item.item).sort()).toEqual([...INITIAL_WORLD_WEAPON_MODELS].sort());
+  expect(weaponPickups.every(({ tile }) =>
+    (Math.abs(tile.x - map.start.x) > 1 || Math.abs(tile.y - map.start.y) > 1)
+    && selectAmmoBoxTiles(map).every(box => Math.abs(tile.x - box.x) > 1 || Math.abs(tile.y - box.y) > 1),
+  )).toBe(true);
+  expect(weaponPickups.every((item, index) => weaponPickups.slice(index + 1).every(other =>
+    Math.abs(item.tile.x - other.tile.x) > 1 || Math.abs(item.tile.y - other.tile.y) > 1,
+  ))).toBe(true);
+
+  const shotgun = weaponPickups.find(item => item.item === 'shotgun');
+  if (!shotgun)
+    throw new Error('初期ショットガンpickupが必要です。');
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, shotgun.tile);
+  await expect(page.getByTestId('pickup-prompt')).toBeVisible();
+  await expect(page.getByTestId('pickup-target')).toHaveText(WEAPON_MODELS.shotgun.label);
+  await expect(page.getByTestId('pickup-action')).toHaveText('を拾う [E]');
+  await page.keyboard.press('e');
+  await expect(quickSlot2).toHaveAttribute('data-model', 'shotgun');
+  await page.keyboard.press('2');
+  await expect(quickSlot2).toHaveAttribute('data-selected', 'true');
+  await expect(quickSlot1).toHaveAttribute('data-selected', 'false');
+  const canvas = await canvasLocator.boundingBox();
+  if (!canvas) throw new Error('shotgun射撃用のcanvasが必要です。');
+  const reloadHud = page.getByTestId('reload');
+  const reloadProgress = page.getByTestId('reload-progress');
+  for (let shot = 0; shot < WEAPONS.shotgun.magazineSize; shot += 1) {
+    await page.mouse.click(canvas.x + canvas.width / 2, canvas.y + canvas.height / 2);
+    if (shot + 1 < WEAPONS.shotgun.magazineSize)
+      await page.clock.runFor(WEAPONS.shotgun.fireIntervalMs * 2);
+  }
+  expect(await currentAmmo(page)).toBe(0);
+  const emptyShotgunReserve = await page.getByTestId('ammo-reserve').getAttribute('data-reserve');
+  const emptyShotgunReloadProgressWasHidden = await reloadProgress.isHidden();
+  const emptyShotgunReloadProgressValueBefore = await reloadProgress.evaluate(element =>
+    (element as HTMLProgressElement).value);
+  await expect(reloadHud).toHaveText('待機');
+  await expect(reloadProgress).toBeHidden();
+  await page.keyboard.press('Tab');
+  const emptyShotgunCanvasPoint = await findGameCanvasInputPoint(page);
+  await clickGameCanvasAt(page, emptyShotgunCanvasPoint);
+  expect(await currentAmmo(page)).toBe(0);
+  expect(await page.getByTestId('ammo-reserve').getAttribute('data-reserve')).toBe(emptyShotgunReserve);
+  await expect(reloadHud).toHaveText('待機');
+  expect(await reloadProgress.isHidden()).toBe(emptyShotgunReloadProgressWasHidden);
+  expect(await reloadProgress.evaluate(element => (element as HTMLProgressElement).value))
+    .toBe(emptyShotgunReloadProgressValueBefore);
+  await holdGameCanvasAt(page, emptyShotgunCanvasPoint, WEAPONS.shotgun.fireIntervalMs);
+  expect(await currentAmmo(page)).toBe(0);
+  expect(await page.getByTestId('ammo-reserve').getAttribute('data-reserve')).toBe(emptyShotgunReserve);
+  await expect(reloadHud).toHaveText('待機');
+  expect(await reloadProgress.isHidden()).toBe(emptyShotgunReloadProgressWasHidden);
+  expect(await reloadProgress.evaluate(element => (element as HTMLProgressElement).value))
+    .toBe(emptyShotgunReloadProgressValueBefore);
+  await page.keyboard.press('Tab');
+  await clickGameCanvasAt(page, emptyShotgunCanvasPoint);
+  await expect(reloadHud).toContainText('リロード中');
+  await expect(reloadProgress).toBeVisible();
+  expect(await currentAmmo(page)).toBe(0);
+  expect(await page.getByTestId('ammo-reserve').getAttribute('data-reserve')).toBe(emptyShotgunReserve);
+  await page.keyboard.press('1');
+  await expect(reloadHud).toHaveText('待機');
+  await expect(reloadProgress).toBeHidden();
+
+  const duplicateModel = WORLD_SIDEARM_MODELS.find(model =>
+    weaponPickups.filter(item => item.item === model).length >= 2);
+  if (!duplicateModel)
+    throw new Error('非stack確認用に同じsidearm modelが2件必要です。');
+  const sidearms = weaponPickups.filter(item => item.item === duplicateModel);
+  const firstSidearm = sidearms[0];
+  if (!firstSidearm)
+    throw new Error('最初のsidearm pickupが必要です。');
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, firstSidearm.tile);
+  await expect(page.getByTestId('pickup-target')).toHaveText(WEAPON_MODELS[duplicateModel].label);
+  await expect(page.getByTestId('pickup-action')).toHaveText('を拾う [E]');
+  await page.keyboard.press('e');
+  await expect(quickSlot3).toHaveAttribute('data-model', duplicateModel);
+  await page.keyboard.press('3');
+  await expect(quickSlot3).toHaveAttribute('data-selected', 'true');
+  await expect(page.getByTestId('weapon')).toHaveText(WEAPON_MODELS[duplicateModel].label);
+  await aimPlayer(page, { x: 1, y: 0 });
+  const sidearmAmmoBeforeShot = await currentAmmo(page);
+  await page.mouse.click(canvas.x + canvas.width / 2, canvas.y + canvas.height / 2);
+  const sidearmAmmoAfterShot = await currentAmmo(page);
+  expect(sidearmAmmoAfterShot).toBe(sidearmAmmoBeforeShot - 1);
+  expect(weaponIdForModel(duplicateModel)).toBe('handgun');
+  const secondSidearm = sidearms.find(item => item.id !== firstSidearm.id);
+  if (!secondSidearm)
+    throw new Error('追加取得用の同モデルsidearm pickupが必要です。');
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, secondSidearm.tile);
+  await page.keyboard.press('e');
+  await expect(page.getByTestId('backpack-slot-1')).toHaveAttribute('data-model', duplicateModel);
+  expect(await currentAmmo(page)).toBe(sidearmAmmoAfterShot);
+
+  await page.keyboard.press('Tab');
+  await expect(detail).toBeVisible();
+  await expect(ammoPouch).toBeVisible();
+  for (const type of AMMO_TYPE_ORDER) {
+    const ammo = AMMO_TYPES[type];
+    const pouchEntry = page.getByTestId(`ammo-pouch-${type}`);
+    await expect(pouchEntry).toHaveAttribute('data-ammo-type', type);
+    await expect(pouchEntry).toHaveAttribute('data-weapon', ammo.weapon);
+    await expect(pouchEntry).toHaveAttribute('data-reserve', /^\d+$/);
+    await expect(pouchEntry).toContainText(ammo.label);
+  }
+  await expect(page.getByTestId('inventory-quick-slot-3')).toHaveAttribute('data-model', duplicateModel);
+  await expect(page.getByTestId('backpack-slots').locator('output')).toHaveCount(10);
+  await expect(page.getByTestId('inventory-quick-slot-3')).toHaveAttribute('draggable', 'true');
+
+  await dragInventorySlot(page, 'inventory-quick-slot-3', '[data-testid="backpack-slot-2"]');
+  await expect(quickSlot3).toHaveAttribute('data-empty', 'true');
+  await expect(detail).toHaveAttribute('data-selected-quick-slot', '2');
+  await expect(page.getByTestId('backpack-slot-2')).toHaveAttribute('data-model', duplicateModel);
+  await expect(page.getByTestId('weapon')).toHaveText('武器なし');
+  await expect(page.getByTestId('ammo')).toHaveText('-/-');
+
+  await dragInventorySlot(page, 'backpack-slot-1', '[data-testid="inventory-quick-slot-3"]');
+  await expect(quickSlot3).toHaveAttribute('data-model', duplicateModel);
+  await expect(detail).toHaveAttribute('data-selected-quick-slot', '2');
+  await expect(quickSlot3).toHaveAttribute('data-selected', 'true');
+  await expect(page.getByTestId('weapon')).toHaveText(WEAPON_MODELS[duplicateModel].label);
+
+  await dragInventorySlot(page, 'inventory-quick-slot-2', '[data-testid="backpack-slot-2"]');
+  await expect(quickSlot2).toHaveAttribute('data-model', duplicateModel);
+  await expect(page.getByTestId('backpack-slot-2')).toHaveAttribute('data-model', 'shotgun');
+  const worldItemsBeforeDrop = await activeWorldItems(page);
+  const playerTileForDrop = parseFloorTile(map, await page.getByTestId('player-tile').textContent(), 'world drop時のplayer');
+  await dragInventorySlot(page, 'backpack-slot-2', '#game');
+  await expect(page.getByTestId('backpack-slot-2')).toHaveAttribute('data-empty', 'true');
+  const dropped = (await activeWorldItems(page)).find(item => item.id.startsWith('dropped-weapon-'));
+  if (!dropped)
+    throw new Error('worldへ置いたweaponが必要です。');
+  expect(dropped.id).toMatch(/^dropped-weapon-/);
+  expect(dropped.item).toBe('shotgun');
+  expect(dropped.tile).toEqual(playerTileForDrop);
+  expect((await activeWorldItems(page)).length).toBe(worldItemsBeforeDrop.length + 1);
+  await expect(page.getByTestId('pickup-prompt')).toBeVisible();
+  await page.keyboard.press('e');
+  await expect(page.getByTestId('backpack-slot-1')).toHaveAttribute('data-model', 'shotgun');
+  expect((await activeWorldItems(page)).some(item => item.id === dropped.id)).toBe(false);
+
+  await page.keyboard.press('1');
+  await expect(detail).toBeVisible();
+  await expect(quickSlot1).toHaveAttribute('data-selected', 'true');
+  await page.keyboard.press('Tab');
+  await expect(detail).toBeHidden();
+});
+
+test('弾薬ポーチの種類別弾薬をworldへ置き、部分取得してEで回収できる', async ({ page }) => {
+  test.setTimeout(30_000);
+  await page.clock.install({ time: 15 });
+  await page.clock.pauseAt(15);
+  await page.goto(devStartUrl('/'));
+  await setArenaPhysics(page, 'pause');
+  const ammoType = 'handgun-ammo' as const;
+  const ammo = AMMO_TYPES[ammoType];
+  const droppedQuantity = Math.max(1, Math.floor(ammo.boxQuantity / 2));
+  if (droppedQuantity >= ammo.boxQuantity)
+    throw new Error('less-than-chunk確認には弾薬箱の設定量が2以上必要です。');
+  await page.evaluate(({ weapon, reserve }) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.state.reserve[weapon] = reserve;
+    scene.refreshHud();
+  }, { weapon: ammo.weapon, reserve: droppedQuantity });
+
+  await page.keyboard.press('Tab');
+  const pouchEntry = page.getByTestId(`ammo-pouch-${ammoType}`);
+  await expect(pouchEntry).toHaveAttribute('draggable', 'true');
+  await expect(pouchEntry).toHaveAttribute('data-box-quantity', String(ammo.boxQuantity));
+  await expect(pouchEntry).toHaveAttribute('data-world-color', ammo.worldColor);
+  await expect(pouchEntry).toHaveCSS('pointer-events', 'auto');
+  const canvas = page.locator('#game canvas');
+  const canvasBounds = await canvas.boundingBox();
+  if (!canvasBounds)
+    throw new Error('worldへ置くためのgame canvas座標が必要です。');
+  const canvasPoint = await findGameCanvasInputPoint(page);
+  await pouchEntry.dragTo(canvas, {
+    targetPosition: {
+      x: canvasPoint.clientX - canvasBounds.x,
+      y: canvasPoint.clientY - canvasBounds.y,
+    },
+  });
+  await expect(pouchEntry).toHaveAttribute('data-reserve', '0');
+  const selectedAmmoBeforeClose = await currentAmmo(page);
+  const selectedReserveBeforeClose = await page.getByTestId('ammo-reserve').getAttribute('data-reserve');
+  const reloadHud = page.getByTestId('reload');
+  const reloadBeforeClose = await reloadHud.textContent();
+  const reloadProgress = page.getByTestId('reload-progress');
+  const reloadProgressWasHidden = await reloadProgress.isHidden();
+  const reloadProgressBeforeClose = await reloadProgress.evaluate(element =>
+    (element as HTMLProgressElement).value);
+  await page.mouse.move(canvasPoint.clientX, canvasPoint.clientY);
+  await expectGameCanvasAt(page, canvasPoint);
+  await page.mouse.down();
+  try {
+    await page.keyboard.press('Tab');
+    await expect(pouchEntry).toBeHidden();
+    await page.clock.runFor(WEAPONS.rifle.fireIntervalMs * 2);
+    expect(await currentAmmo(page)).toBe(selectedAmmoBeforeClose);
+    expect(await page.getByTestId('ammo-reserve').getAttribute('data-reserve'))
+      .toBe(selectedReserveBeforeClose);
+    expect(await reloadHud.textContent()).toBe(reloadBeforeClose);
+    expect(await reloadProgress.isHidden()).toBe(reloadProgressWasHidden);
+    expect(await reloadProgress.evaluate(element => (element as HTMLProgressElement).value))
+      .toBe(reloadProgressBeforeClose);
+  } finally {
+    await page.mouse.up();
+  }
+  await holdGameCanvasAt(page, canvasPoint, WEAPONS.rifle.fireIntervalMs);
+  await expect.poll(() => currentAmmo(page)).toBeLessThan(selectedAmmoBeforeClose);
+
+  const dropped = (await activeWorldItems(page)).find(item => item.id.startsWith('dropped-ammo-'));
+  if (!dropped || dropped.kind !== 'ammo')
+    throw new Error('worldへ置いた種類別弾薬が必要です。');
+  expect(dropped.item).toBe(ammoType);
+  expect(dropped.quantity).toBe(droppedQuantity);
+  expect(dropped.quantity).toBeLessThan(ammo.boxQuantity);
+  expect(dropped.worldColor).toBe(ammo.worldColor);
+  expect(dropped.texture).toBe(`ammo-box-${ammoType}`);
+  await expect(page.getByTestId('pickup-prompt')).toBeVisible();
+  await expect(page.getByTestId('pickup-target')).toHaveText(`${ammo.label} ${dropped.quantity}発`);
+  await expect(page.getByTestId('pickup-action')).toHaveText('を拾う [E]');
+
+  const partialCapacity = dropped.quantity - 1;
+  if (partialCapacity <= 0)
+    throw new Error('部分取得確認にはworldへ置く弾薬が2発以上必要です。');
+  await page.evaluate(({ weapon, reserve }) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.state.reserve[weapon] = reserve;
+    scene.refreshHud();
+  }, { weapon: ammo.weapon, reserve: WEAPONS[ammo.weapon].reserveMax - partialCapacity });
+  await page.keyboard.press('e');
+  const remainingQuantity = dropped.quantity - partialCapacity;
+  const partiallyCollected = (await activeWorldItems(page)).find(item => item.id === dropped.id);
+  expect(partiallyCollected).toMatchObject({ kind: 'ammo', quantity: remainingQuantity });
+  await expect(pouchEntry).toHaveAttribute('data-reserve', String(WEAPONS[ammo.weapon].reserveMax));
+  await page.keyboard.press('e');
+  expect((await activeWorldItems(page)).find(item => item.id === dropped.id)).toMatchObject({ quantity: remainingQuantity });
+
+  await page.evaluate(({ weapon, reserve }) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.state.reserve[weapon] = reserve;
+    scene.refreshHud();
+  }, { weapon: ammo.weapon, reserve: WEAPONS[ammo.weapon].reserveMax - remainingQuantity });
+  await page.keyboard.press('e');
+  expect((await activeWorldItems(page)).some(item => item.id === dropped.id)).toBe(false);
+  await expect(pouchEntry).toHaveAttribute('data-reserve', String(WEAPONS[ammo.weapon].reserveMax));
+});
+
+test('同じtileのスクラップは数量と見た目を集約しEで取得できる', async ({ page }) => {
+  test.setTimeout(45_000);
+  const schedule = createRunSchedule(15_000, 1_000);
+  await page.clock.install({ time: 15 });
+  await page.clock.pauseAt(15);
+  await page.goto(devStartUrl(
+    `/?enemyInitialCount=1&enemyStaggerIntervalMs=30000&combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+  ));
+  await setArenaPhysics(page, 'pause');
+  await startInitialCombat(page, schedule.restDurationMs);
+  const mapSeed = Number(await page.getByTestId('map-seed').textContent());
+  const anchor = generateArenaMap(mapSeed).start;
+
+  await moveEnemyToTile(page, 'basic-1', anchor);
+  const dropsToMediumTier = Math.max(1, Math.ceil(SCRAP_VISUAL_TIER_THRESHOLDS.medium / SCRAP_DROP_AMOUNTS.basic));
+  let firstScrap: WorldItemEntry | undefined;
+  let secondScrap: WorldItemEntry | undefined;
+  for (let dropIndex = 0; dropIndex < dropsToMediumTier; dropIndex += 1) {
+    if (dropIndex > 0) {
+      await page.clock.runFor(respawnDelayFor('basic', 'basic-1', dropIndex, mapSeed) + 100);
+      await expect(page.getByTestId('basic-1-hp')).toHaveAttribute('data-active', 'true');
+      await moveEnemyToTile(page, 'basic-1', anchor);
+    }
+    await debugDamageEnemy(page, 'basic-1', Number(await page.getByTestId('basic-1-hp').textContent()));
+    const scrap = (await activeWorldItems(page)).find(item =>
+      item.kind === 'material' && item.tile.x === anchor.x && item.tile.y === anchor.y);
+    if (!scrap) throw new Error('スクラップpickupが必要です。');
+    if (!firstScrap) firstScrap = scrap;
+    secondScrap = scrap;
+  }
+  const scrapItems = (await activeWorldItems(page)).filter(item =>
+    item.kind === 'material' && item.tile.x === anchor.x && item.tile.y === anchor.y);
+  expect(scrapItems).toHaveLength(1);
+  if (!firstScrap || !secondScrap) throw new Error('集約後のスクラップpickupが必要です。');
+  expect(secondScrap.quantity).toBeGreaterThanOrEqual(firstScrap.quantity);
+  expect(secondScrap.visualTier).toBe(scrapVisualTierFor(secondScrap.quantity));
+  if (dropsToMediumTier > 1)
+    expect(secondScrap.visualTier).not.toBe(firstScrap.visualTier);
+
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, anchor);
+  await expect(page.getByTestId('pickup-prompt')).toBeVisible();
+  await expect(page.getByTestId('pickup-target')).toHaveText(`スクラップ ${secondScrap.quantity}個`);
+  await expect(page.getByTestId('pickup-action')).toHaveText('を拾う [E]');
+  await page.keyboard.press('e');
+  await expect(page.getByTestId('scrap')).toHaveAttribute('data-count', /[1-9]/);
+  expect((await activeWorldItems(page)).filter(item => item.id === secondScrap.id)).toHaveLength(0);
+});
+
+test('world weaponと弾薬を置けない場合はinventoryとworldを変えずに通知する', async ({ page }) => {
+  test.setTimeout(30_000);
+  const schedule = createRunSchedule(15_000, 1_000);
+  await page.clock.install({ time: 15 });
+  await page.clock.pauseAt(15);
+  await page.goto(devStartUrl(
+    `/?enemyInitialCount=${ENEMY_INSTANCE_IDS.length}&enemyStaggerIntervalMs=30000&combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+  ));
+  await setArenaPhysics(page, 'pause');
+  await startInitialCombat(page, schedule.restDurationMs);
+  await expect(page.getByTestId('enemy-current')).toHaveText(String(ENEMY_INSTANCE_IDS.length));
+  const map = generateArenaMap(Number(await page.getByTestId('map-seed').textContent()));
+  const shotgun = (await activeWorldItems(page)).find(item => item.kind === 'weapon' && item.item === 'shotgun');
+  if (!shotgun)
+    throw new Error('配置失敗確認用のショットガンpickupが必要です。');
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, shotgun.tile);
+  await page.keyboard.press('e');
+  await expect(page.getByTestId('quick-slot-2')).toHaveAttribute('data-model', 'shotgun');
+
+  const nearbyFloorsFor = (player: TilePosition): TilePosition[] => map.tiles.flatMap((row, y) => row.flatMap((tile, x) => {
+    const candidate = { x, y };
+    return tile === 'floor' && findPath(map, player, candidate).length - 1 <= WORLD_WEAPON_DROP_MAX_PATH_DISTANCE
+      ? [candidate]
+      : [];
+  }));
+  const dropPlayerTile = map.tiles.flatMap((row, y) => row.flatMap((tile, x) => tile === 'floor' ? [{ x, y }] : []))
+    .find(tile => nearbyFloorsFor(tile).length <= ENEMY_INSTANCE_IDS.length);
+  if (!dropPlayerTile)
+    throw new Error('全近傍候補を敵で塞げるfloor tileが必要です。');
+  const blockedTiles = nearbyFloorsFor(dropPlayerTile);
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, dropPlayerTile);
+  for (const [index, tile] of blockedTiles.entries()) {
+    const id = ENEMY_INSTANCE_IDS[index];
+    if (!id)
+      throw new Error('world drop候補を塞ぐ敵枠が必要です。');
+    await moveEnemyToTile(page, id, tile);
+  }
+
+  await page.keyboard.press('Tab');
+  await expect(page.getByTestId('inventory-detail')).toBeVisible();
+  const worldItemsBeforeDrop = await activeWorldItems(page);
+  await beginInventoryDrag(page, 'inventory-quick-slot-2');
+  await expect(page.getByTestId('inventory-detail')).toHaveAttribute('data-drag-source', 'quick:1');
+  await dragInventorySlot(page, 'inventory-quick-slot-2', '#game');
+  await expect(page.getByTestId('feedback')).toHaveText('置ける場所がありません');
+  await expect(page.getByTestId('quick-slot-2')).toHaveAttribute('data-model', 'shotgun');
+  expect(await activeWorldItems(page)).toEqual(worldItemsBeforeDrop);
+
+  const ammoType = 'rifle-ammo' as const;
+  const pouch = page.getByTestId('ammo-pouch');
+  const pouchEntry = page.getByTestId(`ammo-pouch-${ammoType}`);
+  const reserveBeforeAmmoDrop = await pouchEntry.getAttribute('data-reserve');
+  await beginInventoryDrag(page, `ammo-pouch-${ammoType}`);
+  await expect(pouch).toHaveAttribute('data-drag-source', `ammo:${ammoType}`);
+  await dragInventorySlot(page, `ammo-pouch-${ammoType}`, '#game');
+  await expect(page.getByTestId('feedback')).toHaveText('置ける場所がありません');
+  await expect(pouchEntry).toHaveAttribute('data-reserve', reserveBeforeAmmoDrop ?? '');
+  expect(await activeWorldItems(page)).toEqual(worldItemsBeforeDrop);
+});
+
+test('満タン弾薬箱と同tileのスクラップをEで取得できる', async ({ page }) => {
+  const schedule = createRunSchedule(15_000, 1_000);
+  await page.clock.install({ time: 15 });
+  await page.clock.pauseAt(15);
+  await page.goto(devStartUrl(
+    `/?enemyInitialCount=1&enemyStaggerIntervalMs=30000&combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+  ));
+  await setArenaPhysics(page, 'pause');
+  await startInitialCombat(page, schedule.restDurationMs);
+  const mapSeed = Number(await page.getByTestId('map-seed').textContent());
+  const targetBox = selectAmmoBoxTiles(generateArenaMap(mapSeed))[0];
+  if (!targetBox)
+    throw new Error('満タン競合確認用の弾薬箱が必要です。');
+  const ammoBoxCount = page.getByTestId('ammo-box-count');
+  const targetBoxKey = `${targetBox.x},${targetBox.y}`;
+  await page.evaluate((weapons) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    for (const [weapon, definition] of Object.entries(weapons))
+      scene.state.reserve[weapon as 'rifle' | 'shotgun' | 'handgun'] = definition.reserveMax;
+    scene.refreshHud();
+  }, WEAPONS);
+  await expect.poll(async () => tileKeysFromAttribute(await ammoBoxCount.getAttribute('data-active-tiles'))).toContain(targetBoxKey);
+
+  await moveEnemyToTile(page, 'basic-1', targetBox);
+  await debugDamageEnemy(page, 'basic-1', Number(await page.getByTestId('basic-1-hp').textContent()));
+  const scrap = (await activeWorldItems(page)).find(item => item.kind === 'material' && item.tile.x === targetBox.x && item.tile.y === targetBox.y);
+  if (!scrap) throw new Error('弾薬箱と同tileのスクラップpickupが必要です。');
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, targetBox);
+  await expect(page.getByTestId('pickup-prompt')).toBeVisible();
+  await page.keyboard.press('e');
+  await expect(page.getByTestId('scrap')).toHaveAttribute('data-count', /[1-9]/);
+  expect((await activeWorldItems(page)).some(item => item.id === scrap.id)).toBe(false);
+  await expect.poll(async () => tileKeysFromAttribute(await ammoBoxCount.getAttribute('data-active-tiles'))).toContain(targetBoxKey);
+});
+
+test('terminal中はpickupを止め、retryで所持品とworld itemを初期化する', async ({ page }) => {
+  const schedule = createRunSchedule(1_000, 500);
+  await page.clock.install({ time: 15 });
+  await page.clock.pauseAt(15);
+  await page.goto(devStartUrl(
+    `/?combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+  ));
+  await setPlayerInvulnerable(page, true);
+  const shotgun = (await activeWorldItems(page)).find(item => item.kind === 'weapon' && item.item === 'shotgun');
+  if (!shotgun) throw new Error('terminal確認用のショットガンpickupが必要です。');
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, shotgun.tile);
+  await expect(page.getByTestId('pickup-prompt')).toBeVisible();
+  const inventoryDetail = page.getByTestId('inventory-detail');
+  const ammoPouch = page.getByTestId('ammo-pouch');
+  await page.keyboard.press('Tab');
+  await expect(inventoryDetail).toBeVisible();
+  await expect(ammoPouch).toBeVisible();
+  await dragInventorySlot(page, 'ammo-pouch-handgun-ammo', '#game');
+  const droppedAmmo = (await activeWorldItems(page)).find(item => item.id.startsWith('dropped-ammo-'));
+  if (!droppedAmmo || droppedAmmo.kind !== 'ammo')
+    throw new Error('retry初期化確認用のworld弾薬が必要です。');
+  await beginInventoryDrag(page, 'inventory-quick-slot-1');
+  await expect(inventoryDetail).toHaveAttribute('data-drag-source', 'quick:0');
+  await page.clock.fastForward(runDurationMs(schedule));
+  await expect(page.getByTestId('victory')).toBeVisible();
+  await expect(page.getByTestId('pickup-prompt')).toBeHidden();
+  await expect(inventoryDetail).toBeHidden();
+  await expect(ammoPouch).toBeHidden();
+  await expect(inventoryDetail).not.toHaveAttribute('data-drag-source');
+  await page.keyboard.press('Tab');
+  await expect(inventoryDetail).toBeHidden();
+  await page.keyboard.press('e');
+  await expect(page.getByTestId('quick-slot-2')).toHaveAttribute('data-empty', 'true');
+  await expect(page.getByTestId('quick-slot-3')).toHaveAttribute('data-empty', 'true');
+  expect((await activeWorldItems(page)).find(item => item.id === shotgun.id)).toEqual(shotgun);
+
+  await page.getByTestId('retry').click();
+  await expect(page.getByTestId('quick-slot-1')).toHaveAttribute('data-model', 'rifle');
+  await expect(page.getByTestId('quick-slot-1')).toHaveAttribute('data-selected', 'true');
+  await expect(page.getByTestId('quick-slot-2')).toHaveAttribute('data-empty', 'true');
+  await expect(page.getByTestId('quick-slot-3')).toHaveAttribute('data-empty', 'true');
+  await expect(page.getByTestId('backpack-slots').locator('[data-empty="true"]')).toHaveCount(10);
+  await expect(inventoryDetail).toBeHidden();
+  await expect(ammoPouch).toBeHidden();
+  await expect(inventoryDetail).not.toHaveAttribute('data-drag-source');
+  await expect(page.getByTestId('scrap')).toHaveAttribute('data-count', '0');
+  await page.keyboard.press('Tab');
+  await expect(inventoryDetail).toBeVisible();
+  await expect(ammoPouch).toBeVisible();
+  for (const type of AMMO_TYPE_ORDER) {
+    const weapon = AMMO_TYPES[type].weapon;
+    await expect(page.getByTestId(`ammo-pouch-${type}`)).toHaveAttribute('data-reserve', String(WEAPONS[weapon].reserveInitial));
+  }
+  const retriedItems = await activeWorldItems(page);
+  expect(retriedItems.filter(item => item.kind === 'weapon').map(item => item.item).sort()).toEqual([...INITIAL_WORLD_WEAPON_MODELS].sort());
+  expect(retriedItems.filter(item => item.kind === 'material')).toHaveLength(0);
+  expect(retriedItems.some(item => item.id === droppedAmmo.id)).toBe(false);
+  const retriedBoxes = await activeAmmoBoxes(page);
+  expect(retriedBoxes).toHaveLength(selectAmmoBoxTiles(generateArenaMap(Number(await page.getByTestId('map-seed').textContent()))).length);
+  retriedBoxes.forEach((box, index) => {
+    const expectedType = AMMO_TYPE_ORDER[index % AMMO_TYPE_ORDER.length];
+    if (!expectedType) throw new Error('弾薬種の設定が必要です。');
+    expect(box.ammoType).toBe(expectedType);
+    expect(box.quantity).toBe(AMMO_TYPES[expectedType].boxQuantity);
+    expect(box.worldColor).toBe(AMMO_TYPES[expectedType].worldColor);
+    expect(box.texture).toBe(`ammo-box-${expectedType}`);
+  });
+});
+
 test('ガンスリンガーは回避中の敵を一度だけブーツナイフで通過し、コンボと速度buffを更新する', async ({ page }) => {
   test.setTimeout(30_000);
+  const schedule = createRunSchedule(1_000, 500);
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
-  await page.goto('/?combatWaveDurationMs=1000&restDurationMs=500');
+  await page.goto(`/?combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`);
   await page.getByTestId('role-gunslinger').check();
   await page.getByTestId('start').click();
   await expect(page.locator('#game canvas')).toBeVisible();
+  await startInitialCombat(page, schedule.restDurationMs);
   const combo = page.getByTestId('gunslinger-combo');
   const basicEnemyHp = page.getByTestId('basic-1-hp');
   await expect(page.getByTestId('gunslinger-combo-panel')).toBeVisible();
@@ -622,10 +1444,11 @@ test('ガンスリンガーは回避中の敵を一度だけブーツナイフ�
   expect(Number(await basicEnemyHp.textContent())).toBe(expectedFirstDash.hp);
   expect(Number(await combo.textContent())).toBe(expectedFirstDash.combo);
 
-  await page.clock.fastForward(4_000);
+  await page.clock.fastForward(runDurationMs(schedule));
   await expect(page.getByTestId('victory')).toBeVisible();
   await page.getByTestId('retry').click();
   await expect(page.getByTestId('victory')).toBeHidden();
+  await startInitialCombat(page, schedule.restDurationMs);
   await expect(combo).toHaveText('0');
   await expect(combo).toHaveAttribute('data-speed-multiplier', '1');
   await expect(basicEnemyHp).toHaveAttribute('data-active', 'true');
@@ -671,12 +1494,14 @@ test('ガンスリンガーは回避中の敵を一度だけブーツナイフ�
 
 test('ガンスリンガーのコンボ期限は有効命中で更新され、無効接触では維持する', async ({ page }) => {
   test.setTimeout(30_000);
+  const schedule = createRunSchedule(10_000, 500);
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
-  await page.goto('/');
+  await page.goto(`/?combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`);
   await page.getByTestId('role-gunslinger').check();
   await page.getByTestId('start').click();
   await expect(page.locator('#game canvas')).toBeVisible();
+  await startInitialCombat(page, schedule.restDurationMs);
   const combo = page.getByTestId('gunslinger-combo');
   const playerHp = page.getByTestId('hp');
   await expect(page.getByTestId('gunslinger-combo-panel')).toBeVisible();
@@ -783,11 +1608,14 @@ test('ガンスリンガーのコンボ期限は有効命中で更新され、�
 test('自動射撃、ショットガンの発射待ち、リロード、視界遮蔽と再挑戦を確認できる', async ({ page }) => {
   // 80×50マップのLOS検査を含む代表経路に、実時間の余裕を持たせる。
   test.setTimeout(60_000);
+  const schedule = createRunSchedule(COMBAT_WAVE_DURATION_MS, 500);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto(devStartUrl('/'));
+  await page.goto(devStartUrl(`/?restDurationMs=${schedule.restDurationMs}`));
+  await setPlayerInvulnerable(page, true);
   const gameCanvas = page.locator('#game canvas');
   await expect(gameCanvas).toBeVisible();
+  await page.waitForTimeout(schedule.restDurationMs + 100);
   // 初期spawn metadataと可視状態を同じ時点で観測するため、敵移動前に止める。
   await setArenaPhysics(page, 'pause');
   const initialCanvasBounds = await gameCanvas.boundingBox();
@@ -892,22 +1720,52 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   const firstBoxKey = firstBox.x + ',' + firstBox.y;
   const initialBoxKeys = await page.getByTestId('ammo-box-count').getAttribute('data-active-tiles');
   expect(tileKeysFromAttribute(initialBoxKeys)).toContain(firstBoxKey);
-  await moveToTile(page, map, firstBox, playerTileHud);
+  const firstAmmoBox = (await activeAmmoBoxes(page)).find(entry =>
+    entry.boxId === `ammo-box-${boxTiles.findIndex(tile => tile.x === firstBox.x && tile.y === firstBox.y) + 1}`);
+  if (!firstAmmoBox) throw new Error('種類別弾薬箱の観測値が必要です。');
+  const reservesBeforeAmmoPickup = Object.fromEntries(await Promise.all(AMMO_TYPE_ORDER.map(async type => [
+    type,
+    Number(await page.getByTestId(`ammo-pouch-${type}`).getAttribute('data-reserve')),
+  ]))) as Record<(typeof AMMO_TYPE_ORDER)[number], number>;
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, firstBox);
   await expect(page.getByTestId('ammo-box-count')).toHaveText('4');
   await expect(page.getByTestId('pickup-prompt')).toBeVisible();
+  await expect(page.getByTestId('pickup-target')).toHaveText(`${AMMO_TYPES[firstAmmoBox.ammoType].label} ${firstAmmoBox.quantity}発`);
+  await expect(page.getByTestId('pickup-action')).toHaveText('を拾う [E]');
   await page.keyboard.press('e');
   await expect(page.getByTestId('ammo-box-count')).toHaveText('3');
   const waitingBoxKeys = await page.getByTestId('ammo-box-count').getAttribute('data-active-tiles');
   expect(tileKeysFromAttribute(waitingBoxKeys)).not.toContain(firstBoxKey);
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-respawn-tiles', firstBoxKey);
-  await expect(page.getByTestId('ammo-reserve')).toHaveText('予備 60/60');
+  const ammoPouch = page.getByTestId('ammo-pouch');
+  await page.keyboard.press('Tab');
+  await expect(ammoPouch).toBeVisible();
+  for (const type of AMMO_TYPE_ORDER) {
+    const weapon = AMMO_TYPES[type].weapon;
+    const expectedReserve = type === firstAmmoBox.ammoType
+      ? Math.min(reservesBeforeAmmoPickup[type] + firstAmmoBox.quantity, WEAPONS[weapon].reserveMax)
+      : reservesBeforeAmmoPickup[type];
+    await expect(page.getByTestId(`ammo-pouch-${type}`)).toHaveAttribute('data-reserve', String(expectedReserve));
+  }
+  await page.keyboard.press('Tab');
+  await expect(ammoPouch).toBeHidden();
 
   await expect(page.getByTestId('ammo-box-count')).toHaveText('3');
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-active-tiles', waitingBoxKeys ?? '');
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-respawn-tiles', firstBoxKey);
-  await expect(page.getByTestId('ammo-reserve')).toHaveAttribute('data-reserve', '60');
+  await expect(page.getByTestId('ammo-reserve')).toHaveAttribute(
+    'data-reserve',
+    String(firstAmmoBox.ammoType === 'rifle-ammo'
+      ? Math.min(reservesBeforeAmmoPickup['rifle-ammo'] + firstAmmoBox.quantity, WEAPONS.rifle.reserveMax)
+      : reservesBeforeAmmoPickup['rifle-ammo']),
+  );
 
   await setArenaPhysics(page, 'pause');
+  await collectShotgunPickup(page);
   await page.keyboard.press('2');
   await expect(page.getByTestId('weapon')).toHaveText('ショットガン');
   await expect(page.getByTestId('ammo')).toHaveText('4/4');
@@ -943,6 +1801,7 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await page.keyboard.press('1');
   await expect(reloadProgress).toBeHidden();
   await expect.poll(async () => reloadProgress.evaluate(element => (element as HTMLProgressElement).value)).toBe(0);
+  await setPlayerInvulnerable(page, false);
   await setArenaPhysics(page, 'resume');
 
   await expect(page.getByTestId('defeat')).toBeVisible({ timeout: 45_000 });
@@ -952,15 +1811,16 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-respawn-tiles', '');
   expect(await documentBounds(gameCanvas)).toEqual(initialCanvasDocumentBounds);
   await page.getByTestId('retry').click();
+  await page.waitForTimeout(schedule.restDurationMs + 100);
   await expect(page.getByTestId('wave')).toHaveText('1');
-  await expect(page.getByTestId('wave-remaining')).toHaveText('02:30');
+  await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(schedule.combatWaveDurationMs));
   await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase', 'combat');
   await expect(page.getByTestId('run-phase')).toHaveText('夜（戦闘）');
-  await expect(page.getByTestId('phase-remaining')).toHaveText('02:30');
+  await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(schedule.combatWaveDurationMs));
   await setArenaPhysics(page, 'pause');
   await expect(page.getByTestId('defeat')).toBeHidden();
   await expect(page.getByTestId('victory')).toBeHidden();
-  await expect(page.getByTestId('survival-time')).toHaveText('09:30');
+  await expect(page.getByTestId('survival-time')).toHaveText(/^0[67]:\d\d$/);
   await expect(page.getByTestId('weapon')).toHaveText('アサルトライフル');
   await expect(page.getByTestId('ammo')).toHaveText('20/20');
   await expect(page.getByTestId('ammo-reserve')).toHaveText('予備 40/60');
@@ -996,6 +1856,8 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
 });
 
 test('初期8体を段階的に12体へ増やし、spawn phaseとcombat/rest境界を分離する', async ({ page }) => {
+  const schedule = createRunSchedule();
+  const { combatWaveDurationMs: combatDurationMs, restDurationMs } = schedule;
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
   await page.goto(devStartUrl('/'));
@@ -1009,16 +1871,29 @@ test('初期8体を段階的に12体へ増やし、spawn phaseとcombat/rest境�
   await expect(phaseHud).toHaveText('1');
   await expect(phaseHud).toHaveAttribute('data-phase', '0');
   await expect(primaryHud).toHaveAttribute('data-direction', phaseZeroPrimary);
+  await expect(page.getByTestId('wave')).toHaveText('1');
+  await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(0));
+  await expect(runPanel).toHaveAttribute('data-phase', 'preparation');
+  await expect(page.getByTestId('run-phase')).toHaveText('昼（準備）');
+  await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(restDurationMs));
+  for (const id of ENEMY_INSTANCE_IDS)
+    await expect(page.getByTestId(`${id}-hp`)).toHaveAttribute('data-active', 'false');
+  await expect(page.getByTestId('enemy-current')).toHaveText('0');
+  await expect(page.getByTestId('enemy-remaining')).toHaveText('0');
+  const preparationWorldItemTiles = new Set(
+    (await activeWorldItems(page)).map(({ tile }) => `${tile.x},${tile.y}`),
+  );
+  await startInitialCombat(page, restDurationMs);
   await expectEnemyHitPointsAndIds(page, 0);
   await expectStrictEnemySpawns(page, INITIAL_ACTIVE_IDS, 'initial');
   for (const { id } of STAGGERED_ENEMIES)
     await expect(page.getByTestId(`${id}-hp`)).toHaveAttribute('data-active', 'false');
   // 固定seedでinitial strict spawnが成功したことを確認してからHUDを比較する。
   await expect(page.getByTestId('wave')).toHaveText('1');
-  await expect(page.getByTestId('wave-remaining')).toHaveText('02:30');
+  await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(combatDurationMs));
   await expect(runPanel).toHaveAttribute('data-phase', 'combat');
   await expect(page.getByTestId('run-phase')).toHaveText('夜（戦闘）');
-  await expect(page.getByTestId('phase-remaining')).toHaveText('02:30');
+  await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(combatDurationMs));
   await expect(page.getByTestId('enemy-current')).toHaveText(String(INITIAL_ACTIVE_IDS.length));
   await expect(page.getByTestId('enemy-goal')).toHaveText(String(ENEMY_INSTANCE_IDS.length));
   await expect(page.getByTestId('enemy-remaining')).toHaveText(String(INITIAL_ACTIVE_IDS.length));
@@ -1048,6 +1923,7 @@ test('初期8体を段階的に12体へ増やし、spawn phaseとcombat/rest境�
     expect(metadata.spawnPhase).toBe('0');
     expect(metadata.primaryDirection).toBe(phaseZeroPrimary);
     expect(metadata.assignedDirection).toBe(spawnDirectionForSlot(phaseZeroPrimary, stableSlot));
+    expect(preparationWorldItemTiles.has(metadata.spawnTile)).toBe(false);
     const spawnTile = parseFloorTile(phaseZeroMap, metadata.spawnTile, `${metadata.stableId}の出現位置`);
     expect(directionFromPlayer(phaseZeroPlayer, spawnTile)).toBe(metadata.assignedDirection);
   });
@@ -1058,9 +1934,9 @@ test('初期8体を段階的に12体へ増やし、spawn phaseとcombat/rest境�
   await expect(phaseHud).toHaveAttribute('data-phase', '1');
   await expect(primaryHud).toHaveAttribute('data-direction', phaseOnePrimary);
   await expect(page.getByTestId('wave')).toHaveText('1');
-  await expect(page.getByTestId('wave-remaining')).toHaveText('01:30');
+  await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(combatDurationMs - SPAWN_PHASE_MS));
   await expect(runPanel).toHaveAttribute('data-phase', 'combat');
-  await expect(page.getByTestId('phase-remaining')).toHaveText('01:30');
+  await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(combatDurationMs - SPAWN_PHASE_MS));
   await expect(page.getByTestId('enemy-current')).toHaveText('12');
   await expect(page.getByTestId('enemy-remaining')).toHaveText('12');
   expect(phaseOnePrimary).not.toBe(phaseZeroPrimary);
@@ -1086,6 +1962,7 @@ test('初期8体を段階的に12体へ増やし、spawn phaseとcombat/rest境�
   expect(respawned.active).toBe('true');
   expect(respawned.spawnReason).toBe('debug');
   expect(respawned.visibility).toBe('hidden');
+  expect(preparationWorldItemTiles.has(respawned.spawnTile)).toBe(false);
   const respawnedTile = parseFloorTile(phaseZeroMap, respawned.spawnTile, `${respawned.stableId}の再出現位置`);
   expect(directionFromPlayer(phaseZeroPlayer, respawnedTile)).toBe(respawned.assignedDirection);
   expect(respawned.spawnTile).not.toBe(phaseZero[targetSlot].spawnTile);
@@ -1101,41 +1978,48 @@ test('初期8体を段階的に12体へ増やし、spawn phaseとcombat/rest境�
   await expect(phaseHud).toHaveAttribute('data-phase', '2');
   await expect(primaryHud).toHaveAttribute('data-direction', phaseTwoPrimary);
   await expect(page.getByTestId('wave')).toHaveText('1');
-  await expect(page.getByTestId('wave-remaining')).toHaveText('00:30');
+  await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(combatDurationMs - SPAWN_PHASE_MS * 2));
   await expect(runPanel).toHaveAttribute('data-phase', 'combat');
-  await expect(page.getByTestId('phase-remaining')).toHaveText('00:30');
+  await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(combatDurationMs - SPAWN_PHASE_MS * 2));
   expect(await allEnemySpawnMetadata(page)).toEqual(phaseOne);
   for (const { id, hp } of hitPointsBeforeRest)
     await expect(page.getByTestId(`${id}-hp`)).toHaveText(hp ?? '');
 
   const combatPanelBackground = await runPanel.evaluate(element => getComputedStyle(element).backgroundColor);
-  await page.clock.fastForward(COMBAT_WAVE_DURATION_MS - SPAWN_PHASE_MS * 2);
+  await page.clock.fastForward(combatDurationMs - SPAWN_PHASE_MS * 2);
   await expect(page.getByTestId('wave')).toHaveText('1');
-  await expect(page.getByTestId('wave-remaining')).toHaveText('00:00');
+  await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(0));
   await expect(runPanel).toHaveAttribute('data-phase', 'rest');
   await expect(page.getByTestId('run-phase')).toHaveText('昼（休憩）');
-  await expect(page.getByTestId('phase-remaining')).toHaveText('01:00');
+  await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(restDurationMs));
   expect(await runPanel.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe(combatPanelBackground);
   expect(await allEnemySpawnMetadata(page)).toEqual(phaseOne);
   for (const { id, hp } of hitPointsBeforeRest)
     await expect(page.getByTestId(`${id}-hp`)).toHaveText(hp ?? '');
 
-  await page.clock.fastForward(REST_DURATION_MS);
+  await page.clock.fastForward(restDurationMs);
   await expect(page.getByTestId('wave')).toHaveText('2');
-  await expect(page.getByTestId('wave-remaining')).toHaveText('02:30');
+  await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(combatDurationMs));
   await expect(runPanel).toHaveAttribute('data-phase', 'combat');
   await expect(page.getByTestId('run-phase')).toHaveText('夜（戦闘）');
-  await expect(page.getByTestId('phase-remaining')).toHaveText('02:30');
+  await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(combatDurationMs));
   expect(await allEnemySpawnMetadata(page)).toEqual(phaseOne);
 
   await page.getByTestId('retry').dispatchEvent('click');
   await expect(phaseHud).toHaveText('1');
   await expect(phaseHud).toHaveAttribute('data-phase', '0');
   await expect(page.getByTestId('wave')).toHaveText('1');
-  await expect(page.getByTestId('wave-remaining')).toHaveText('02:30');
+  await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(0));
+  await expect(runPanel).toHaveAttribute('data-phase', 'preparation');
+  await expect(page.getByTestId('run-phase')).toHaveText('昼（準備）');
+  await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(restDurationMs));
+  for (const id of ENEMY_INSTANCE_IDS)
+    await expect(page.getByTestId(`${id}-hp`)).toHaveAttribute('data-active', 'false');
+  await startInitialCombat(page, restDurationMs);
+  await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(combatDurationMs));
   await expect(runPanel).toHaveAttribute('data-phase', 'combat');
   await expect(page.getByTestId('run-phase')).toHaveText('夜（戦闘）');
-  await expect(page.getByTestId('phase-remaining')).toHaveText('02:30');
+  await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(combatDurationMs));
   await expectEnemyHitPointsAndIds(page, 0);
   for (const id of INITIAL_ACTIVE_IDS)
     await expect(page.getByTestId(`${id}-hp`)).toHaveAttribute('data-active', 'true');
@@ -1148,9 +2032,15 @@ test('初期8体を段階的に12体へ増やし、spawn phaseとcombat/rest境�
 });
 
 test('DEV queryでspawnとcombat/rest scheduleを開始前に固定する', async ({ page }) => {
+  const schedule = createRunSchedule(1_000, 500);
+  const { combatWaveDurationMs, restDurationMs } = schedule;
+  const staggerIntervalMs = 500;
+  const boundaryMarginMs = 100;
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
-  await page.goto(devStartUrl('/?enemyInitialCount=1&enemyStaggerIntervalMs=500&enemySpawnCandidatePool=1&combatWaveDurationMs=1000&restDurationMs=500'));
+  await page.goto(devStartUrl(
+    `/?enemyInitialCount=1&enemyStaggerIntervalMs=${staggerIntervalMs}&enemySpawnCandidatePool=1&combatWaveDurationMs=${combatWaveDurationMs}&restDurationMs=${restDurationMs}`,
+  ));
   await setHiddenRecycle(page, false);
   await setArenaPhysics(page, 'pause');
   const phaseHud = page.getByTestId('spawn-phase');
@@ -1161,35 +2051,66 @@ test('DEV queryでspawnとcombat/rest scheduleを開始前に固定する', asyn
   const runPanel = page.getByTestId('run-panel');
   await expect(runPanel).toHaveAttribute(
     'data-run-config',
-    'combatWaveDurationMs=1000;restDurationMs=500',
+    `combatWaveDurationMs=${combatWaveDurationMs};restDurationMs=${restDurationMs}`,
   );
-  await expect(page.getByTestId('survival-time')).toHaveText('00:04');
+  await expect(page.getByTestId('survival-time')).toHaveText(formatSurvivalTime(runDurationMs(schedule)));
   await expect(page.getByTestId('wave')).toHaveText('1');
-  await expect(page.getByTestId('wave-remaining')).toHaveText('00:01');
-  await expect(runPanel).toHaveAttribute('data-phase', 'combat');
-  await expect(page.getByTestId('run-phase')).toHaveText('夜（戦闘）');
-  await expect(page.getByTestId('phase-remaining')).toHaveText('00:01');
+  await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(0));
+  await expect(runPanel).toHaveAttribute('data-phase', 'preparation');
+  await expect(page.getByTestId('run-phase')).toHaveText('昼（準備）');
+  await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(restDurationMs));
+  for (const id of ENEMY_SPAWN_ORDER) {
+    await expect(page.getByTestId(`${id}-hp`)).toHaveAttribute('data-active', 'false');
+  }
+  await startInitialCombat(page, restDurationMs);
   await expect(page.getByTestId(`${ENEMY_SPAWN_ORDER[0]}-hp`)).toHaveAttribute('data-active', 'true');
   await expect(page.getByTestId(`${ENEMY_SPAWN_ORDER[0]}-hp`)).toHaveAttribute('data-spawn-reason', 'initial');
-  for (const id of ENEMY_SPAWN_ORDER.slice(1)) {
-    await expect(page.getByTestId(`${id}-hp`)).toHaveAttribute('data-active', 'false');
+  for (const id of ENEMY_SPAWN_ORDER.slice(1))
     await expect(page.getByTestId(`${id}-hp`)).toHaveAttribute('data-spawn-reason', 'stagger');
-  }
 
-  await page.clock.runFor(600);
+  await page.clock.runFor(staggerIntervalMs + boundaryMarginMs);
   await expect(page.getByTestId(`${ENEMY_SPAWN_ORDER[1]}-hp`)).toHaveAttribute('data-active', 'true');
   await expect(page.getByTestId(`${ENEMY_SPAWN_ORDER[1]}-hp`)).toHaveAttribute('data-spawn-reason', 'stagger');
   // frame更新の端数を越えてrestへ入り、境界ちょうどの表示競合を避ける。
-  await page.clock.runFor(500);
+  await page.clock.runFor(combatWaveDurationMs - staggerIntervalMs);
   await expect(runPanel).toHaveAttribute('data-phase', 'rest');
   await expect(page.getByTestId('run-phase')).toHaveText('昼（休憩）');
   await expect(page.getByTestId('wave')).toHaveText('1');
-  await expect(page.getByTestId('wave-remaining')).toHaveText('00:00');
-  await expect(page.getByTestId('phase-remaining')).toHaveText('00:01');
-  await page.clock.runFor(500);
+  await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(0));
+  await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(restDurationMs - boundaryMarginMs));
+  await page.clock.runFor(restDurationMs);
   await expect(page.getByTestId('wave')).toHaveText('2');
-  await expect(page.getByTestId('wave-remaining')).toHaveText('00:01');
+  await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(combatWaveDurationMs - boundaryMarginMs));
   await expect(runPanel).toHaveAttribute('data-phase', 'combat');
+});
+
+test('初回combat境界を越えて最初のrestへ大きく進めてもenemy lifecycleを一度だけ開始する', async ({ page }) => {
+  const boundaryMarginMs = 100;
+  const preparationDurationMs = 500;
+  const schedule = createRunSchedule(
+    SPAWN_PHASE_MS - preparationDurationMs - boundaryMarginMs * 2,
+    preparationDurationMs,
+  );
+  const firstRestElapsedMs = schedule.restDurationMs + schedule.combatWaveDurationMs + boundaryMarginMs;
+  await page.clock.install({ time: 1 });
+  await page.clock.pauseAt(1);
+  await page.goto(devStartUrl(
+    `/?enemyInitialCount=1&enemyStaggerIntervalMs=30000&combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+  ));
+  await setArenaPhysics(page, 'pause');
+  await setHiddenRecycle(page, false);
+  await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase', 'preparation');
+  await expect(page.getByTestId('basic-1-hp')).toHaveAttribute('data-active', 'false');
+
+  await page.clock.fastForward(firstRestElapsedMs);
+
+  await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase', 'rest');
+  await expect(page.getByTestId('basic-1-hp')).toHaveAttribute('data-active', 'true');
+  await expect(page.getByTestId('basic-1-hp')).toHaveAttribute('data-spawn-reason', 'initial');
+  await expect(page.getByTestId('spawn-phase')).toHaveAttribute('data-phase', '0');
+  const initialSpawn = await enemySpawnMetadata(page, 'basic-1');
+  await page.clock.runFor(boundaryMarginMs);
+  expect(await enemySpawnMetadata(page, 'basic-1')).toEqual(initialSpawn);
 });
 
 test('不正なDEV spawnとschedule queryは既定値へ戻す', async ({ page }) => {
@@ -1207,10 +2128,12 @@ test('不正なDEV spawnとschedule queryは既定値へ戻す', async ({ page }
 test('hidden recycleはHPを維持し、deathだけ全回復し、retry後に旧callbackを残さない', async ({ page }) => {
   // 80×50マップの再出現・retry仮想時計処理に、実時間の余裕を持たせる。
   test.setTimeout(90_000);
+  const schedule = createRunSchedule();
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
   await page.goto(devStartUrl('/'));
   await setArenaPhysics(page, 'pause');
+  await startInitialCombat(page, schedule.restDurationMs);
   await expectStrictEnemySpawns(page, INITIAL_ACTIVE_IDS, 'initial');
   const mapSeed = Number(await page.getByTestId('map-seed').textContent());
   const map = generateArenaMap(mapSeed);
@@ -1289,6 +2212,10 @@ test('hidden recycleはHPを維持し、deathだけ全回復し、retry後に旧
   await setHiddenRecycle(page, false);
   await setArenaPhysics(page, 'pause');
   const retryEnemyHp = page.getByTestId(`${otherInitialBasic.id}-hp`);
+  const preCombatGuardDelay = Math.min(oldDeathDelay + 100, schedule.restDurationMs - 1_000);
+  await page.clock.runFor(preCombatGuardDelay);
+  await expect(retryEnemyHp).toHaveAttribute('data-active', 'false');
+  await startInitialCombat(page, schedule.restDurationMs - preCombatGuardDelay);
   await page.clock.runFor(1_100);
   await expect(retryEnemyHp).toHaveAttribute('data-active', 'true');
   await expect(retryEnemyHp).toHaveAttribute('data-spawn-reason', 'initial');
@@ -1305,12 +2232,16 @@ test('hidden recycleはHPを維持し、deathだけ全回復し、retry後に旧
 
 test('restではpath距離5 tile以上のhidden敵をrecycleできる', async ({ page }) => {
   test.setTimeout(90_000);
+  const schedule = createRunSchedule(1_000, 30_000);
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
-  await page.goto(devStartUrl('/?enemyInitialCount=1&enemyStaggerIntervalMs=30000&combatWaveDurationMs=1000&restDurationMs=30000'));
+  await page.goto(devStartUrl(
+    `/?enemyInitialCount=1&enemyStaggerIntervalMs=30000&combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+  ));
   await setArenaPhysics(page, 'pause');
   await setHiddenRecycle(page, false);
   const target: EnemyId = 'basic-1';
+  await startInitialCombat(page, schedule.restDurationMs);
   await expectStrictEnemySpawns(page, [target], 'initial');
   const mapSeed = Number(await page.getByTestId('map-seed').textContent());
   const map = generateArenaMap(mapSeed);
@@ -1349,37 +2280,42 @@ test('restではpath距離5 tile以上のhidden敵をrecycleできる', async ({
 });
 
 test('DEV scheduleの終端で勝利し、再挑戦でcombat phaseを初期化できる', async ({ page }) => {
+  const schedule = createRunSchedule(1_000, 500);
   await page.clock.install({ time: 15 });
   await page.clock.pauseAt(15);
-  await page.goto(devStartUrl('/?combatWaveDurationMs=1000&restDurationMs=500'));
+  await page.goto(devStartUrl(
+    `/?combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+  ));
   await setPlayerInvulnerable(page, true);
-  await expect(page.getByTestId('survival-time')).toHaveText('00:04');
+  await expect(page.getByTestId('survival-time')).toHaveText(formatSurvivalTime(runDurationMs(schedule)));
   const playerTile = page.getByTestId('player-tile');
   const beforeTerminalTile = await playerTile.textContent();
-  await page.clock.fastForward(4000);
-  await expect(page.getByTestId('survival-time')).toHaveText('00:00');
+  await page.clock.fastForward(runDurationMs(schedule));
+  await expect(page.getByTestId('survival-time')).toHaveText(formatSurvivalTime(0));
   await expect(page.getByTestId('wave')).toHaveText('3');
   await expect(page.getByTestId('wave')).toHaveAttribute('data-state', 'victory');
-  await expect(page.getByTestId('wave-remaining')).toHaveText('00:00');
-  await expect(page.getByTestId('phase-remaining')).toHaveText('00:00');
+  await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(0));
+  await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(0));
   await expect(page.getByTestId('victory')).toBeVisible();
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-respawn-tiles', '');
   await expect(page.getByTestId('defeat')).toBeHidden();
   await page.keyboard.press('2');
   await expect(page.getByTestId('weapon')).toHaveText('アサルトライフル');
   await page.keyboard.down('d');
-  await page.clock.fastForward(500);
+  await page.clock.fastForward(schedule.restDurationMs);
   await page.keyboard.up('d');
   await expect(playerTile).toHaveText(beforeTerminalTile ?? '');
   await page.getByTestId('retry').click();
   await expect(page.getByTestId('victory')).toBeHidden();
   await expect(page.getByTestId('defeat')).toBeHidden();
-  await expect(page.getByTestId('survival-time')).toHaveText('00:04');
+  await expect(page.getByTestId('survival-time')).toHaveText(formatSurvivalTime(runDurationMs(schedule)));
   await expect(page.getByTestId('wave')).toHaveText('1');
   await expect(page.getByTestId('wave')).toHaveAttribute('data-state', 'playing');
-  await expect(page.getByTestId('wave-remaining')).toHaveText('00:01');
-  await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase', 'combat');
-  await expect(page.getByTestId('phase-remaining')).toHaveText('00:01');
+  await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(0));
+  await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase', 'preparation');
+  await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(schedule.restDurationMs));
+  await expect(page.getByTestId('enemy-current')).toHaveText('0');
+  await startInitialCombat(page, schedule.restDurationMs);
   const activeAfterVictoryRetry = (await allEnemySpawnMetadata(page))
     .filter(metadata => metadata.active === 'true').length;
   await expect(page.getByTestId('enemy-current')).toHaveText(String(activeAfterVictoryRetry));
@@ -1396,6 +2332,9 @@ test('弾薬箱は取得後30秒で同じboxIdのまま新しい画面外floor�
   await page.clock.setFixedTime(15);
   await page.goto(devStartUrl('/'));
   await setPlayerInvulnerable(page, true);
+  const initialWorldItemTiles = new Set(
+    (await activeWorldItems(page)).map(({ tile }) => `${tile.x},${tile.y}`),
+  );
   const mapSeed = Number(await page.getByTestId('map-seed').textContent());
   const map = generateArenaMap(mapSeed);
   const boxTiles = selectAmmoBoxTiles(map);
@@ -1407,6 +2346,11 @@ test('弾薬箱は取得後30秒で同じboxIdのまま新しい画面外floor�
   const firstBoxKey = firstBox.x + ',' + firstBox.y;
   const boxCount = page.getByTestId('ammo-box-count');
   await expect(boxCount).toHaveAttribute('data-active-boxes', new RegExp(boxId + ':' + firstBoxKey));
+  const initialBox = (await activeAmmoBoxes(page)).find(entry => entry.boxId === boxId);
+  if (!initialBox) throw new Error('初期種類別弾薬箱が必要です。');
+  expect(initialBox.quantity).toBe(AMMO_TYPES[initialBox.ammoType].boxQuantity);
+  expect(initialBox.worldColor).toBe(AMMO_TYPES[initialBox.ammoType].worldColor);
+  expect(initialBox.texture).toBe(`ammo-box-${initialBox.ammoType}`);
   await collectAmmoBoxWithClock(page, firstBox, boxCount);
   await expect(boxCount).toHaveText('3');
   await expect(boxCount).toHaveAttribute('data-respawn-boxes', boxId);
@@ -1415,25 +2359,32 @@ test('弾薬箱は取得後30秒で同じboxIdのまま新しい画面外floor�
   await page.clock.runFor(AMMO_BOX_RESPAWN_MS);
   await expect.poll(async () => boxCount.textContent()).toBe('4');
   await expect(boxCount).toHaveAttribute('data-respawn-boxes', '');
-  const activeEntries = (await boxCount.getAttribute('data-active-boxes'))?.split('|') ?? [];
-  const respawnedEntry = activeEntries.find(entry => entry.startsWith(boxId + ':'));
-  if (!respawnedEntry) throw new Error('復活した弾薬箱のboxIdが必要です。');
-  const respawnedKey = respawnedEntry.split(':')[1];
-  if (!respawnedKey) throw new Error('復活した弾薬箱のtileが必要です。');
+  const activeEntries = await activeAmmoBoxes(page);
+  const respawnedEntry = activeEntries.find(entry => entry.boxId === boxId);
+  if (!respawnedEntry) throw new Error('復活した種類別弾薬箱のboxIdが必要です。');
+  const respawnedKey = `${respawnedEntry.tile.x},${respawnedEntry.tile.y}`;
   expect(respawnedKey).not.toBe(firstBoxKey);
+  expect(respawnedEntry.ammoType).toBe(initialBox.ammoType);
+  expect(respawnedEntry.quantity).toBe(AMMO_TYPES[initialBox.ammoType].boxQuantity);
+  expect(respawnedEntry.worldColor).toBe(initialBox.worldColor);
+  expect(respawnedEntry.texture).toBe(initialBox.texture);
+  expect(initialWorldItemTiles.has(respawnedKey)).toBe(false);
   const [x, y] = respawnedKey.split(',').map(Number);
   expect(map.tiles[y][x]).toBe('floor');
   expect(findPath(map, map.start, { x, y }).length).toBeGreaterThan(0);
   expect((await boxCount.getAttribute('data-offscreen-boxes'))?.split('|')).toContain(boxId);
-  expect(new Set(activeEntries.map(entry => entry.split(':')[0])).size).toBe(activeEntries.length);
+  expect(new Set(activeEntries.map(entry => entry.boxId)).size).toBe(activeEntries.length);
 });
 
 test('victoryとretryは弾薬箱の復活待ちをclearし、新しいrunを初期化する', async ({ page }) => {
   test.setTimeout(120_000);
+  const schedule = createRunSchedule(10_000, 5_000);
   await page.clock.install({ time: 0 });
   await page.clock.setFixedTime(15);
-  const terminalRunDurationMs = 40_000;
-  await page.goto(devStartUrl('/?combatWaveDurationMs=10000&restDurationMs=5000'));
+  const terminalRunDurationMs = runDurationMs(schedule);
+  await page.goto(devStartUrl(
+    `/?combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+  ));
   await setPlayerInvulnerable(page, true);
   const mapSeed = Number(await page.getByTestId('map-seed').textContent());
   const map = generateArenaMap(mapSeed);
@@ -1458,7 +2409,7 @@ test('victoryとretryは弾薬箱の復活待ちをclearし、新しいrunを初
   await expect(boxCount).toHaveAttribute('data-respawn-tiles', '');
   await page.getByTestId('retry').click();
   await expect(page.getByTestId('victory')).toBeHidden();
-  await expect(page.getByTestId('survival-time')).toHaveText('00:40');
+  await expect(page.getByTestId('survival-time')).toHaveText(formatSurvivalTime(terminalRunDurationMs));
   await expectAmmoBoxCount(boxCount, 4);
   await expect(boxCount).toHaveAttribute('data-respawn-boxes', '');
 });

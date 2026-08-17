@@ -10,7 +10,7 @@ specification: SPEC-SURVIVAL-TIME-LIMIT
 
 既存のCombatState、Phaser SceneのTimerEvent、generation、respawns、flashes、reloadTimer、ammoBoxes、DOM HUDを再利用する。新しいゲーム基盤や依存は導入しない。TypeScript設計は手動同期とし、新しいDOCGEN transformは追加しない。
 
-[DESIGN-BASIC-WAVE-PROGRESSION](wave-progression-v1.md)は、ここで扱う180000ms生存timerと各60000ms waveを、3 combat wave各150000ms、wave 1/2後のrest各60000ms、dynamicな570000ms既定scheduleへsupersedeする。この文書の旧時間値は履歴であり、現在の時間・phase・HUD設計はDESIGN-BASIC-WAVE-PROGRESSIONを正本とする。terminal停止、retry、ammo box respawn、phase境界でenemy配置を変更しない経路は維持する。
+[DESIGN-BASIC-WAVE-PROGRESSION](wave-progression-v1.md)は、ここで扱う180000ms生存timerと各60000ms waveを、enemy-free初回準備60000ms、3 combat wave各150000ms、wave 1/2後のrest各60000ms、dynamicな630000ms既定scheduleへsupersedeする。この文書の旧時間値、利用者導線、状態遷移、検証は#71前の履歴であり、現在の時間・phase・HUD設計はDESIGN-BASIC-WAVE-PROGRESSIONを正本とする。terminal停止、retry、ammo box respawn、combat開始後のphase境界でenemy配置を変更しない経路は維持する。
 
 | 責務 | 実装経路 |
 | --- | --- |
@@ -21,7 +21,7 @@ specification: SPEC-SURVIVAL-TIME-LIMIT
 | 表示 | index.html/style.css の残り時間、result panel、Victory UI、aria-live |
 | 期待値 | tests/rules.test.ts と e2e/prototype.spec.ts |
 
-## 利用者導線
+## #71前の利用者導線（履歴）
 
 1. run開始時にtimerを作成し、HUDへ03:00を表示する。
 2. プレイヤーは既存の移動、射撃、リロード、箱取得を行う。
@@ -33,9 +33,9 @@ specification: SPEC-SURVIVAL-TIME-LIMIT
 
 #21/#35のammo-supply-v1にある「同一run中は取得箱を再出現させない」は履歴契約として維持する。#34 follow-upが限定的にsupersedeするのはfield ammo box（map上のammo box）の再出現処理だけであり、既存の有限ammo契約、ammo/map配置文書、その他の#21/#35実装は変更しない。
 
-survival timerは180000ms、ammo box復活timerは取得から30000msである。victory/defeat/retryで復活timerを停止・clearするterminal優先を守り、terminal後にpending callbackから箱を再出現させない。
+#71前のsurvival timerは180000msであり、ammo box復活timerは取得から30000msである。victory/defeat/retryで復活timerを停止・clearするterminal優先を守り、terminal後にpending callbackから箱を再出現させない。
 
-## 状態遷移
+## #71前の状態遷移（履歴）
 
 ~~~mermaid
 stateDiagram-v2
@@ -54,7 +54,7 @@ victoryとdefeatはterminalであり、入力イベントが届いてもルー�
 - 旧generationのsurvival、敵respawn、flash、reload、ammo box callbackは状態、sprite、HUDを変更しない。
 - 復活待ち中の箱に再度overlapが届いても、active spriteが存在しないため取得処理とtimer登録を行わない。
 - 既に同じboxIdのtimerがある場合は追加登録せず、callback時にも同じboxIdまたは同じtileのactive箱を重複生成しない。
-- 復活callbackは現在のplayer、camera viewport、active box、enemyをoccupiedとしてselectSpawnTileへ渡し、viewport外の到達可能floorをseed決定的に選ぶ。viewport外候補がない場合は最遠floorへfallbackし、元tileはoccupiedとして除外する。
+- 復活callbackは現在のplayer、camera viewport、active box、active world item（weapon/material/ammo）、enemyをoccupiedとしてselectSpawnTileへ渡し、viewport外の到達可能floorをseed決定的に選ぶ。viewport外候補がない場合は最遠floorへfallbackし、元tileはoccupiedとして除外する。
 - terminal中の箱復活callbackは副作用なしで終了する。
 - retryは新generationを先に発行してから全timerを停止するため、旧mapのcallbackを新mapへ適用しない。
 - 既存の弾切れ、予備弾薬0、リロード中断、敗北の表示と導線は維持する。

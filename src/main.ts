@@ -1,11 +1,11 @@
 import Phaser from 'phaser';
-import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, basicApproachRoleFor, enemyVisibility, findPath, hasLineOfSight, type EnemyVisibility, generateArenaMap, generateNextArenaMap, hiddenRecycleThresholdFor, nextSeed, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, selectEnemySpawnTile, selectSpawnTile, spawnDirectionForSlot, spawnPhaseAt, type ArenaMap, type TilePosition, viewportTileRect } from './arena-map';
+import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, basicApproachRoleFor, enemyVisibility, findPath, hasLineOfSight, type EnemyVisibility, generateArenaMap, generateNextArenaMap, hiddenRecycleThresholdFor, nextSeed, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, selectEnemySpawnTile, selectInitialWeaponPickupTiles, selectSpawnTile, selectWorldWeaponDropTile, spawnDirectionForSlot, spawnPhaseAt, type ArenaMap, type TilePosition, viewportTileRect } from './arena-map';
 import { ArenaEffects } from './arena/effects';
-import { ArenaHud } from './arena/hud';
-import { ENEMIES, ENEMY_DEFEAT_HIT_STOP_MS, ENEMY_HIT_STOP_MS, ENEMY_IDS, ENEMY_LABELS, ENEMY_SPAWN_ORDER, INITIAL_ENEMY_IDS, PLAYER_HIT_STOP_MS, STAGGERED_ENEMIES } from './game-data';
+import { ArenaHud, type InventoryDragSource, type InventoryDropTarget } from './arena/hud';
+import { ENEMIES, ENEMY_DEFEAT_HIT_STOP_MS, ENEMY_HIT_STOP_MS, ENEMY_IDS, ENEMY_LABELS, ENEMY_SPAWN_ORDER, INITIAL_ENEMY_IDS, INITIAL_WORLD_WEAPON_MODELS, PLAYER_HIT_STOP_MS, SCRAP_DROP_AMOUNTS, STAGGERED_ENEMIES, scrapVisualTierFor, type ScrapVisualTier } from './game-data';
 import { GUNSLINGER_BOOT_KNIFE_DAMAGE, GUNSLINGER_COMBO_TIMEOUT_MS, PLAYER_DASH_DURATION_MS, PLAYER_ROLES, canDashAt, canFireWhileDashing, dashCooldownUntil, dashDirectionFor, dashSpeedFor, gunslingerComboAfterEvent, gunslingerSpeedBuffUntil, gunslingerSpeedMultiplierAt, type DashDirection, type PlayerRole } from './player-data';
 import { selectNearbyPickup } from './pickups';
-import { AMMO_BOX_RESPAWN_MS, COMBAT_WAVE_DURATION_MS, REST_DURATION_MS, WEAPONS, advanceRunState, advanceSurvivalState, cancelReload, collectAmmoBox as collectAmmoBoxState, completeReload, createRunSchedule, currentRunPhase, damageEnemy, damagePlayer, defeatRun, droneLateralSpeedAt, enemySpeedMultiplierForPhase, fireWeapon, hiddenRecyclePathDistanceForPhase, isEnemyDefeated, recordEnemyDefeated, recordEnemyRecycled, recordEnemySpawned, remainingSurvivalMs, resolveDamage, respawnEnemy, retryCombat, retryRun, runDurationMs, selectWeapon, startReload, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type RunPhase, type RunSchedule, type RunState, type WeaponId } from './rules';
+import { AMMO_BOX_RESPAWN_MS, AMMO_TYPES, AMMO_TYPE_ORDER, COMBAT_WAVE_DURATION_MS, REST_DURATION_MS, WEAPON_MODELS, WEAPONS, activeWeaponId, advanceRunState, advanceSurvivalState, cancelReload, collectMaterial, collectTypedAmmoBox, collectWeapon, completeReload, createRunSchedule, currentRunPhase, damageEnemy, damagePlayer, defeatRun, dropAmmoBox, droneLateralSpeedAt, enemySpeedMultiplierForPhase, fireWeapon, hiddenRecyclePathDistanceForPhase, inventoryWeaponAt, isEnemyDefeated, moveInventoryWeapon, recordEnemyDefeated, recordEnemyRecycled, recordEnemySpawned, remainingSurvivalMs, removeInventoryWeapon, resolveDamage, respawnEnemy, retryCombat, retryRun, runDurationMs, selectQuickSlot, startReload, type AmmoType, type CombatState, type DamageType, type EnemyInstanceId, type EnemyKind, type InventorySlotRef, type MaterialId, type RunPhase, type RunSchedule, type RunState, type WeaponId, type WeaponModel } from './rules';
 
 const WIDTH = 800;
 const HEIGHT = 500;
@@ -52,7 +52,41 @@ type AmmoBoxState = {
   currentTile: TilePosition | null;
   respawnCount: number;
   seedOffset: number;
+  ammoType: AmmoType;
+  quantity: number;
 };
+type WeaponWorldItem = {
+  id: string;
+  kind: 'weapon';
+  tile: TilePosition;
+  quantity: number;
+  model: WeaponModel;
+  sprite: Phaser.Physics.Arcade.Image;
+};
+type MaterialWorldItem = {
+  id: string;
+  kind: 'material';
+  tile: TilePosition;
+  quantity: number;
+  material: MaterialId;
+  visualTier: ScrapVisualTier;
+  sprite: Phaser.Physics.Arcade.Image;
+};
+type AmmoWorldItem = {
+  id: string;
+  kind: 'ammo';
+  tile: TilePosition;
+  quantity: number;
+  ammoType: AmmoType;
+  worldColor: string;
+  texture: string;
+  sprite: Phaser.Physics.Arcade.Image;
+};
+type WorldItem = WeaponWorldItem | MaterialWorldItem | AmmoWorldItem;
+type NearbyPickup
+  = { id: string; tile: TilePosition; kind: 'ammo'; box: Phaser.GameObjects.GameObject }
+    | { id: string; tile: TilePosition; kind: 'world'; item: WorldItem };
+type PickupPrompt = { target: string; action: string };
 type PlayerDash = {
   directionX: number;
   directionY: number;
@@ -147,10 +181,14 @@ class Arena extends Phaser.Scene {
   private bullets!: Phaser.Physics.Arcade.Group;
   private walls!: Phaser.Physics.Arcade.StaticGroup;
   private ammoBoxes!: Phaser.Physics.Arcade.StaticGroup;
+  private worldItems!: Phaser.Physics.Arcade.StaticGroup;
   private ammoBoxStates = new Map<string, AmmoBoxState>();
+  private worldItemStates = new Map<string, WorldItem>();
   private ammoBoxRespawns = new Map<string, Phaser.Time.TimerEvent>();
   private survivalTimer: Phaser.Time.TimerEvent | undefined;
   private survivalStartedAt = 0;
+  private combatStartedAt = 0;
+  private enemyLifecycleStarted = false;
   private ground: Phaser.GameObjects.Graphics | undefined;
   private wallArt: Phaser.GameObjects.Graphics | undefined;
   private fadingGround: Phaser.GameObjects.Graphics | undefined;
@@ -185,6 +223,16 @@ class Arena extends Phaser.Scene {
   private recyclingEnemyId: EnemyInstanceId | undefined;
   private hiddenRecycleEnabled = true;
   private debugPlayerInvulnerable = false;
+  private inventoryOpen = false;
+  private droppedWeaponSequence = 0;
+  private droppedAmmoSequence = 0;
+  private readonly onTabKeyDown = (event: KeyboardEvent): void => {
+    if (event.code !== 'Tab')
+      return;
+    event.preventDefault();
+    this.toggleInventory();
+  };
+
   private paths = {} as Record<EnemyInstanceId, PathState>;
   private enemySpawnTimers = new Map<EnemyInstanceId, Phaser.Time.TimerEvent>();
   private reloadTimer: Phaser.Time.TimerEvent | undefined;
@@ -195,10 +243,12 @@ class Arena extends Phaser.Scene {
 
   create(): void {
     resetArena = () => this.reset();
+    arenaHud.setInventoryDropListener((source, target) => this.handleInventoryDrop(source, target));
     this.createTextures();
     this.effects = new ArenaEffects(this, arenaHud.playerHitVignette, this.playerRole.tint);
     this.walls = this.physics.add.staticGroup();
     this.ammoBoxes = this.physics.add.staticGroup();
+    this.worldItems = this.physics.add.staticGroup();
     this.player = this.physics.add
       .sprite(0, 0, 'player')
       .setCollideWorldBounds(true)
@@ -226,19 +276,27 @@ class Arena extends Phaser.Scene {
     this.physics.add.collider(this.bullets, this.walls, first => this.disableBullet(first as Phaser.Physics.Arcade.Sprite));
     ENEMY_IDS.forEach(id => this.physics.add.overlap(this.bullets, this.enemies[id], (first, second) => this.hitEnemy(first, second, id)));
     this.keys = this.input.keyboard!.addKeys({ w: 'W', a: 'A', s: 'S', d: 'D', r: 'R', e: 'E', space: 'SPACE', shift: 'SHIFT', up: 'UP', down: 'DOWN', left: 'LEFT', right: 'RIGHT' }) as Controls;
-    this.input.keyboard?.on('keydown-ONE', () => this.changeWeapon('rifle'));
-    this.input.keyboard?.on('keydown-TWO', () => this.changeWeapon('shotgun'));
+    this.input.keyboard?.on('keydown-ONE', () => this.changeQuickSlot(0));
+    this.input.keyboard?.on('keydown-TWO', () => this.changeQuickSlot(1));
+    this.input.keyboard?.on('keydown-THREE', () => this.changeQuickSlot(2));
+    window.addEventListener('keydown', this.onTabKeyDown, true);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      window.removeEventListener('keydown', this.onTabKeyDown, true);
+      arenaHud.clearInventoryDrag(true);
+      arenaHud.setInventoryDropListener(undefined);
+    });
     this.input.keyboard?.on('keydown-R', () => this.reload());
-    this.input.keyboard?.on('keydown-E', () => this.collectNearbyAmmoBox());
+    this.input.keyboard?.on('keydown-E', () => this.collectNearbyPickup());
     this.input.keyboard?.on('keydown-SPACE', () => this.tryDash());
     this.input.keyboard?.on('keydown-SHIFT', () => this.tryDash());
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => this.updateAimDirection(pointer));
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       this.updateAimDirection(pointer);
-      if (!WEAPONS[this.state.weapon].automatic)
+      const weapon = activeWeaponId(this.state);
+      if (weapon && !WEAPONS[weapon].automatic)
         this.tryFire();
     });
-    this.input.keyboard?.addCapture(['W', 'A', 'S', 'D', 'R', 'E', 'SPACE', 'SHIFT', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'ONE', 'TWO']);
+    this.input.keyboard?.addCapture(['W', 'A', 'S', 'D', 'R', 'E', 'TAB', 'SPACE', 'SHIFT', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'ONE', 'TWO', 'THREE']);
     this.reset(true);
   }
 
@@ -246,10 +304,10 @@ class Arena extends Phaser.Scene {
     if (this.state.defeated || this.state.victory)
       return;
     arenaHud.updateFps(Math.round(this.game.loop.actualFps));
-    this.updateSpawnPhaseHud();
     this.updateSurvival();
     if (this.state.defeated || this.state.victory)
       return;
+    this.updateSpawnPhaseHud();
     this.updatePlayerMovement();
     this.updateTileHud();
     this.updatePickupPrompt();
@@ -261,7 +319,8 @@ class Arena extends Phaser.Scene {
       const aim = this.aimPoint();
       this.player.rotation = Phaser.Math.Angle.Between(this.player.x, this.player.y, aim.x, aim.y);
     }
-    if (WEAPONS[this.state.weapon].automatic && this.input.activePointer.isDown)
+    const weapon = activeWeaponId(this.state);
+    if (weapon && WEAPONS[weapon].automatic && this.input.activePointer.isDown)
       this.tryFire();
     this.bullets.getChildren().forEach((child) => {
       const bullet = child as Phaser.Physics.Arcade.Sprite;
@@ -441,7 +500,7 @@ class Arena extends Phaser.Scene {
     if (this.state.enemies[id].hp < previousHp)
       this.extendGunslingerComboTimeout();
     const defeated = isEnemyDefeated(this.state, id);
-    this.startEnemyImpact(id, this.state.weapon, defeated);
+    this.startEnemyImpact(id, activeWeaponId(this.state) ?? 'rifle', defeated);
     if (defeated) this.scheduleDefeatedEnemy(id);
     this.refreshHud();
   }
@@ -452,8 +511,15 @@ class Arena extends Phaser.Scene {
     this.physics.resume();
     this.state = retryCombat();
     this.runState = retryRun(RUN_SCHEDULE);
+    this.inventoryOpen = false;
+    arenaHud.setInventoryOpen(false);
+    arenaHud.clearInventoryDrag(true);
     this.mapPhase = undefined;
     this.survivalStartedAt = this.time.now;
+    this.combatStartedAt = 0;
+    this.enemyLifecycleStarted = false;
+    this.droppedWeaponSequence = 0;
+    this.droppedAmmoSequence = 0;
     this.contactAt = enemyNumbers();
     this.playerHitStopUntil = 0;
     this.playerDash = undefined;
@@ -497,12 +563,8 @@ class Arena extends Phaser.Scene {
     camera.startFollow(this.player);
     camera.preRender();
     this.buildAmmoBoxes();
+    this.buildWorldItems();
     this.updatePickupPrompt();
-    initialEnemyIds.forEach((id) => {
-      if (!this.spawnEnemy(id, 'initial'))
-        this.scheduleEnemySpawn(id, 'initial', 1000);
-    });
-    staggeredEnemiesFor(ENEMY_SPAWN_CONFIG).forEach(({ id, delay }) => this.scheduleEnemySpawn(id, 'stagger', delay));
     this.updateEnemyVisibility(true);
     this.startSurvivalTimer();
     if (IS_DEV)
@@ -519,7 +581,9 @@ class Arena extends Phaser.Scene {
     this.wallArt = undefined;
     this.walls.clear(true, true);
     this.ammoBoxes.clear(true, true);
+    this.worldItems.clear(true, true);
     this.ammoBoxStates.clear();
+    this.worldItemStates.clear();
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     for (let y = 0; y < this.map.height; y += 1)
       for (let x = 0; x < this.map.width; x += 1)
@@ -607,13 +671,104 @@ class Arena extends Phaser.Scene {
   private buildAmmoBoxes(): void {
     selectAmmoBoxTiles(this.map).forEach((tile, index) => {
       const boxId = `ammo-box-${index + 1}`;
+      const ammoType = AMMO_TYPE_ORDER[index % AMMO_TYPE_ORDER.length];
+      if (!ammoType)
+        throw new Error('弾薬種の設定がありません。');
       this.ammoBoxStates.set(boxId, {
         originTile: { ...tile },
         currentTile: null,
         respawnCount: 0,
         seedOffset: index,
+        ammoType,
+        quantity: AMMO_TYPES[ammoType].boxQuantity,
       });
       this.spawnAmmoBox(boxId, tile);
+    });
+  }
+
+  private buildWorldItems(): void {
+    const occupied = this.activeAmmoBoxTiles();
+    const weaponTiles = selectInitialWeaponPickupTiles(
+      this.map,
+      occupied,
+      INITIAL_WORLD_WEAPON_MODELS.length,
+    );
+    if (weaponTiles.length !== INITIAL_WORLD_WEAPON_MODELS.length)
+      throw new Error('初期world weaponの配置先が不足しています。');
+    INITIAL_WORLD_WEAPON_MODELS.forEach((model, index) => {
+      const tile = weaponTiles[index];
+      if (!tile)
+        throw new Error('初期world weaponの配置先が不足しています。');
+      this.spawnWeaponWorldItem(`weapon-${model}-${index + 1}`, model, tile);
+    });
+  }
+
+  private spawnWeaponWorldItem(id: string, model: WeaponModel, tile: TilePosition): void {
+    if (this.worldItemStates.has(id))
+      return;
+    const point = this.world(tile);
+    const sprite = this.physics.add.staticImage(point.x, point.y, `weapon-${model}`).setDepth(1);
+    sprite.setData('worldItemId', id);
+    sprite.setData('tile', { ...tile });
+    this.worldItems.add(sprite);
+    this.worldItemStates.set(id, { id, kind: 'weapon', tile: { ...tile }, quantity: 1, model, sprite });
+  }
+
+  private spawnAmmoWorldItem(id: string, ammoType: AmmoType, quantity: number, tile: TilePosition): void {
+    if (this.worldItemStates.has(id) || !Number.isSafeInteger(quantity) || quantity <= 0)
+      return;
+    const ammo = AMMO_TYPES[ammoType];
+    const texture = `ammo-box-${ammoType}`;
+    const point = this.world(tile);
+    const sprite = this.physics.add.staticImage(point.x, point.y, texture).setDepth(1);
+    sprite.setData('worldItemId', id);
+    sprite.setData('tile', { ...tile });
+    sprite.setData('ammoType', ammoType);
+    sprite.setData('quantity', quantity);
+    sprite.setData('worldColor', ammo.worldColor);
+    sprite.setData('texture', texture);
+    this.worldItems.add(sprite);
+    this.worldItemStates.set(id, {
+      id,
+      kind: 'ammo',
+      tile: { ...tile },
+      quantity,
+      ammoType,
+      worldColor: ammo.worldColor,
+      texture,
+      sprite,
+    });
+  }
+
+  private dropScrap(tile: TilePosition, quantity: number): void {
+    if (!Number.isSafeInteger(quantity) || quantity <= 0)
+      return;
+    const id = `material-scrap-${tileKey(tile)}`;
+    const current = this.worldItemStates.get(id);
+    if (current?.kind === 'material') {
+      current.quantity += quantity;
+      current.visualTier = scrapVisualTierFor(current.quantity);
+      current.sprite.setData('quantity', current.quantity);
+      current.sprite.setData('visualTier', current.visualTier);
+      current.sprite.setTexture(`material-scrap-${current.visualTier}`);
+      return;
+    }
+    const point = this.world(tile);
+    const visualTier = scrapVisualTierFor(quantity);
+    const sprite = this.physics.add.staticImage(point.x, point.y, `material-scrap-${visualTier}`).setDepth(1);
+    sprite.setData('worldItemId', id);
+    sprite.setData('tile', { ...tile });
+    sprite.setData('quantity', quantity);
+    sprite.setData('visualTier', visualTier);
+    this.worldItems.add(sprite);
+    this.worldItemStates.set(id, {
+      id,
+      kind: 'material',
+      tile: { ...tile },
+      quantity,
+      material: 'scrap',
+      visualTier,
+      sprite,
     });
   }
 
@@ -621,11 +776,17 @@ class Arena extends Phaser.Scene {
     const state = this.ammoBoxStates.get(boxId);
     if (!state || state.currentTile !== null || this.hasAmmoBox(boxId) || this.activeAmmoBoxTiles().some(activeTile => sameTile(activeTile, tile)))
       return;
+    const ammo = AMMO_TYPES[state.ammoType];
+    const texture = `ammo-box-${state.ammoType}`;
     const point = this.world(tile);
-    const box = this.physics.add.staticImage(point.x, point.y, 'ammo-box').setDepth(1);
+    const box = this.physics.add.staticImage(point.x, point.y, texture).setDepth(1);
     box.setData('boxId', boxId);
     box.setData('tile', { ...tile });
     box.setData('tileKey', tileKey(tile));
+    box.setData('ammoType', state.ammoType);
+    box.setData('quantity', state.quantity);
+    box.setData('worldColor', ammo.worldColor);
+    box.setData('texture', texture);
     this.ammoBoxes.add(box);
     state.currentTile = { ...tile };
   }
@@ -651,9 +812,38 @@ class Arena extends Phaser.Scene {
     const entries: string[] = [];
     this.ammoBoxStates.forEach((state, boxId) => {
       if (state.currentTile)
-        entries.push(`${boxId}:${tileKey(state.currentTile)}`);
+        entries.push(`${boxId}:${tileKey(state.currentTile)}:${state.ammoType}:${state.quantity}:${AMMO_TYPES[state.ammoType].worldColor}:ammo-box-${state.ammoType}`);
     });
     return entries;
+  }
+
+  private activeWorldItemTiles(): TilePosition[] {
+    return [...this.worldItemStates.values()]
+      .filter(item => item.sprite.active)
+      .map(item => item.tile);
+  }
+
+  private activeEnemyTiles(): TilePosition[] {
+    return ENEMY_IDS
+      .filter(id => this.enemies[id].active)
+      .map(id => this.tile(this.enemies[id]));
+  }
+
+  private activeWorldItemEntries(): string[] {
+    return [...this.worldItemStates.values()]
+      .filter(item => item.sprite.active)
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((item) => {
+        const itemType = item.kind === 'weapon'
+          ? item.model
+          : item.kind === 'material'
+            ? item.material
+            : item.ammoType;
+        const visualTier = item.kind === 'material' ? item.visualTier : '';
+        const worldColor = item.kind === 'ammo' ? item.worldColor : '';
+        const texture = item.kind === 'ammo' ? item.texture : '';
+        return `${item.id}:${item.kind}:${itemType}:${tileKey(item.tile)}:${item.quantity}:${visualTier}:${worldColor}:${texture}`;
+      });
   }
 
   private offscreenAmmoBoxIds(): string[] {
@@ -667,15 +857,26 @@ class Arena extends Phaser.Scene {
     return ids;
   }
 
-  private nearbyAmmoBox(): Phaser.GameObjects.GameObject | undefined {
-    const candidates = this.ammoBoxes.getChildren().flatMap((box) => {
+  private nearbyPickup(): NearbyPickup | undefined {
+    const candidates: NearbyPickup[] = [];
+    this.ammoBoxes.getChildren().forEach((box) => {
       if (!box.active)
-        return [];
+        return;
       const id = box.getData('boxId') as string | undefined;
       const tile = box.getData('tile') as TilePosition | undefined;
-      return id && tile ? [{ id, tile, box }] : [];
+      const state = id ? this.ammoBoxStates.get(id) : undefined;
+      if (state && collectTypedAmmoBox(this.state, state.ammoType, state.quantity).collected > 0 && id && tile)
+        candidates.push({ id: `0:${id}`, tile, kind: 'ammo', box });
     });
-    return selectNearbyPickup(this.tile(this.player), this.muzzlePickupAnchor(), candidates)?.box;
+    this.worldItemStates.forEach((item) => {
+      if (!item.sprite.active)
+        return;
+      if (item.kind === 'ammo' && collectTypedAmmoBox(this.state, item.ammoType, item.quantity).collected === 0)
+        return;
+      const priority = item.kind === 'weapon' ? '1' : item.kind === 'material' ? '2' : '0';
+      candidates.push({ id: `${priority}:${item.id}`, tile: item.tile, kind: 'world', item });
+    });
+    return selectNearbyPickup(this.tile(this.player), this.muzzlePickupAnchor(), candidates);
   }
 
   private muzzlePickupAnchor(): { x: number; y: number } {
@@ -703,7 +904,124 @@ class Arena extends Phaser.Scene {
   }
 
   private updatePickupPrompt(): void {
-    arenaHud.setPickupPrompt(this.nearbyAmmoBox() !== undefined);
+    const pickup = this.state.defeated || this.state.victory ? undefined : this.nearbyPickup();
+    arenaHud.setPickupPrompt(pickup ? this.pickupPromptFor(pickup) : undefined);
+  }
+
+  private pickupPromptFor(pickup: NearbyPickup): PickupPrompt {
+    if (pickup.kind === 'ammo') {
+      const boxId = pickup.box.getData('boxId') as string | undefined;
+      const state = boxId ? this.ammoBoxStates.get(boxId) : undefined;
+      if (state)
+        return { target: `${AMMO_TYPES[state.ammoType].label} ${state.quantity}発`, action: 'を拾う [E]' };
+      return { target: '弾薬箱', action: 'を拾う [E]' };
+    }
+    if (pickup.item.kind === 'weapon')
+      return { target: WEAPON_MODELS[pickup.item.model].label, action: 'を拾う [E]' };
+    if (pickup.item.kind === 'ammo')
+      return { target: `${AMMO_TYPES[pickup.item.ammoType].label} ${pickup.item.quantity}発`, action: 'を拾う [E]' };
+    return { target: `スクラップ ${pickup.item.quantity}個`, action: 'を拾う [E]' };
+  }
+
+  private toggleInventory(): void {
+    if (this.state.defeated || this.state.victory)
+      return;
+    this.input.activePointer.reset();
+    this.inventoryOpen = !this.inventoryOpen;
+    arenaHud.setInventoryOpen(this.inventoryOpen);
+  }
+
+  private handleInventoryDrop(source: InventoryDragSource, target: InventoryDropTarget): void {
+    if (this.state.defeated || this.state.victory)
+      return;
+    if (source.kind === 'ammo') {
+      if (target === 'world')
+        this.dropInventoryAmmo(source.ammoType);
+      return;
+    }
+    if (target === 'world') {
+      this.dropInventoryWeapon(source.slot);
+      return;
+    }
+    const next = moveInventoryWeapon(this.state, source.slot, target);
+    if (!this.applyInventoryState(next))
+      return;
+    arenaHud.setFeedback('武器を移動しました');
+  }
+
+  private dropInventoryWeapon(source: InventorySlotRef): void {
+    const model = inventoryWeaponAt(this.state, source);
+    if (!model)
+      return;
+    const tile = selectWorldWeaponDropTile(this.map, this.tile(this.player), [
+      ...this.activeWorldItemTiles(),
+      ...this.activeAmmoBoxTiles(),
+      ...this.activeEnemyTiles(),
+    ]);
+    if (!tile) {
+      arenaHud.setInventoryDragMessage('置ける場所がありません');
+      return;
+    }
+    const next = removeInventoryWeapon(this.state, source);
+    if (next === this.state)
+      return;
+    const id = this.nextDroppedWeaponId(model);
+    this.spawnWeaponWorldItem(id, model, tile);
+    this.applyInventoryState(next);
+    arenaHud.setFeedback(`${WEAPON_MODELS[model].label}を置きました`);
+    this.updatePickupPrompt();
+  }
+
+  private dropInventoryAmmo(ammoType: AmmoType): void {
+    const result = dropAmmoBox(this.state, ammoType);
+    if (result.dropped === 0)
+      return;
+    const tile = selectWorldWeaponDropTile(this.map, this.tile(this.player), [
+      ...this.activeWorldItemTiles(),
+      ...this.activeAmmoBoxTiles(),
+      ...this.activeEnemyTiles(),
+    ]);
+    if (!tile) {
+      arenaHud.setInventoryDragMessage('置ける場所がありません');
+      return;
+    }
+    const id = this.nextDroppedAmmoId(ammoType);
+    this.spawnAmmoWorldItem(id, ammoType, result.dropped, tile);
+    this.applyInventoryState(result.state);
+    arenaHud.setFeedback(`${AMMO_TYPES[ammoType].label}を${result.dropped}発置きました`);
+    this.updatePickupPrompt();
+  }
+
+  private applyInventoryState(next: CombatState): boolean {
+    if (next === this.state)
+      return false;
+    if (this.state.reloading !== null && next.reloading === null)
+      this.clearReloadTimer();
+    this.state = next;
+    this.refreshHud();
+    return true;
+  }
+
+  private nextDroppedWeaponId(model: WeaponModel): string {
+    let sequence = this.droppedWeaponSequence + 1;
+    let id = `dropped-weapon-${this.generation}-${model}-${sequence}`;
+    while (this.worldItemStates.has(id)) {
+      sequence += 1;
+      id = `dropped-weapon-${this.generation}-${model}-${sequence}`;
+    }
+    this.droppedWeaponSequence = sequence;
+    return id;
+  }
+
+  private nextDroppedAmmoId(ammoType: AmmoType): string {
+    let sequence = this.droppedAmmoSequence + 1;
+    let id = `dropped-ammo-${this.generation}-${ammoType}-${sequence}`;
+    while (this.worldItemStates.has(id)) {
+      sequence += 1;
+      id = `dropped-ammo-${this.generation}-${ammoType}-${sequence}`;
+    }
+    this.droppedAmmoSequence = sequence;
+    return id;
   }
 
   private startSurvivalTimer(): void {
@@ -717,9 +1035,12 @@ class Arena extends Phaser.Scene {
   }
 
   private updateSurvival(): void {
-    const nextRunState = advanceRunState(this.runState, this.time.now - this.survivalStartedAt);
+    const elapsedMs = this.time.now - this.survivalStartedAt;
+    const nextRunState = advanceRunState(this.runState, elapsedMs);
     this.runState = nextRunState;
     this.updateMapPalette();
+    if (this.hasReachedInitialCombat(elapsedMs))
+      this.startEnemyLifecycle();
     this.updateSurvivalHud();
     if (nextRunState.status !== 'victory')
       return;
@@ -745,9 +1066,38 @@ class Arena extends Phaser.Scene {
   }
 
   private updateSpawnPhaseHud(): void {
-    const phase = spawnPhaseAt(this.survivalStartedAt, this.time.now);
+    const phase = this.currentSpawnPhase();
     const primaryDirection = primarySpawnDirection(this.map.seed, phase);
     arenaHud.updateSpawnPhase(phase, primaryDirection);
+  }
+
+  private startEnemyLifecycle(): void {
+    if (
+      this.enemyLifecycleStarted
+      || this.state.defeated
+      || this.state.victory
+      || !this.hasReachedInitialCombat()
+    ) return;
+    this.enemyLifecycleStarted = true;
+    this.combatStartedAt = this.survivalStartedAt + this.runState.schedule.restDurationMs;
+    initialEnemyIdsFor(ENEMY_SPAWN_CONFIG).forEach((id) => {
+      if (!this.spawnEnemy(id, 'initial'))
+        this.scheduleEnemySpawn(id, 'initial', 1000);
+    });
+    staggeredEnemiesFor(ENEMY_SPAWN_CONFIG).forEach(({ id, delay }) => {
+      this.scheduleEnemySpawn(id, 'stagger', delay);
+    });
+    this.updateSpawnPhaseHud();
+    this.refreshHud();
+  }
+
+  private hasReachedInitialCombat(elapsedMs = this.time.now - this.survivalStartedAt): boolean {
+    return this.runState.status === 'playing'
+      && elapsedMs >= this.runState.schedule.restDurationMs;
+  }
+
+  private currentSpawnPhase(): number {
+    return this.enemyLifecycleStarted ? spawnPhaseAt(this.combatStartedAt, this.time.now) : 0;
   }
 
   private stopRunTimers(): void {
@@ -882,14 +1232,17 @@ class Arena extends Phaser.Scene {
   }
 
   private spawnEnemy(id: EnemyInstanceId, reason: EnemySpawnReason): boolean {
+    if (!this.enemyLifecycleStarted || this.state.defeated || this.state.victory)
+      return false;
     const playerTile = this.tile(this.player);
-    const phase = spawnPhaseAt(this.survivalStartedAt, this.time.now);
+    const phase = this.currentSpawnPhase();
     const primaryDirection = primarySpawnDirection(this.map.seed, phase);
     const stableSlot = ENEMY_IDS.indexOf(id);
     const direction = spawnDirectionForSlot(primaryDirection, stableSlot);
     const occupied = [
       playerTile,
       ...this.activeAmmoBoxTiles(),
+      ...this.activeWorldItemTiles(),
       ...ENEMY_IDS
         .filter(other => other !== id && this.enemies[other].active)
         .map(other => this.tile(this.enemies[other])),
@@ -931,6 +1284,8 @@ class Arena extends Phaser.Scene {
   }
 
   private scheduleEnemySpawn(id: EnemyInstanceId, reason: EnemySpawnReason, delay: number): void {
+    if (!this.enemyLifecycleStarted || this.state.defeated || this.state.victory)
+      return;
     this.enemySpawnTimers.get(id)?.remove(false);
     this.enemies[id].setData('spawnReason', reason);
     this.hideEnemyVisuals(id);
@@ -938,7 +1293,7 @@ class Arena extends Phaser.Scene {
     const timer = this.time.delayedCall(delay, () => {
       if (this.enemySpawnTimers.get(id) === timer)
         this.enemySpawnTimers.delete(id);
-      if (generation !== this.generation || this.state.defeated || this.state.victory)
+      if (generation !== this.generation || !this.enemyLifecycleStarted || this.state.defeated || this.state.victory)
         return;
       if (!this.spawnEnemy(id, reason)) {
         this.scheduleEnemySpawn(id, reason, 1000);
@@ -1080,21 +1435,26 @@ class Arena extends Phaser.Scene {
     });
   }
 
-  private changeWeapon(weapon: WeaponId): void {
-    if (this.state.defeated || this.state.victory || this.state.weapon === weapon)
+  private changeQuickSlot(slot: number): void {
+    if (this.state.defeated || this.state.victory || this.state.inventory.selectedQuickSlot === slot)
       return;
-    const interrupted = this.state.reloading !== null;
-    if (interrupted)
-      this.stopReload();
-    this.state = selectWeapon(this.state, weapon);
-    arenaHud.setFeedback(interrupted ? `リロード中断: ${WEAPONS[weapon].label}` : `武器: ${WEAPONS[weapon].label}`);
+    const model = this.state.inventory.quickSlots[slot];
+    if (!model)
+      return;
+    const next = selectQuickSlot(this.state, slot);
+    const interrupted = this.state.reloading !== null && next.reloading === null;
+    if (interrupted) this.clearReloadTimer();
+    this.state = next;
+    arenaHud.setFeedback(interrupted ? `リロード中断: ${WEAPON_MODELS[model].label}` : `武器: ${WEAPON_MODELS[model].label}`);
     this.refreshHud();
   }
 
   private reload(): void {
     if (this.state.defeated || this.state.victory)
       return;
-    const weapon = this.state.weapon;
+    const weapon = activeWeaponId(this.state);
+    if (!weapon)
+      return;
     const next = startReload(this.state);
     if (next === this.state) {
       arenaHud.setFeedback(this.state.reloading !== null
@@ -1119,15 +1479,21 @@ class Arena extends Phaser.Scene {
   }
 
   private stopReload(): void {
-    this.reloadTimer?.remove(false);
-    this.reloadTimer = undefined;
+    this.clearReloadTimer();
     this.state = cancelReload(this.state);
   }
 
+  private clearReloadTimer(): void {
+    this.reloadTimer?.remove(false);
+    this.reloadTimer = undefined;
+  }
+
   private tryFire(): void {
-    if (this.state.defeated || this.state.victory || (this.playerDash && !canFireWhileDashing(this.playerRole.id)))
+    if (this.inventoryOpen || this.state.defeated || this.state.victory || (this.playerDash && !canFireWhileDashing(this.playerRole.id)))
       return;
-    const weaponId = this.state.weapon;
+    const weaponId = activeWeaponId(this.state);
+    if (!weaponId)
+      return;
     const weapon = WEAPONS[weaponId];
     if (this.state.ammo[weaponId] === 0) {
       this.reload();
@@ -1140,7 +1506,7 @@ class Arena extends Phaser.Scene {
     if (!result.fired) {
       if (this.state.reloading !== null)
         arenaHud.setFeedback('リロード中です');
-      else if (this.state.ammo[this.state.weapon] === 0)
+      else if (this.state.ammo[weaponId] === 0)
         arenaHud.setFeedback('弾切れ: Rでリロード');
       return;
     }
@@ -1148,13 +1514,13 @@ class Arena extends Phaser.Scene {
     const base = Phaser.Math.Angle.Between(this.player.x, this.player.y, aim.x, aim.y);
     this.effects.playWeaponFire(this.player, weaponId, base);
     for (let index = 0; index < weapon.pellets; index += 1) {
-      const bullet = this.bullets.get(this.player.x, this.player.y, `bullet-${this.state.weapon}`) as Phaser.Physics.Arcade.Sprite | null;
+      const bullet = this.bullets.get(this.player.x, this.player.y, `bullet-${weaponId}`) as Phaser.Physics.Arcade.Sprite | null;
       if (!bullet)
         continue;
       const ratio = weapon.pellets === 1 ? 0 : index / (weapon.pellets - 1) - 0.5;
       const angle = base + ratio * weapon.spread * 2;
-      bullet.enableBody(true, this.player.x, this.player.y, true, true).setTexture(`bullet-${this.state.weapon}`).setVelocity(Math.cos(angle) * weapon.speed, Math.sin(angle) * weapon.speed);
-      this.meta.set(bullet, { weapon: this.state.weapon, damageType: weapon.damageType, damage: weapon.damage, range: weapon.range, knockback: weapon.knockback, startX: this.player.x, startY: this.player.y, directionX: Math.cos(angle), directionY: Math.sin(angle) });
+      bullet.enableBody(true, this.player.x, this.player.y, true, true).setTexture(`bullet-${weaponId}`).setVelocity(Math.cos(angle) * weapon.speed, Math.sin(angle) * weapon.speed);
+      this.meta.set(bullet, { weapon: weaponId, damageType: weapon.damageType, damage: weapon.damage, range: weapon.range, knockback: weapon.knockback, startX: this.player.x, startY: this.player.y, directionX: Math.cos(angle), directionY: Math.sin(angle) });
     }
     this.refreshHud();
   }
@@ -1191,6 +1557,9 @@ class Arena extends Phaser.Scene {
 
   private scheduleDefeatedEnemy(id: EnemyInstanceId): void {
     const enemy = this.enemies[id];
+    if (!enemy.active || this.state.defeated || this.state.victory)
+      return;
+    const tile = this.tile(enemy);
     if (this.playerRole.id === 'gunslinger')
       this.gunslingerCombo = gunslingerComboAfterEvent(this.gunslingerCombo);
     this.runState = recordEnemyDefeated(this.runState, id);
@@ -1200,6 +1569,7 @@ class Arena extends Phaser.Scene {
     delete this.paths[id];
     delete this.visibilityTiles[id];
     this.respawnCount[id] += 1;
+    this.dropScrap(tile, SCRAP_DROP_AMOUNTS[ENEMIES[id].kind]);
     const delay = respawnDelayFor(ENEMIES[id].kind, id, this.respawnCount[id], this.map.seed);
     this.scheduleEnemySpawn(id, 'death', delay);
     if (this.time.now < this.enemyHitStopUntil[id]) {
@@ -1287,7 +1657,9 @@ class Arena extends Phaser.Scene {
     });
     this.disableAllBullets();
     this.physics.pause();
-    arenaHud.setPickupPrompt(false);
+    this.inventoryOpen = false;
+    arenaHud.setInventoryOpen(false);
+    arenaHud.setPickupPrompt(undefined);
     arenaHud.showResult(result);
     this.refreshHud();
   }
@@ -1312,6 +1684,7 @@ class Arena extends Phaser.Scene {
         playerTile,
         current.originTile,
         ...this.activeAmmoBoxTiles(),
+        ...this.activeWorldItemTiles(),
         ...ENEMY_IDS
           .filter(id => this.enemies[id].active)
           .map(id => this.tile(this.enemies[id])),
@@ -1326,6 +1699,7 @@ class Arena extends Phaser.Scene {
         this.refreshHud();
         return;
       }
+      current.quantity = AMMO_TYPES[current.ammoType].boxQuantity;
       this.spawnAmmoBox(boxId, tile);
       this.refreshHud();
     }));
@@ -1338,22 +1712,76 @@ class Arena extends Phaser.Scene {
     const state = boxId ? this.ammoBoxStates.get(boxId) : undefined;
     if (!boxId || !state || state.currentTile === null || this.ammoBoxRespawns.has(boxId))
       return;
-    const result = collectAmmoBoxState(this.state);
-    if (!result.collected)
+    const result = collectTypedAmmoBox(this.state, state.ammoType, state.quantity);
+    if (result.collected === 0)
       return;
     this.state = result.state;
+    if (result.remaining > 0) {
+      state.quantity = result.remaining;
+      box.setData('quantity', state.quantity);
+      arenaHud.setFeedback(`${AMMO_TYPES[state.ammoType].label}を${result.collected}発取得しました`);
+      this.refreshHud();
+      this.updatePickupPrompt();
+      return;
+    }
     this.ammoBoxes.remove(box, true, true);
     state.currentTile = null;
+    state.quantity = 0;
     this.scheduleAmmoBoxRespawn(boxId);
-    arenaHud.setFeedback('弾薬箱から補給しました');
+    arenaHud.setFeedback(`${AMMO_TYPES[state.ammoType].label}を${result.collected}発取得しました`);
     this.refreshHud();
     this.updatePickupPrompt();
   }
 
-  private collectNearbyAmmoBox(): void {
-    const box = this.nearbyAmmoBox();
-    if (box)
-      this.collectAmmoBox(box);
+  private collectWorldItem(item: WorldItem): void {
+    if (this.state.defeated || this.state.victory || !item.sprite.active || this.worldItemStates.get(item.id) !== item)
+      return;
+    if (item.kind === 'ammo') {
+      const result = collectTypedAmmoBox(this.state, item.ammoType, item.quantity);
+      if (result.collected === 0)
+        return;
+      this.state = result.state;
+      if (result.remaining > 0) {
+        item.quantity = result.remaining;
+        item.sprite.setData('quantity', item.quantity);
+        arenaHud.setFeedback(`${AMMO_TYPES[item.ammoType].label}を${result.collected}発取得しました`);
+        this.refreshHud();
+        this.updatePickupPrompt();
+        return;
+      }
+      this.worldItems.remove(item.sprite, true, true);
+      this.worldItemStates.delete(item.id);
+      arenaHud.setFeedback(`${AMMO_TYPES[item.ammoType].label}を${result.collected}発取得しました`);
+      this.refreshHud();
+      this.updatePickupPrompt();
+      return;
+    }
+    const next = item.kind === 'weapon'
+      ? collectWeapon(this.state, item.model)
+      : collectMaterial(this.state, item.material, item.quantity);
+    if (next === this.state)
+      return;
+    this.state = next;
+    this.worldItems.remove(item.sprite, true, true);
+    this.worldItemStates.delete(item.id);
+    arenaHud.setFeedback(item.kind === 'weapon'
+      ? `${WEAPON_MODELS[item.model].label}を取得しました`
+      : `スクラップを${item.quantity}取得しました`);
+    this.refreshHud();
+    this.updatePickupPrompt();
+  }
+
+  private collectNearbyPickup(): void {
+    if (this.state.defeated || this.state.victory)
+      return;
+    const pickup = this.nearbyPickup();
+    if (!pickup)
+      return;
+    if (pickup.kind === 'ammo') {
+      this.collectAmmoBox(pickup.box);
+      return;
+    }
+    this.collectWorldItem(pickup.item);
   }
 
   private disableBullet(bullet: Phaser.Physics.Arcade.Sprite): void {
@@ -1402,12 +1830,13 @@ class Arena extends Phaser.Scene {
       return state ? tileKey(state.originTile) : '';
     }).filter(key => key.length > 0);
     const isReloading = this.state.reloading !== null && this.reloadTimer !== undefined;
-    const phase = spawnPhaseAt(this.survivalStartedAt, this.time.now);
+    const phase = this.currentSpawnPhase();
     arenaHud.refresh({
       state: this.state,
       ammoBoxCount: this.ammoBoxes.countActive(true),
       activeAmmoBoxTiles: this.activeAmmoBoxKeys(),
       activeAmmoBoxEntries: this.activeAmmoBoxEntries(),
+      activeWorldItemEntries: this.activeWorldItemEntries(),
       offscreenAmmoBoxIds: this.offscreenAmmoBoxIds(),
       pendingAmmoBoxIds: pendingBoxIds,
       pendingAmmoBoxOriginTiles,
@@ -1486,13 +1915,72 @@ class Arena extends Phaser.Scene {
       context.fillStyle = '#26374a';
       context.fillRect(0, 0, TILE_SIZE, TILE_SIZE);
     });
-    this.texture('ammo-box', 30, 30, (context) => {
-      context.fillStyle = '#d28b35';
-      context.fillRect(2, 4, 26, 22);
-      context.fillStyle = '#ffe1a3';
-      context.fillRect(5, 8, 20, 4);
-      context.fillStyle = '#7a461d';
-      context.fillRect(13, 4, 4, 22);
+    AMMO_TYPE_ORDER.forEach((ammoType) => {
+      const ammo = AMMO_TYPES[ammoType];
+      this.texture(`ammo-box-${ammoType}`, 30, 30, (context) => {
+        context.fillStyle = ammo.worldColor;
+        context.fillRect(2, 4, 26, 22);
+        context.fillStyle = '#f4f7ff';
+        context.fillRect(5, 8, 20, 4);
+        context.fillStyle = '#1b2633';
+        context.fillRect(13, 4, 4, 22);
+      });
+    });
+    this.texture('weapon-shotgun', 32, 18, (context) => {
+      context.fillStyle = '#ffef76';
+      context.fillRect(2, 7, 25, 5);
+      context.fillStyle = '#8f7142';
+      context.fillRect(23, 11, 7, 5);
+      context.fillStyle = '#f5c85a';
+      context.fillRect(6, 4, 10, 3);
+    });
+    this.texture('weapon-handgun', 28, 18, (context) => {
+      context.fillStyle = '#9de9ff';
+      context.fillRect(3, 7, 19, 5);
+      context.fillStyle = '#55728b';
+      context.fillRect(18, 11, 7, 5);
+      context.fillStyle = '#d5e2e8';
+      context.fillRect(6, 4, 9, 3);
+    });
+    this.texture('weapon-revolver', 28, 18, (context) => {
+      context.fillStyle = '#ffb476';
+      context.fillRect(3, 7, 18, 5);
+      context.fillStyle = '#8f7142';
+      context.fillRect(16, 11, 7, 5);
+      context.fillStyle = '#ffe1b7';
+      context.fillRect(10, 4, 6, 10);
+    });
+    this.texture('weapon-compact-pistol', 24, 18, (context) => {
+      context.fillStyle = '#c8b5ff';
+      context.fillRect(3, 7, 15, 5);
+      context.fillStyle = '#70618f';
+      context.fillRect(14, 11, 6, 5);
+      context.fillStyle = '#eee7ff';
+      context.fillRect(5, 4, 7, 3);
+    });
+    this.texture('material-scrap-small', 18, 18, (context) => {
+      context.fillStyle = '#8fa8b8';
+      context.fillRect(3, 5, 12, 4);
+      context.fillStyle = '#d5e2e8';
+      context.fillRect(6, 10, 9, 4);
+      context.fillStyle = '#55728b';
+      context.fillRect(2, 14, 7, 2);
+    });
+    this.texture('material-scrap-medium', 24, 24, (context) => {
+      context.fillStyle = '#8fa8b8';
+      context.fillRect(3, 5, 18, 5);
+      context.fillStyle = '#d5e2e8';
+      context.fillRect(7, 12, 13, 5);
+      context.fillStyle = '#55728b';
+      context.fillRect(4, 18, 9, 3);
+    });
+    this.texture('material-scrap-large', 32, 30, (context) => {
+      context.fillStyle = '#8fa8b8';
+      context.fillRect(3, 5, 25, 7);
+      context.fillStyle = '#d5e2e8';
+      context.fillRect(10, 14, 18, 7);
+      context.fillStyle = '#55728b';
+      context.fillRect(4, 23, 15, 4);
     });
     this.texture('bullet-rifle', 10, 10, (context) => {
       context.fillStyle = '#55d6ff';
@@ -1503,6 +1991,10 @@ class Arena extends Phaser.Scene {
       context.beginPath();
       context.arc(4, 4, 3, 0, Math.PI * 2);
       context.fill();
+    });
+    this.texture('bullet-handgun', 10, 10, (context) => {
+      context.fillStyle = '#9de9ff';
+      context.fillRect(1, 1, 8, 8);
     });
   }
 

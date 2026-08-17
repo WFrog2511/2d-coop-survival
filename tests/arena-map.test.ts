@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   allFloorsReachable,
+  AMMO_BOX_COUNT,
   enemyVisibility,
   hasLineOfSight,
   ARENA_HEIGHT_TILES,
@@ -8,6 +9,7 @@ import {
   SPAWN_DIRECTIONS,
   SPAWN_PHASE_MS,
   TILE_SIZE,
+  WORLD_WEAPON_DROP_MAX_PATH_DISTANCE,
   basicApproachRoleFor,
   findPath,
   generateArenaMap,
@@ -19,8 +21,11 @@ import {
   recycleDelayFor,
   respawnDelayFor,
   selectEnemySpawnTile,
+  selectInitialWeaponPickupTile,
+  selectInitialWeaponPickupTiles,
   selectSpawnTile,
   selectAmmoBoxTiles,
+  selectWorldWeaponDropTile,
   spawnDirectionForSlot,
   spawnPhaseAt,
   viewportTileRect,
@@ -28,6 +33,7 @@ import {
   type SpawnDirection,
   type TilePosition,
 } from '../src/arena-map';
+import { INITIAL_WORLD_WEAPON_MODELS } from '../src/game-data';
 
 const seed = 20_260_802;
 
@@ -160,16 +166,93 @@ describe('自動生成アリーナ', () => {
     expect(allFloorsReachable(map)).toBe(true);
   });
 
-  test('弾薬箱はseedで決定的に4個を選び、start以外のfloorへ置く', () => {
+  test('弾薬箱はseedで決定的に、開始地点・占有tile・相互の3x3取得範囲を避ける', () => {
     const map = generateArenaMap(seed);
     const boxes = selectAmmoBoxTiles(map);
-    expect(boxes).toHaveLength(4);
-    expect(new Set(boxes.map(tileKey))).toHaveLength(4);
-    expect(boxes).not.toContainEqual(map.start);
+    expect(boxes).toHaveLength(AMMO_BOX_COUNT);
+    expect(new Set(boxes.map(tileKey))).toHaveLength(boxes.length);
+    expect(boxes.every(box => Math.abs(box.x - map.start.x) > 1 || Math.abs(box.y - map.start.y) > 1)).toBe(true);
     expect(boxes.every(position => map.tiles[position.y][position.x] === 'floor')).toBe(true);
     expect(boxes.every(position => findPath(map, map.start, position).length > 0)).toBe(true);
     expect(selectAmmoBoxTiles(map)).toEqual(boxes);
-    expect(selectAmmoBoxTiles(map, [boxes[0]])).not.toContainEqual(boxes[0]);
+    expect(boxes.every((box, index) => boxes.slice(index + 1).every(other =>
+      Math.abs(box.x - other.x) > 1 || Math.abs(box.y - other.y) > 1,
+    ))).toBe(true);
+    const occupied = boxes[0];
+    if (!occupied)
+      throw new Error('占有範囲確認用の弾薬箱が必要です。');
+    const excludingOccupied = selectAmmoBoxTiles(map, [occupied]);
+    expect(excludingOccupied.every(box =>
+      Math.abs(box.x - occupied.x) > 1 || Math.abs(box.y - occupied.y) > 1,
+    )).toBe(true);
+    expect(selectAmmoBoxTiles(map, [occupied])).toEqual(excludingOccupied);
+  });
+
+  test('弾薬箱候補が不足するときは、到達可能な候補だけを返す', () => {
+    const map = mapFrom([
+      ['wall', 'wall', 'wall', 'wall', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'wall', 'wall', 'wall', 'wall'],
+    ]);
+    const requestedCount = map.width * map.height;
+    const boxes = selectAmmoBoxTiles(map, [], requestedCount);
+    const available = { x: map.start.x + 2, y: map.start.y };
+    expect(boxes).toEqual([available]);
+    expect(boxes.length).toBeLessThan(requestedCount);
+    expect(findPath(map, map.start, available).length).toBeGreaterThan(0);
+  });
+
+  test('初期武器pickupは開始地点と弾薬箱の3x3取得範囲を避けた到達可能tileを決定的に選ぶ', () => {
+    const map = generateArenaMap(seed);
+    const boxes = selectAmmoBoxTiles(map);
+    const pickup = selectInitialWeaponPickupTile(map, boxes);
+    if (!pickup) throw new Error('初期武器pickupのtileが必要です。');
+    expect(selectInitialWeaponPickupTile(map, boxes)).toEqual(pickup);
+    expect(Math.abs(pickup.x - map.start.x) > 1 || Math.abs(pickup.y - map.start.y) > 1).toBe(true);
+    expect(boxes.every(box => Math.abs(pickup.x - box.x) > 1 || Math.abs(pickup.y - box.y) > 1)).toBe(true);
+    expect(findPath(map, map.start, pickup).length).toBeGreaterThan(0);
+  });
+
+  test('初期world weaponは全floorから全件を決定的かつ3x3非重複で選ぶ', () => {
+    const map = generateArenaMap(seed);
+    const boxes = selectAmmoBoxTiles(map);
+    const first = selectInitialWeaponPickupTiles(map, boxes, INITIAL_WORLD_WEAPON_MODELS.length);
+    const second = selectInitialWeaponPickupTiles(map, boxes, INITIAL_WORLD_WEAPON_MODELS.length);
+    expect(second).toEqual(first);
+    expect(first).toHaveLength(INITIAL_WORLD_WEAPON_MODELS.length);
+    expect(new Set(first.map(tileKey))).toHaveLength(first.length);
+    expect(first.every(tile => Math.abs(tile.x - map.start.x) > 1 || Math.abs(tile.y - map.start.y) > 1)).toBe(true);
+    expect(first.every(tile => boxes.every(box => Math.abs(tile.x - box.x) > 1 || Math.abs(tile.y - box.y) > 1))).toBe(true);
+    expect(first.every(tile => findPath(map, map.start, tile).length > 0)).toBe(true);
+    expect(first.every((tile, index) => first.slice(index + 1).every(other =>
+      Math.abs(tile.x - other.x) > 1 || Math.abs(tile.y - other.y) > 1,
+    ))).toBe(true);
+  });
+
+  test('world weapon dropはplayer tileを優先し、近傍の到達可能floorだけを決定的に選ぶ', () => {
+    const map = mapFrom([
+      ['wall', 'wall', 'wall', 'wall', 'wall', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'floor', 'floor', 'wall', 'floor', 'wall'],
+      ['wall', 'floor', 'floor', 'floor', 'floor', 'wall'],
+      ['wall', 'wall', 'wall', 'wall', 'wall', 'wall'],
+    ]);
+    expect(selectWorldWeaponDropTile(map, map.start)).toEqual(map.start);
+
+    const occupiedStart = [map.start];
+    const nearest = selectWorldWeaponDropTile(map, map.start, occupiedStart);
+    if (!nearest)
+      throw new Error('開始tileを除いたworld weapon drop候補が必要です。');
+    expect(findPath(map, map.start, nearest).length - 1).toBe(1);
+    expect(selectWorldWeaponDropTile(map, map.start, occupiedStart)).toEqual(nearest);
+
+    const allNearbyFloors = map.tiles.flatMap((row, y) => row.flatMap((tile, x) => {
+      const position = { x, y };
+      return tile === 'floor' && findPath(map, map.start, position).length - 1 <= WORLD_WEAPON_DROP_MAX_PATH_DISTANCE
+        ? [position]
+        : [];
+    }));
+    expect(selectWorldWeaponDropTile(map, map.start, allNearbyFloors)).toBeNull();
   });
 
   test('12体の初期spawnは到達可能floorを使い、player、弾薬箱、他の敵と重複しない', () => {

@@ -5,7 +5,7 @@ requirements: REQ-SURVIVAL-TIME-LIMIT
 
 # survival-time-limit-v1 仕様
 
-## 時間と状態
+## #71前の時間と状態（履歴）
 
 run開始時刻を startedAt、現在のゲーム時刻を now とする。残り時間は次で求め、範囲を0〜180000msへ収める。
 
@@ -19,15 +19,15 @@ retryCombatはvictory=false、defeated=false、HP100、武器別ammo/reserve、�
 
 ## Issue #58の限定移行
 
-[SPEC-WAVE-PROGRESSION](wave-progression-v1.md)は、本仕様の180000ms期限と各60000ms waveをdynamic RunState scheduleへsupersedeする。既定は3 combat wave各150000ms、wave 1/2後のrest各60000ms、総570000msである。この文書内の旧時間式、03:00 HUD、180000ms境界の期待値は履歴であり、現在の時間・phase・HUD仕様はSPEC-WAVE-PROGRESSIONを正本とする。victory state、terminal guard、retryCombat、ammo box規則は維持し、phase境界でenemy配置、HP、directional spawn metadataを変更しない。
+[SPEC-WAVE-PROGRESSION](wave-progression-v1.md)は、本仕様の180000ms期限と各60000ms waveをdynamic RunState scheduleへsupersedeする。既定はenemy-free初回準備60000ms、3 combat wave各150000ms、wave 1/2後のrest各60000ms、総630000msである。この文書内の旧時間式、03:00 HUD、180000ms境界の期待値、状態遷移、検証は#71前の履歴であり、現在の時間・phase・HUD仕様はSPEC-WAVE-PROGRESSIONを正本とする。victory state、terminal guard、retryCombat、ammo box規則は維持し、combat開始後のphase境界でenemy配置、HP、directional spawn metadataを変更しない。
 
 ## #21/#35既存契約との境界
 
 #21/#35のammo-supply-v1にある「同一run中は取得箱を再出現させない」は履歴契約として維持する。#34 follow-upが限定的にsupersedeするのはfield ammo box（map上のammo box）の再出現処理だけであり、既存の有限ammo契約、ammo/map配置文書、その他の#21/#35実装を変更しない。
 
-survival timerは180000ms、ammo box復活timerは取得から30000msである。victory/defeat/retryで復活timerを停止する確定条件を優先し、pending callbackはcancel/clearしてterminal後の復活を許可しない。
+#71前のsurvival timerは180000msであり、ammo box復活timerは取得から30000msである。victory/defeat/retryで復活timerを停止する確定条件を優先し、pending callbackはcancel/clearしてterminal後の復活を許可しない。
 
-## HUDと結果表示
+## #71前のHUDと結果表示（履歴）
 
 - 起動時と通常run中は残り時間をMM:SSで表示する。
 - 180000ms境界では00:00を表示し、Victory UIをaria-liveで通知する。
@@ -40,7 +40,7 @@ survival timerは180000ms、ammo box復活timerは取得から30000msである�
 
 各箱はstableなboxId、現在tile、元tile、復活回数を保持する。tile keyは現在位置の表示用であり、timer identityには使わない。取得成功時だけ、箱をstatic groupから削除し、boxIdに対するrespawn TimerEventを1つ登録する。delayは30000ms固定とする。
 
-TimerEvent callbackはrun generationとterminal stateを確認する。generationが一致し、terminalでない場合だけ、現在のplayer tile、camera viewport、active box、active enemyをoccupiedにして既存selectSpawnTileを呼ぶ。候補は到達可能なmap内floorからviewport外を優先し、候補がなければ最遠floorへfallbackする。復活した箱は元tileを避け、同じboxIdまたは同じtileにactive boxを重複生成せず、通常の箱取得overlapへ戻る。seedはnextSeedとmap seed、boxIdのslot、復活回数から決定する。
+TimerEvent callbackはrun generationとterminal stateを確認する。generationが一致し、terminalでない場合だけ、現在のplayer tile、camera viewport、active box、active world item（weapon/material/ammo）、active enemyをoccupiedにして既存selectSpawnTileを呼ぶ。候補は到達可能なmap内floorからviewport外を優先し、候補がなければ最遠floorへfallbackする。復活した箱は元tileを避け、同じboxIdまたは同じtileにactive boxを重複生成せず、通常の箱取得overlapへ戻る。seedはnextSeedとmap seed、boxIdのslot、復活回数から決定する。
 
 victory、defeat、retryでは復活timerを停止してMapから外し、旧generationのcallbackを無効化する。terminalへ入ったrunの箱を後から復活させない。
 
@@ -48,7 +48,7 @@ victory、defeat、retryでは復活timerを停止してMapから外し、旧gen
 
 viewport外候補がない場合はselectSpawnTileの最遠floor fallbackを使う。floorがplayerから到達不能、occupied、またはmap外なら候補から除外する。候補がまったくない場合はcallback開始時にTimerEventをammoBoxRespawns Mapから削除し、boxIdはpending属性を保持せずspriteなしのまま、HUDへ再配置失敗を表示する。旧generation、terminal中、同じboxIdのtimerまたはactive boxがあるcallbackは副作用なしで終了する。
 
-## 状態遷移と停止
+## #71前の状態遷移と停止（履歴）
 
 ~~~mermaid
 stateDiagram-v2
@@ -62,7 +62,7 @@ stateDiagram-v2
 
 victoryまたはdefeatへ入ったとき、reloadTimer、敵respawn、命中flash、ammo box respawn、生存timerを停止し、player/enemy velocityを0、弾を無効化、物理演算をpauseする。retryではgenerationを更新してtimer/map/sprite/state/HUDを初期化後、物理演算をresumeする。
 
-## 検証期待値
+## #71前の検証期待値（時間契約は履歴）
 
 - unit: 180000ms直前は残り1msかつ通常、境界は残り0msかつvictory、30000msは箱復活遅延、victoryからの再遷移は無副作用、retryはvictory=false。
 - E2E: 初期03:00、境界後のVictory UI、戦闘停止、retry後03:00とammo/reload初期化。

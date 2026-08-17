@@ -7,9 +7,9 @@ implementation_task: https://github.com/WFrog2511/2d-coop-survival/issues/34
 
 # survival-time-limit-v1 要件
 
-## 根拠とDefinition of Delivery
+## #71前の根拠とDefinition of Delivery（履歴）
 
-Issue #34 の comment 5220638729で確定したfollow-up/PR #36のDODを正本とする。成果物段階は Prototype standard のローカル検証版であり、既存のIssue #21/#35実装とammo/map配置文書は変更しない。
+Issue #34 の comment 5220638729で確定したfollow-up/PR #36のDODは#71前の時間契約の正本である。成果物段階は Prototype standard のローカル検証版であり、既存のIssue #21/#35実装とammo/map配置文書は変更しない。
 
 - 生存制限は正確に 180000ms（3分）とする。
 - 3分の境界で通常状態からvictoryへ遷移し、Victory UIを表示する。
@@ -23,19 +23,19 @@ Issue #34 の comment 5220638729で確定したfollow-up/PR #36のDODを正本�
 
 ## Issue #58の限定移行
 
-[REQ-WAVE-PROGRESSION](wave-progression-v1.md)は、本要件の180000ms（03:00）生存期限と各60000ms wave時間を、3 combat wave各150000ms、wave 1/2後のrest各60000ms、既定570000ms（09:30）へsupersedeする。この文書内の旧時間値とそれを前提にする受け入れ条件は履歴であり、現在の時間・phase・HUD契約はREQ-WAVE-PROGRESSIONを正本とする。victory/defeatのterminal停止、retry、ammo box respawn、有限ammoの導線は維持する。wave固有の新敵、quota、報酬、dropは引き続き対象外とする。
+[REQ-WAVE-PROGRESSION](wave-progression-v1.md)は、本要件の180000ms（03:00）生存期限と各60000ms wave時間を、enemy-free初回準備60000ms、3 combat wave各150000ms、wave 1/2後のrest各60000ms、既定630000ms（10:30）へsupersedeする。この文書内の旧時間値、旧HUD、受け入れ条件、検証は#71前の履歴であり、現在の時間・phase・HUD契約はREQ-WAVE-PROGRESSIONを正本とする。victory/defeatのterminal停止、retry、ammo box respawn、有限ammoの導線は維持する。wave固有の新敵、quota、報酬、dropは引き続き対象外とする。
 
 ## #21/#35既存契約との境界
 
 #21/#35のammo-supply-v1にある「同一run中は取得箱を再出現させない」は履歴契約として維持する。#34 follow-upが限定的にsupersedeするのはfield ammo box（map上のammo box）の再出現処理だけであり、既存の有限ammo契約、ammo/map配置文書、その他の#21/#35実装は変更しない。
 
-survival timerは180000ms、ammo box復活timerは取得から30000msである。victory/defeat/retryのterminal停止を優先し、復活待ちのpending callbackをキャンセル・clearして、terminal後にその箱を再出現させない。
+#71前のsurvival timerは180000msであり、ammo box復活timerは取得から30000msである。victory/defeat/retryのterminal停止を優先し、復活待ちのpending callbackをキャンセル・clearして、terminal後にその箱を再出現させない。
 
 ## 失敗時動作
 
 旧generationのsurvival、敵、reload、ammo box callbackは現在runのstate、sprite、HUDを変更しない。復活候補はselectSpawnTileのviewport外優先、到達可能floor、occupied除外、最遠floor fallbackの順で選び、候補がまったくなければ箱を生成せずHUDへ失敗を表示する。
 
-## 受け入れ条件
+## #71前の受け入れ条件（履歴）
 
 1. 起動直後のHUDに残り時間 03:00 を表示し、残り時間はMM:SS形式で更新する。
 2. 開始時刻から179999msではvictoryへ遷移せず、180000ms以上の境界で残り時間00:00、victory state、Victory UIとなる。
@@ -49,7 +49,7 @@ survival timerは180000ms、ammo box復活timerは取得から30000msである�
 
 recovery item、敵の時間scale変更、wave固有の新敵、intermission、quota、報酬、drop、multiplayer sync、persistence、汎用inventory/loot基盤、外部asset、既存map生成規則の変更、#21/#35の既存実装とammo/map配置文書の修正は対象外とする。新しいDOCGEN transform、matrix/readiness/evidenceもこのPrototype standard sliceでは作成しない。
 
-## 検証と人間確認
+## #71前の検証と人間確認（履歴）
 
 - rules unitで180000ms直前・境界、30000ms定数、victory terminal guard、retry初期化を検証する。
 - Playwright Chromiumで03:00表示、Victory UI、戦闘停止、retry初期化、既存ammo/reload/defeat/retryを検証する。
