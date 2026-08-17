@@ -276,6 +276,22 @@ async function dragInventorySlot(
   }, { sourceId: sourceTestId, target: targetSelector });
 }
 
+async function expectTextSelectionClearedByPointer(
+  page: import('@playwright/test').Page,
+  locator: import('@playwright/test').Locator,
+): Promise<void> {
+  const bounds = await locator.boundingBox();
+  if (!bounds)
+    throw new Error('文字選択を確認する表示要素が必要です。');
+  await page.evaluate(() => window.getSelection()?.removeAllRanges());
+  const y = bounds.y + bounds.height / 2;
+  await page.mouse.move(bounds.x + 2, y);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + Math.max(3, bounds.width - 2), y, { steps: 4 });
+  await page.mouse.up();
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toBe('');
+}
+
 async function beginInventoryDrag(page: import('@playwright/test').Page, sourceTestId: string): Promise<void> {
   await page.evaluate((sourceId) => {
     const source = document.querySelector<HTMLElement>(`[data-testid="${sourceId}"]`);
@@ -848,6 +864,31 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
   const canvasBounds = await documentBounds(canvasLocator);
   expect(quickbarBounds.x + quickbarBounds.width / 2).toBeCloseTo(canvasBounds.x + canvasBounds.width / 2, 1);
   expect(quickbarBounds.y + quickbarBounds.height).toBeLessThanOrEqual(canvasBounds.y + canvasBounds.height);
+  await page.keyboard.press('Tab');
+  const detail = page.getByTestId('inventory-detail');
+  const ammoPouch = page.getByTestId('ammo-pouch');
+  await expect(detail).toBeVisible();
+  await expect(ammoPouch).toBeVisible();
+  for (const locator of [
+    detail.locator('h2'),
+    detail.locator('.inventory-panel-caption').first(),
+    page.getByTestId('quick-slot-2'),
+    page.getByTestId('inventory-quick-slot-2'),
+    page.getByTestId('inventory-quick-slot-3'),
+    detail.locator('.inventory-panel-caption').nth(1),
+    page.getByTestId('backpack-slot-1'),
+    ammoPouch.locator('h2'),
+  ]) await expectTextSelectionClearedByPointer(page, locator);
+  const inventoryQuickSlot1 = page.getByTestId('inventory-quick-slot-1');
+  const backpackSlot1 = page.getByTestId('backpack-slot-1');
+  await inventoryQuickSlot1.dragTo(backpackSlot1);
+  await expect(quickSlot1).toHaveAttribute('data-empty', 'true');
+  await expect(backpackSlot1).toHaveAttribute('data-model', 'rifle');
+  await backpackSlot1.dragTo(inventoryQuickSlot1);
+  await expect(quickSlot1).toHaveAttribute('data-model', 'rifle');
+  await expect(backpackSlot1).toHaveAttribute('data-empty', 'true');
+  await page.keyboard.press('Tab');
+  await expect(detail).toBeHidden();
   await expect(page.getByTestId('scrap')).toHaveAttribute('data-count', '0');
   const worldItemCount = page.getByTestId('world-item-count');
   await expect(worldItemCount).toBeHidden();
@@ -961,8 +1002,6 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
   await expect(page.getByTestId('backpack-slot-1')).toHaveAttribute('data-model', duplicateModel);
   expect(await currentAmmo(page)).toBe(sidearmAmmoAfterShot);
 
-  const detail = page.getByTestId('inventory-detail');
-  const ammoPouch = page.getByTestId('ammo-pouch');
   await page.keyboard.press('Tab');
   await expect(detail).toBeVisible();
   await expect(ammoPouch).toBeVisible();
@@ -1040,8 +1079,46 @@ test('弾薬ポーチの種類別弾薬をworldへ置き、部分取得してE�
   await expect(pouchEntry).toHaveAttribute('draggable', 'true');
   await expect(pouchEntry).toHaveAttribute('data-box-quantity', String(ammo.boxQuantity));
   await expect(pouchEntry).toHaveAttribute('data-world-color', ammo.worldColor);
-  await dragInventorySlot(page, `ammo-pouch-${ammoType}`, '#game');
+  await expect(pouchEntry).toHaveCSS('pointer-events', 'auto');
+  const canvas = page.locator('#game canvas');
+  const canvasBounds = await canvas.boundingBox();
+  if (!canvasBounds)
+    throw new Error('worldへ置くためのgame canvas座標が必要です。');
+  const canvasPoint = await findGameCanvasInputPoint(page);
+  await pouchEntry.dragTo(canvas, {
+    targetPosition: {
+      x: canvasPoint.clientX - canvasBounds.x,
+      y: canvasPoint.clientY - canvasBounds.y,
+    },
+  });
   await expect(pouchEntry).toHaveAttribute('data-reserve', '0');
+  const selectedAmmoBeforeClose = await currentAmmo(page);
+  const selectedReserveBeforeClose = await page.getByTestId('ammo-reserve').getAttribute('data-reserve');
+  const reloadHud = page.getByTestId('reload');
+  const reloadBeforeClose = await reloadHud.textContent();
+  const reloadProgress = page.getByTestId('reload-progress');
+  const reloadProgressWasHidden = await reloadProgress.isHidden();
+  const reloadProgressBeforeClose = await reloadProgress.evaluate(element =>
+    (element as HTMLProgressElement).value);
+  await page.mouse.move(canvasPoint.clientX, canvasPoint.clientY);
+  await expectGameCanvasAt(page, canvasPoint);
+  await page.mouse.down();
+  try {
+    await page.keyboard.press('Tab');
+    await expect(pouchEntry).toBeHidden();
+    await page.clock.runFor(WEAPONS.rifle.fireIntervalMs * 2);
+    expect(await currentAmmo(page)).toBe(selectedAmmoBeforeClose);
+    expect(await page.getByTestId('ammo-reserve').getAttribute('data-reserve'))
+      .toBe(selectedReserveBeforeClose);
+    expect(await reloadHud.textContent()).toBe(reloadBeforeClose);
+    expect(await reloadProgress.isHidden()).toBe(reloadProgressWasHidden);
+    expect(await reloadProgress.evaluate(element => (element as HTMLProgressElement).value))
+      .toBe(reloadProgressBeforeClose);
+  } finally {
+    await page.mouse.up();
+  }
+  await holdGameCanvasAt(page, canvasPoint, WEAPONS.rifle.fireIntervalMs);
+  await expect.poll(() => currentAmmo(page)).toBeLessThan(selectedAmmoBeforeClose);
 
   const dropped = (await activeWorldItems(page)).find(item => item.id.startsWith('dropped-ammo-'));
   if (!dropped || dropped.kind !== 'ammo')

@@ -301,6 +301,7 @@ h1 {
   box-sizing: border-box;
   pointer-events: auto;
   transform: translateX(-50%);
+  user-select: none;
 }
 
 #inventory-detail h2 {
@@ -320,6 +321,8 @@ h1 {
   border-radius: 10px;
   background: rgb(16 24 39 / 94%);
   box-sizing: border-box;
+  pointer-events: auto;
+  user-select: none;
 }
 
 #ammo-pouch h2 {

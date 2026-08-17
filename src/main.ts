@@ -926,6 +926,7 @@ class Arena extends Phaser.Scene {
   private toggleInventory(): void {
     if (this.state.defeated || this.state.victory)
       return;
+    this.input.activePointer.reset();
     this.inventoryOpen = !this.inventoryOpen;
     arenaHud.setInventoryOpen(this.inventoryOpen);
   }
