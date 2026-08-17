@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, basicApproachRoleFor, enemyVisibility, findPath, hasLineOfSight, type EnemyVisibility, generateArenaMap, generateNextArenaMap, hiddenRecycleThresholdFor, nextSeed, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, selectEnemySpawnTile, selectInitialWeaponPickupTiles, selectSpawnTile, selectWorldWeaponDropTile, spawnDirectionForSlot, spawnPhaseAt, type ArenaMap, type TilePosition, viewportTileRect } from './arena-map';
+import { EnemyActor } from './arena/enemy-actor';
 import { ArenaEffects } from './arena/effects';
 import { ArenaHud, type InventoryDragSource, type InventoryDropTarget } from './arena/hud';
 import { ENEMIES, ENEMY_DEFEAT_HIT_STOP_MS, ENEMY_HIT_STOP_MS, ENEMY_IDS, ENEMY_LABELS, ENEMY_SPAWN_ORDER, INITIAL_ENEMY_IDS, INITIAL_WORLD_WEAPON_MODELS, PLAYER_HIT_STOP_MS, SCRAP_DROP_AMOUNTS, STAGGERED_ENEMIES, scrapVisualTierFor, type ScrapVisualTier } from './game-data';
@@ -176,8 +177,7 @@ let resetArena: (() => void) | undefined;
 class Arena extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Sprite;
   private effects!: ArenaEffects;
-  private enemies!: Record<EnemyInstanceId, Phaser.Physics.Arcade.Sprite>;
-  private silhouettes!: Record<EnemyInstanceId, Phaser.GameObjects.Image>;
+  private enemyActors!: Record<EnemyInstanceId, EnemyActor>;
   private bullets!: Phaser.Physics.Arcade.Group;
   private walls!: Phaser.Physics.Arcade.StaticGroup;
   private ammoBoxes!: Phaser.Physics.Arcade.StaticGroup;
@@ -213,9 +213,6 @@ class Arena extends Phaser.Scene {
   private gunslingerSpeedBuffUntil = 0;
   private gunslingerDashEnemyIds = new Set<EnemyInstanceId>();
   private aimDirection: DashDirection | undefined;
-  private enemyHitStopUntil = enemyNumbers();
-  private knockbackUntil = enemyNumbers();
-  private knockbackVelocity = enemyRecord(() => ({ x: 0, y: 0 }));
   private respawnCount = enemyNumbers();
   private recycleCount = enemyNumbers();
   private lastHitAt = enemyNumbers(Number.NEGATIVE_INFINITY);
@@ -256,25 +253,18 @@ class Arena extends Phaser.Scene {
       .setDepth(3)
       .setTint(this.playerRole.tint);
     this.visibilityMask = this.add.graphics().setDepth(2).setAlpha(0.25);
-    this.enemies = {} as Record<EnemyInstanceId, Phaser.Physics.Arcade.Sprite>;
-    this.silhouettes = {} as Record<EnemyInstanceId, Phaser.GameObjects.Image>;
+    this.enemyActors = {} as Record<EnemyInstanceId, EnemyActor>;
     ENEMY_IDS.forEach((id) => {
       const config = ENEMIES[id];
-      const bodySize = config.kind === 'basic' ? { width: 28, height: 28 } : { width: 24, height: 20 };
-      this.enemies[id] = this.physics.add
-        .sprite(0, 0, config.kind === 'basic' ? 'basic' : 'drone')
-        .setCollideWorldBounds(true)
-        .setBodySize(bodySize.width, bodySize.height)
-        .setDepth(0);
-      this.enemies[id].disableBody(true, true);
-      this.silhouettes[id] = this.add.image(0, 0, 'enemy-silhouette').setDepth(1).setVisible(false);
-      this.physics.add.collider(this.enemies[id], this.walls);
-      this.physics.add.overlap(this.player, this.enemies[id], () => this.handlePlayerEnemyOverlap(id));
+      const actor = new EnemyActor(this, id, config.kind);
+      this.enemyActors[id] = actor;
+      this.physics.add.collider(actor.sprite, this.walls);
+      this.physics.add.overlap(this.player, actor.sprite, () => this.handlePlayerEnemyOverlap(id));
     });
     this.physics.add.collider(this.player, this.walls);
     this.bullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Sprite, maxSize: BULLET_POOL_SIZE });
     this.physics.add.collider(this.bullets, this.walls, first => this.disableBullet(first as Phaser.Physics.Arcade.Sprite));
-    ENEMY_IDS.forEach(id => this.physics.add.overlap(this.bullets, this.enemies[id], (first, second) => this.hitEnemy(first, second, id)));
+    ENEMY_IDS.forEach(id => this.physics.add.overlap(this.bullets, this.enemyActors[id].sprite, (first, second) => this.hitEnemy(first, second, id)));
     this.keys = this.input.keyboard!.addKeys({ w: 'W', a: 'A', s: 'S', d: 'D', r: 'R', e: 'E', space: 'SPACE', shift: 'SHIFT', up: 'UP', down: 'DOWN', left: 'LEFT', right: 'RIGHT' }) as Controls;
     this.input.keyboard?.on('keydown-ONE', () => this.changeQuickSlot(0));
     this.input.keyboard?.on('keydown-TWO', () => this.changeQuickSlot(1));
@@ -424,31 +414,23 @@ class Arena extends Phaser.Scene {
       throw new Error('debugRespawnEnemyはDEV環境だけで使用できます。');
     if (!ENEMY_IDS.includes(id))
       throw new Error(`未知の敵IDです: ${id}`);
-    if (this.state.defeated || this.state.victory || !this.enemies[id].active)
+    const actor = this.enemyActors[id];
+    if (this.state.defeated || this.state.victory || !actor.active)
       throw new Error(`再出現できない敵です: ${id}`);
-    const enemy = this.enemies[id];
+    const enemy = actor.sprite;
     const previous = {
       x: enemy.x,
       y: enemy.y,
-      spawnPhase: String(enemy.getData('spawnPhase') ?? ''),
-      primaryDirection: String(enemy.getData('primaryDirection') ?? ''),
-      assignedDirection: String(enemy.getData('assignedDirection') ?? ''),
-      spawnTile: String(enemy.getData('spawnTile') ?? ''),
-      spawnReason: String(enemy.getData('spawnReason') ?? ''),
+      spawnMetadata: actor.currentSpawnMetadata,
     };
     const previousRespawnCount = this.respawnCount[id];
-    enemy.disableBody(true, true);
-    this.hideEnemyVisuals(id);
+    actor.deactivate();
     delete this.paths[id];
     this.respawnCount[id] += 1;
     if (!this.spawnEnemy(id, 'debug')) {
       this.respawnCount[id] = previousRespawnCount;
-      enemy.enableBody(true, previous.x, previous.y, true, true).setVelocity(0, 0);
-      enemy.setData('spawnPhase', previous.spawnPhase);
-      enemy.setData('primaryDirection', previous.primaryDirection);
-      enemy.setData('assignedDirection', previous.assignedDirection);
-      enemy.setData('spawnTile', previous.spawnTile);
-      enemy.setData('spawnReason', previous.spawnReason);
+      actor.activate(previous.x, previous.y);
+      actor.setSpawnMetadata(previous.spawnMetadata);
       this.updateEnemyVisibility(true);
       throw new Error(`${ENEMY_LABELS[id]}の再出現位置がありません。`);
     }
@@ -490,7 +472,7 @@ class Arena extends Phaser.Scene {
       throw new Error('debugDamageEnemyはDEV環境だけで使用できます。');
     if (!ENEMY_IDS.includes(id))
       throw new Error(`未知の敵IDです: ${id}`);
-    if (this.state.defeated || this.state.victory || !this.enemies[id].active)
+    if (this.state.defeated || this.state.victory || !this.enemyActors[id].active)
       throw new Error(`ダメージを与えられない敵です: ${id}`);
     if (!Number.isFinite(amount) || amount <= 0)
       throw new Error('debugDamageEnemyのamountは正の有限値が必要です。');
@@ -525,9 +507,6 @@ class Arena extends Phaser.Scene {
     this.playerDash = undefined;
     this.playerDashCooldownUntil = 0;
     this.resetGunslingerState();
-    this.enemyHitStopUntil = enemyNumbers();
-    this.knockbackUntil = enemyNumbers();
-    this.knockbackVelocity = enemyRecord(() => ({ x: 0, y: 0 }));
     this.effects.reset();
     this.respawnCount = enemyNumbers();
     this.recycleCount = enemyNumbers();
@@ -542,14 +521,7 @@ class Arena extends Phaser.Scene {
     this.disableAllBullets();
     const initialEnemyIds = initialEnemyIdsFor(ENEMY_SPAWN_CONFIG);
     ENEMY_IDS.forEach((id) => {
-      this.enemies[id].setData('stableId', id);
-      this.enemies[id].setData('spawnReason', initialEnemyIds.includes(id) ? 'initial' : 'stagger');
-      this.enemies[id].setData('spawnPhase', '');
-      this.enemies[id].setData('primaryDirection', '');
-      this.enemies[id].setData('assignedDirection', '');
-      this.enemies[id].setData('spawnTile', '');
-      this.enemies[id].disableBody(true, true);
-      this.hideEnemyVisuals(id);
+      this.enemyActors[id].reset(initialEnemyIds.includes(id) ? 'initial' : 'stagger');
     });
     this.map = initial ? generateArenaMap(this.mapSeed) : generateNextArenaMap(this.map);
     this.mapSeed = this.map.seed;
@@ -825,8 +797,8 @@ class Arena extends Phaser.Scene {
 
   private activeEnemyTiles(): TilePosition[] {
     return ENEMY_IDS
-      .filter(id => this.enemies[id].active)
-      .map(id => this.tile(this.enemies[id]));
+      .filter(id => this.enemyActors[id].active)
+      .map(id => this.tile(this.enemyActors[id].sprite));
   }
 
   private activeWorldItemEntries(): string[] {
@@ -1132,70 +1104,61 @@ class Arena extends Phaser.Scene {
   }
 
   private moveEnemy(id: EnemyInstanceId): void {
-    const enemy = this.enemies[id];
-    if (this.physics.world.isPaused || !enemy.active)
+    const actor = this.enemyActors[id];
+    const enemy = actor.sprite;
+    if (this.physics.world.isPaused || !actor.active)
       return;
-    if (this.time.now < this.enemyHitStopUntil[id]) {
-      enemy.setVelocity(0, 0);
-      return;
-    }
-    if (this.time.now < this.knockbackUntil[id]) {
-      const velocity = this.knockbackVelocity[id];
-      enemy.setVelocity(velocity.x, velocity.y);
-      return;
-    }
-    const config = ENEMIES[id];
-    const speedMultiplier = enemySpeedMultiplierForPhase(currentRunPhase(this.runState));
-    const playerTile = this.tile(this.player);
-    const enemyTile = this.tile(enemy);
-    const cached = this.paths[id];
-    if (
-      !cached
-      || this.time.now >= cached.nextAt
-      || !sameTile(cached.playerTile, playerTile)
-      || !sameTile(cached.enemyTile, enemyTile)
-    ) {
-      const approachTarget = config.kind === 'basic'
-        ? this.basicApproachTarget(id, enemyTile, playerTile)
-        : playerTile;
-      const tieBreakSeed = config.kind === 'basic'
-        ? nextSeed(this.map.seed + ENEMY_IDS.indexOf(id))
-        : undefined;
-      let path = findPath(this.map, enemyTile, approachTarget, tieBreakSeed);
-      if (path.length === 0 && !sameTile(approachTarget, playerTile))
-        path = findPath(this.map, enemyTile, playerTile, tieBreakSeed);
-      this.paths[id] = {
-        path,
-        nextAt: this.time.now + 250,
-        playerTile,
-        enemyTile,
+    actor.applyMovement(this.time.now, () => {
+      const config = ENEMIES[id];
+      const speedMultiplier = enemySpeedMultiplierForPhase(currentRunPhase(this.runState));
+      const playerTile = this.tile(this.player);
+      const enemyTile = this.tile(enemy);
+      const cached = this.paths[id];
+      if (
+        !cached
+        || this.time.now >= cached.nextAt
+        || !sameTile(cached.playerTile, playerTile)
+        || !sameTile(cached.enemyTile, enemyTile)
+      ) {
+        const approachTarget = config.kind === 'basic'
+          ? this.basicApproachTarget(id, enemyTile, playerTile)
+          : playerTile;
+        const tieBreakSeed = config.kind === 'basic'
+          ? nextSeed(this.map.seed + ENEMY_IDS.indexOf(id))
+          : undefined;
+        let path = findPath(this.map, enemyTile, approachTarget, tieBreakSeed);
+        if (path.length === 0 && !sameTile(approachTarget, playerTile))
+          path = findPath(this.map, enemyTile, playerTile, tieBreakSeed);
+        this.paths[id] = {
+          path,
+          nextAt: this.time.now + 250,
+          playerTile,
+          enemyTile,
+        };
+      }
+      const next = this.paths[id].path[1];
+      if (!next)
+        return { x: 0, y: 0 };
+      const target = this.world(next);
+      const dx = target.x - enemy.x;
+      const dy = target.y - enemy.y;
+      const length = Math.hypot(dx, dy) || 1;
+      if (config.kind === 'drone') {
+        const side = droneLateralSpeedAt(this.time.now);
+        return {
+          x: ((dx / length) * config.speed - (dy / length) * side) * speedMultiplier,
+          y: ((dy / length) * config.speed + (dx / length) * side) * speedMultiplier,
+        };
+      }
+      const separation = this.basicSeparation(id);
+      const desiredX = dx / length + separation.x * 0.45;
+      const desiredY = dy / length + separation.y * 0.45;
+      const desiredLength = Math.hypot(desiredX, desiredY) || 1;
+      return {
+        x: (desiredX / desiredLength) * config.speed * speedMultiplier,
+        y: (desiredY / desiredLength) * config.speed * speedMultiplier,
       };
-    }
-    const next = this.paths[id].path[1];
-    if (!next) {
-      enemy.setVelocity(0, 0);
-      return;
-    }
-    const target = this.world(next);
-    const dx = target.x - enemy.x;
-    const dy = target.y - enemy.y;
-    const length = Math.hypot(dx, dy) || 1;
-    if (config.kind === 'drone') {
-      const side = droneLateralSpeedAt(this.time.now);
-      enemy.setVelocity(
-        ((dx / length) * config.speed - (dy / length) * side) * speedMultiplier,
-        ((dy / length) * config.speed + (dx / length) * side) * speedMultiplier,
-      );
-      return;
-    }
-    const separation = this.basicSeparation(id);
-    const desiredX = dx / length + separation.x * 0.45;
-    const desiredY = dy / length + separation.y * 0.45;
-    const desiredLength = Math.hypot(desiredX, desiredY) || 1;
-    enemy.setVelocity(
-      (desiredX / desiredLength) * config.speed * speedMultiplier,
-      (desiredY / desiredLength) * config.speed * speedMultiplier,
-    );
+    });
   }
 
   private basicApproachTarget(id: EnemyInstanceId, enemy: TilePosition, player: TilePosition): TilePosition {
@@ -1210,12 +1173,13 @@ class Arena extends Phaser.Scene {
   }
 
   private basicSeparation(id: EnemyInstanceId): { x: number; y: number } {
-    const enemy = this.enemies[id];
+    const enemy = this.enemyActors[id].sprite;
     let x = 0;
     let y = 0;
     ENEMY_IDS.forEach((otherId) => {
-      const other = this.enemies[otherId];
-      if (otherId === id || ENEMIES[otherId].kind !== 'basic' || !other.active) return;
+      const otherActor = this.enemyActors[otherId];
+      const other = otherActor.sprite;
+      if (otherId === id || ENEMIES[otherId].kind !== 'basic' || !otherActor.active) return;
       const dx = enemy.x - other.x;
       const dy = enemy.y - other.y;
       const distance = Math.hypot(dx, dy);
@@ -1239,13 +1203,14 @@ class Arena extends Phaser.Scene {
     const primaryDirection = primarySpawnDirection(this.map.seed, phase);
     const stableSlot = ENEMY_IDS.indexOf(id);
     const direction = spawnDirectionForSlot(primaryDirection, stableSlot);
+    const actor = this.enemyActors[id];
     const occupied = [
       playerTile,
       ...this.activeAmmoBoxTiles(),
       ...this.activeWorldItemTiles(),
       ...ENEMY_IDS
-        .filter(other => other !== id && this.enemies[other].active)
-        .map(other => this.tile(this.enemies[other])),
+        .filter(other => other !== id && this.enemyActors[other].active)
+        .map(other => this.tile(this.enemyActors[other].sprite)),
     ];
     const tile = selectEnemySpawnTile(
       this.map,
@@ -1254,23 +1219,21 @@ class Arena extends Phaser.Scene {
       ENEMY_SPAWN_CONFIG.candidatePool,
     );
     if (!tile) {
-      this.enemies[id].setData('spawnReason', reason);
-      this.enemies[id].disableBody(true, true);
-      this.hideEnemyVisuals(id);
+      actor.setSpawnReason(reason);
+      actor.deactivate();
+      this.syncEnemyHud(id);
       return false;
     }
     const point = this.world(tile);
-    this.enemies[id]
-      .enableBody(true, point.x, point.y, true, true)
-      .setVelocity(0, 0)
-      .clearTint();
+    actor.activate(point.x, point.y);
     this.runState = recordEnemySpawned(this.runState, id);
-    this.enemies[id].setData('stableId', id);
-    this.enemies[id].setData('spawnPhase', phase);
-    this.enemies[id].setData('primaryDirection', primaryDirection);
-    this.enemies[id].setData('assignedDirection', direction);
-    this.enemies[id].setData('spawnTile', tileKey(tile));
-    this.enemies[id].setData('spawnReason', reason);
+    actor.setSpawnMetadata({
+      spawnPhase: String(phase),
+      primaryDirection,
+      assignedDirection: direction,
+      spawnTile: tileKey(tile),
+      spawnReason: reason,
+    });
     this.hiddenSince.delete(id);
     this.paths[id] = {
       path: [],
@@ -1287,7 +1250,7 @@ class Arena extends Phaser.Scene {
     if (!this.enemyLifecycleStarted || this.state.defeated || this.state.victory)
       return;
     this.enemySpawnTimers.get(id)?.remove(false);
-    this.enemies[id].setData('spawnReason', reason);
+    this.enemyActors[id].setSpawnReason(reason);
     this.hideEnemyVisuals(id);
     const generation = this.generation;
     const timer = this.time.delayedCall(delay, () => {
@@ -1313,25 +1276,23 @@ class Arena extends Phaser.Scene {
   private updateEnemyVisibility(force = false): void {
     const playerTile = this.tile(this.player);
     ENEMY_IDS.forEach((id) => {
-      const enemy = this.enemies[id];
-      const silhouette = this.silhouettes[id];
-      if (!enemy.active) {
-        if (isEnemyDefeated(this.state, id) && this.time.now < this.enemyHitStopUntil[id]) {
-          enemy.setVisible(true);
-          silhouette.setVisible(false);
-          this.syncEnemyHud(id, 'normal');
+      const actor = this.enemyActors[id];
+      const enemy = actor.sprite;
+      if (!actor.active) {
+        if (isEnemyDefeated(this.state, id) && actor.showDefeatedHitStop(this.time.now)) {
+          this.syncEnemyHud(id);
           return;
         }
         this.hideEnemyVisuals(id);
         delete this.visibilityTiles[id];
         return;
       }
-      silhouette.setPosition(enemy.x, enemy.y);
+      actor.syncSilhouettePosition();
       const enemyTile = this.tile(enemy);
       const previous = this.visibilityTiles[id];
       if (!force && previous && sameTile(previous.player, playerTile) && sameTile(previous.enemy, enemyTile)) {
-        const visibility = this.currentEnemyVisibility(id);
-        this.syncEnemyHud(id, visibility);
+        const visibility = actor.runtimeView().visibility;
+        this.syncEnemyHud(id);
         this.updateHiddenRecycle(id, visibility, playerTile, enemyTile);
         return;
       }
@@ -1375,9 +1336,9 @@ class Arena extends Phaser.Scene {
     this.recyclingEnemyId = id;
     this.recycleCount[id] += 1;
     this.runState = recordEnemyRecycled(this.runState, id);
-    this.enemies[id].disableBody(true, true);
-    this.enemies[id].setData('spawnReason', 'recycle');
-    this.hideEnemyVisuals(id);
+    this.enemyActors[id].setSpawnReason('recycle');
+    this.enemyActors[id].deactivate();
+    this.syncEnemyHud(id);
     delete this.paths[id];
     delete this.visibilityTiles[id];
     this.hiddenSince.delete(id);
@@ -1386,53 +1347,17 @@ class Arena extends Phaser.Scene {
   }
 
   private applyEnemyVisibility(id: EnemyInstanceId, visibility: EnemyVisibility): void {
-    const enemy = this.enemies[id];
-    const silhouette = this.silhouettes[id];
-    if (visibility === 'normal') {
-      enemy.setVisible(true).setAlpha(1);
-      silhouette.setVisible(false);
-    } else if (visibility === 'boundary') {
-      enemy.setVisible(false);
-      silhouette.setPosition(enemy.x, enemy.y).setAlpha(0.3).setVisible(true);
-    } else {
-      enemy.setVisible(false);
-      silhouette.setVisible(false);
-    }
-    this.syncEnemyHud(id, visibility);
+    this.enemyActors[id].applyVisibility(visibility);
+    this.syncEnemyHud(id);
   }
 
   private hideEnemyVisuals(id: EnemyInstanceId): void {
-    this.enemies[id].setVisible(false);
-    this.silhouettes[id].setVisible(false);
-    this.syncEnemyHud(id, 'hidden');
+    this.enemyActors[id].hideVisuals();
+    this.syncEnemyHud(id);
   }
 
-  private currentEnemyVisibility(id: EnemyInstanceId): EnemyVisibility {
-    if (this.enemies[id].visible)
-      return 'normal';
-    return this.silhouettes[id].visible ? 'boundary' : 'hidden';
-  }
-
-  private syncEnemyHud(id: EnemyInstanceId, visibility: EnemyVisibility): void {
-    const enemy = this.enemies[id];
-    const silhouette = this.silhouettes[id];
-    arenaHud.updateEnemy(id, {
-      stableId: String(enemy.getData('stableId') ?? id),
-      spawnPhase: String(enemy.getData('spawnPhase') ?? ''),
-      primaryDirection: String(enemy.getData('primaryDirection') ?? ''),
-      assignedDirection: String(enemy.getData('assignedDirection') ?? ''),
-      spawnTile: String(enemy.getData('spawnTile') ?? ''),
-      spawnReason: String(enemy.getData('spawnReason') ?? ''),
-      active: enemy.active,
-      recycleCount: this.recycleCount[id],
-      visibility,
-      spriteTexture: enemy.texture.key,
-      spriteAlpha: enemy.alpha,
-      spriteVisible: enemy.visible,
-      silhouetteTexture: silhouette.texture.key,
-      silhouetteAlpha: silhouette.alpha,
-      silhouetteVisible: silhouette.visible,
-    });
+  private syncEnemyHud(id: EnemyInstanceId): void {
+    arenaHud.updateEnemy(id, this.enemyActors[id].hudView(this.recycleCount[id]));
   }
 
   private changeQuickSlot(slot: number): void {
@@ -1531,7 +1456,8 @@ class Arena extends Phaser.Scene {
     const bullet = this.meta.has(first) ? first : second;
     const enemy = bullet === first ? second : first;
     const data = this.meta.get(bullet);
-    if (!data || enemy !== this.enemies[id] || !enemy.active || this.state.defeated || this.state.victory)
+    const actor = this.enemyActors[id];
+    if (!data || enemy !== actor.sprite || !actor.active || this.state.defeated || this.state.victory)
       return;
     this.disableBullet(bullet);
     this.lastHitAt[id] = this.time.now;
@@ -1545,26 +1471,26 @@ class Arena extends Phaser.Scene {
     arenaHud.setFeedback(`${result.resisted ? '耐性' : '命中'}: ${WEAPONS[data.weapon].label} → ${ENEMY_LABELS[id]}`);
     this.effects.flashEnemy(enemy);
     if (data.knockback > 0) {
-      this.knockbackVelocity[id] = {
+      actor.startKnockback({
         x: data.directionX * data.knockback,
         y: data.directionY * data.knockback,
-      };
-      this.knockbackUntil[id] = this.enemyHitStopUntil[id] + 180;
+      }, actor.hitStopEndsAt + 180);
     }
     if (defeated) this.scheduleDefeatedEnemy(id);
     this.refreshHud();
   }
 
   private scheduleDefeatedEnemy(id: EnemyInstanceId): void {
-    const enemy = this.enemies[id];
-    if (!enemy.active || this.state.defeated || this.state.victory)
+    const actor = this.enemyActors[id];
+    const enemy = actor.sprite;
+    if (!actor.active || this.state.defeated || this.state.victory)
       return;
     const tile = this.tile(enemy);
     if (this.playerRole.id === 'gunslinger')
       this.gunslingerCombo = gunslingerComboAfterEvent(this.gunslingerCombo);
     this.runState = recordEnemyDefeated(this.runState, id);
-    enemy.disableBody(true, false);
-    this.hideEnemyVisuals(id);
+    actor.deactivateDefeated();
+    this.syncEnemyHud(id);
     this.hiddenSince.delete(id);
     delete this.paths[id];
     delete this.visibilityTiles[id];
@@ -1572,10 +1498,8 @@ class Arena extends Phaser.Scene {
     this.dropScrap(tile, SCRAP_DROP_AMOUNTS[ENEMIES[id].kind]);
     const delay = respawnDelayFor(ENEMIES[id].kind, id, this.respawnCount[id], this.map.seed);
     this.scheduleEnemySpawn(id, 'death', delay);
-    if (this.time.now < this.enemyHitStopUntil[id]) {
-      enemy.setVisible(true);
-      this.syncEnemyHud(id, 'normal');
-    }
+    if (actor.showDefeatedHitStop(this.time.now))
+      this.syncEnemyHud(id);
   }
 
   private handlePlayerEnemyOverlap(id: EnemyInstanceId): void {
@@ -1587,10 +1511,11 @@ class Arena extends Phaser.Scene {
   }
 
   private bootKnifeEnemy(id: EnemyInstanceId): void {
-    const enemy = this.enemies[id];
+    const actor = this.enemyActors[id];
+    const enemy = actor.sprite;
     if (
       !this.playerDash
-      || !enemy.active
+      || !actor.active
       || this.gunslingerDashEnemyIds.has(id)
       || this.state.defeated
       || this.state.victory
@@ -1632,9 +1557,9 @@ class Arena extends Phaser.Scene {
 
   private startEnemyImpact(id: EnemyInstanceId, weapon: WeaponId, defeated: boolean): void {
     const duration = defeated ? ENEMY_DEFEAT_HIT_STOP_MS[weapon] : ENEMY_HIT_STOP_MS[weapon];
-    this.enemyHitStopUntil[id] = Math.max(this.enemyHitStopUntil[id], this.time.now + duration);
-    this.enemies[id].setVelocity(0, 0);
-    this.effects.playEnemyImpact(this.enemies[id], ENEMIES[id].kind, weapon, defeated);
+    const actor = this.enemyActors[id];
+    actor.startHitStop(this.time.now, duration);
+    this.effects.playEnemyImpact(actor.sprite, ENEMIES[id].kind, weapon, defeated);
   }
 
   private startPlayerImpact(kind: EnemyKind): void {
@@ -1652,7 +1577,7 @@ class Arena extends Phaser.Scene {
     this.resetGunslingerState();
     this.player.setVelocity(0, 0);
     ENEMY_IDS.forEach((enemyId) => {
-      this.enemies[enemyId].setVelocity(0, 0);
+      this.enemyActors[enemyId].stop();
       this.hideEnemyVisuals(enemyId);
     });
     this.disableAllBullets();
@@ -1686,8 +1611,8 @@ class Arena extends Phaser.Scene {
         ...this.activeAmmoBoxTiles(),
         ...this.activeWorldItemTiles(),
         ...ENEMY_IDS
-          .filter(id => this.enemies[id].active)
-          .map(id => this.tile(this.enemies[id])),
+          .filter(id => this.enemyActors[id].active)
+          .map(id => this.tile(this.enemyActors[id].sprite)),
       ];
       const tile = selectSpawnTile(
         this.map,
