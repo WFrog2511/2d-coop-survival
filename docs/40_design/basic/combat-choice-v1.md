@@ -5,6 +5,10 @@ specification: SPEC-COMBAT-CHOICE
 
 # combat-choice-v1 基本設計
 
+## Issue #77の限定supersede
+
+[DESIGN-BASIC-AMMO-MATERIAL-V1](ammo-material-v1.md) は、WeaponId別shared ammo、5武器表、shared nextFireAtとreload、retry時の旧ammo初期化を supersede する。現行は7 WeaponModel、3マテリアル、WeaponInstanceごとのmagazineとnextFireAtを使う。既存の移動、敵、wall、map、入力、bullet pool、collider、range、hit、effect設計は維持する。
+
 > [Issue #71](https://github.com/WFrog2511/2d-coop-survival/issues/71)は、旧二武器・第三武器対象外・固定weapon種slotと、閲覧専用inventoryの設計を履歴とする。`WeaponModel`をquick slot 3件とbackpack 10件へ非stack格納し、handgun、revolver、compact-pistolを既存handgunの`WeaponId`とshared ammo stateへ解決する。詳細inventoryはnative HTML5 drag/dropでmove/swapと近傍world dropを扱う。その他のcombat-choice-v1設計は維持する。
 
 ## 責務

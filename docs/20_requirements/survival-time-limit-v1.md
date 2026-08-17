@@ -7,6 +7,10 @@ implementation_task: https://github.com/WFrog2511/2d-coop-survival/issues/34
 
 # survival-time-limit-v1 要件
 
+## Issue #77の限定同期
+
+[REQ-AMMO-MATERIAL-V1](ammo-material-v1.md) を、AmmoType、reserve、旧world ammo、初期ammo表現の現行要件として参照する。本書のtimer、generation、terminal、retry、stable box respawn機構は維持し、全体を supersede しない。
+
 ## #71前の根拠とDefinition of Delivery（履歴）
 
 Issue #34 の comment 5220638729で確定したfollow-up/PR #36のDODは#71前の時間契約の正本である。成果物段階は Prototype standard のローカル検証版であり、既存のIssue #21/#35実装とammo/map配置文書は変更しない。

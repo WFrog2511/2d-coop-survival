@@ -2,7 +2,6 @@ import {
   ENEMY_INSTANCE_IDS,
   type EnemyInstanceId,
   type EnemyKind,
-  type WeaponId,
   type WeaponModel,
 } from './rules';
 
@@ -103,7 +102,12 @@ export const WORLD_SIDEARM_MODELS: readonly WeaponModel[] = [
 ];
 
 /** 初期マップへ決定的に配置する全武器モデル列。 */
-export const INITIAL_WORLD_WEAPON_MODELS: readonly WeaponModel[] = ['shotgun', ...WORLD_SIDEARM_MODELS];
+export const INITIAL_WORLD_WEAPON_MODELS: readonly WeaponModel[] = [
+  'shotgun',
+  ...WORLD_SIDEARM_MODELS,
+  'repeating-crossbow',
+  'flamethrower',
+];
 
 /** スクラップの見た目を切り替える数量境界。 */
 export const SCRAP_VISUAL_TIER_THRESHOLDS = { medium: 3, large: 6 } as const;
@@ -120,9 +124,25 @@ export function scrapVisualTierFor(quantity: number): ScrapVisualTier {
   return 'small';
 }
 
-export const ENEMY_HIT_STOP_MS: Record<WeaponId, number> = { rifle: 12, shotgun: 35, handgun: 12 };
+export const ENEMY_HIT_STOP_MS: Record<WeaponModel, number> = {
+  'rifle': 12,
+  'shotgun': 35,
+  'handgun': 12,
+  'revolver': 16,
+  'compact-pistol': 12,
+  'repeating-crossbow': 20,
+  'flamethrower': 8,
+};
 
-export const ENEMY_DEFEAT_HIT_STOP_MS: Record<WeaponId, number> = { rifle: 24, shotgun: 42, handgun: 24 };
+export const ENEMY_DEFEAT_HIT_STOP_MS: Record<WeaponModel, number> = {
+  'rifle': 24,
+  'shotgun': 42,
+  'handgun': 24,
+  'revolver': 28,
+  'compact-pistol': 24,
+  'repeating-crossbow': 32,
+  'flamethrower': 16,
+};
 
 export const PLAYER_HIT_STOP_MS: Record<EnemyKind, number> = { basic: 30, drone: 45 };
 
@@ -132,16 +152,24 @@ export const CAMERA_SHAKE_COOLDOWN_MS = 70;
 
 export const SHOTGUN_SHAKE: CameraShakeProfile = { duration: 70, intensity: 0.0016 };
 
-export const WEAPON_FIRE_SHAKE: Record<WeaponId, CameraShakeProfile> = {
-  rifle: { duration: 95, intensity: 0.0024 },
-  shotgun: { duration: 95, intensity: 0.0050 },
-  handgun: { duration: 95, intensity: 0.0024 },
+export const WEAPON_FIRE_SHAKE: Record<WeaponModel, CameraShakeProfile> = {
+  'rifle': { duration: 95, intensity: 0.0024 },
+  'shotgun': { duration: 95, intensity: 0.0050 },
+  'handgun': { duration: 95, intensity: 0.0024 },
+  'revolver': { duration: 95, intensity: 0.0032 },
+  'compact-pistol': { duration: 80, intensity: 0.0020 },
+  'repeating-crossbow': { duration: 85, intensity: 0.0028 },
+  'flamethrower': { duration: 60, intensity: 0.0018 },
 };
 
-export const FIRE_SOUND: Record<WeaponId, SoundEffectProfile> = {
-  rifle: { duration: 65, startFrequency: 360, endFrequency: 120, volume: 0.08, waveform: 'sawtooth', noiseVolume: 0.035, noiseFrequency: 3000 },
-  shotgun: { duration: 95, startFrequency: 190, endFrequency: 70, volume: 0.13, waveform: 'square', noiseVolume: 0.08, noiseFrequency: 1800 },
-  handgun: { duration: 65, startFrequency: 360, endFrequency: 120, volume: 0.08, waveform: 'sawtooth', noiseVolume: 0.035, noiseFrequency: 3000 },
+export const FIRE_SOUND: Record<WeaponModel, SoundEffectProfile> = {
+  'rifle': { duration: 65, startFrequency: 360, endFrequency: 120, volume: 0.08, waveform: 'sawtooth', noiseVolume: 0.035, noiseFrequency: 3000 },
+  'shotgun': { duration: 95, startFrequency: 190, endFrequency: 70, volume: 0.13, waveform: 'square', noiseVolume: 0.08, noiseFrequency: 1800 },
+  'handgun': { duration: 65, startFrequency: 360, endFrequency: 120, volume: 0.08, waveform: 'sawtooth', noiseVolume: 0.035, noiseFrequency: 3000 },
+  'revolver': { duration: 80, startFrequency: 260, endFrequency: 90, volume: 0.1, waveform: 'square', noiseVolume: 0.045, noiseFrequency: 2400 },
+  'compact-pistol': { duration: 55, startFrequency: 420, endFrequency: 130, volume: 0.07, waveform: 'sawtooth', noiseVolume: 0.03, noiseFrequency: 3300 },
+  'repeating-crossbow': { duration: 75, startFrequency: 520, endFrequency: 180, volume: 0.065, waveform: 'triangle', noiseVolume: 0.01, noiseFrequency: 1700 },
+  'flamethrower': { duration: 55, startFrequency: 140, endFrequency: 90, volume: 0.055, waveform: 'sawtooth', noiseVolume: 0.05, noiseFrequency: 900 },
 };
 
 export const ENEMY_DEFEAT_SOUND: Record<EnemyKind, SoundEffectProfile> = {
@@ -149,10 +177,14 @@ export const ENEMY_DEFEAT_SOUND: Record<EnemyKind, SoundEffectProfile> = {
   drone: { duration: 220, startFrequency: 500, endFrequency: 110, volume: 0.12, waveform: 'sawtooth', noiseVolume: 0.015, noiseFrequency: 2400 },
 };
 
-export const MUZZLE_FLASH: Record<WeaponId, MuzzleFlashProfile> = {
-  rifle: { duration: 55, points: 8, innerRadius: 5, outerRadius: 16, scale: 1.35, color: 0x9de9ff },
-  shotgun: { duration: 85, points: 10, innerRadius: 7, outerRadius: 25, scale: 1.6, color: 0xffdd76 },
-  handgun: { duration: 55, points: 8, innerRadius: 5, outerRadius: 16, scale: 1.35, color: 0x9de9ff },
+export const MUZZLE_FLASH: Record<WeaponModel, MuzzleFlashProfile> = {
+  'rifle': { duration: 55, points: 8, innerRadius: 5, outerRadius: 16, scale: 1.35, color: 0x9de9ff },
+  'shotgun': { duration: 85, points: 10, innerRadius: 7, outerRadius: 25, scale: 1.6, color: 0xffdd76 },
+  'handgun': { duration: 55, points: 8, innerRadius: 5, outerRadius: 16, scale: 1.35, color: 0x9de9ff },
+  'revolver': { duration: 65, points: 8, innerRadius: 6, outerRadius: 17, scale: 1.4, color: 0xffb476 },
+  'compact-pistol': { duration: 50, points: 7, innerRadius: 4, outerRadius: 14, scale: 1.25, color: 0xc8b5ff },
+  'repeating-crossbow': { duration: 65, points: 6, innerRadius: 4, outerRadius: 15, scale: 1.25, color: 0xd8a8ff },
+  'flamethrower': { duration: 45, points: 9, innerRadius: 5, outerRadius: 18, scale: 1.45, color: 0xffbb75 },
 };
 
 export const ENEMY_HIT_EFFECT: Record<EnemyKind, EnemyHitEffectProfile> = {

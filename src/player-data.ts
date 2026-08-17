@@ -20,6 +20,9 @@ export const GUNSLINGER_SPEED_BUFF_DURATION_MS = 3_000;
 
 export const GUNSLINGER_COMBO_TIMEOUT_MS = 3_000;
 
+/** クォーターマスターがworld武器を扱うときのreload待機時間倍率。 */
+export const QUARTERMASTER_WORLD_WEAPON_RELOAD_DURATION_MULTIPLIER = 1.1;
+
 export type DashPoint = { x: number; y: number };
 
 export type DashDirection = { x: number; y: number };
@@ -70,6 +73,21 @@ export const PLAYER_ROLES = [
 export type PlayerRole = (typeof PLAYER_ROLES)[number];
 
 export type PlayerRoleId = PlayerRole['id'];
+
+/**
+ * role固有のreload待機時間からworld武器の実際の待機時間を導出する。
+ *
+ * @param reloadMs 武器設定の基準reload時間。
+ * @param roleId 現在のplayer role。
+ * @returns Timerへ渡す正のreload時間。
+ */
+export function reloadDurationForWorldWeapon(reloadMs: number, roleId: PlayerRoleId): number {
+  const base = Number.isSafeInteger(reloadMs) && reloadMs > 0 ? reloadMs : 1;
+  const durationMultiplier = roleId === 'quartermaster'
+    ? QUARTERMASTER_WORLD_WEAPON_RELOAD_DURATION_MULTIPLIER
+    : 1;
+  return Math.max(1, Math.round(base * durationMultiplier));
+}
 
 export function dashCooldownUntil(now: number, roleId: PlayerRoleId): number {
   return now + (roleId === 'gunslinger' ? GUNSLINGER_DASH_COOLDOWN_MS : PLAYER_DASH_COOLDOWN_MS);

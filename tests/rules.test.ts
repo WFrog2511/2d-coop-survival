@@ -2,13 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { SCRAP_VISUAL_TIER_THRESHOLDS, scrapVisualTierFor } from '../src/game-data';
 import {
   AMMO_BOX_RESPAWN_MS,
-  AMMO_TYPES,
-  AMMO_TYPE_ORDER,
   BACKPACK_SLOT_COUNT,
   COMBAT_WAVE_DURATION_MS,
   DEFAULT_RUN_SCHEDULE,
   ENEMY_INSTANCE_IDS,
-  HANDGUN_AMMO,
   INITIAL_STATE,
   QUICK_SLOT_COUNT,
   REST_DURATION_MS,
@@ -16,26 +13,27 @@ import {
   SURVIVAL_LIMIT_MS,
   WAVE_COUNT,
   WAVE_DURATION_MS,
+  AMMO_MATERIAL_ORDER,
+  AMMO_MATERIALS,
   WEAPONS,
-  WEAPON_MODELS,
-  activeWeaponId,
+  WEAPON_MODEL_ORDER,
+  activeWeapon,
   activeEnemyCount,
-  ammoTypeForWeapon,
   advanceRunState,
   advanceSurvivalState,
   canFireAt,
-  collectTypedAmmoBox,
   collectMaterial,
   collectWeapon,
   completeReload,
   createRunSchedule,
   createRunState,
+  createWeaponInstance,
   currentRunPhase,
   currentWaveNumber,
   damageEnemy,
   damagePlayer,
   defeatRun,
-  dropAmmoBox,
+  dropAmmoMaterial,
   droneLateralSpeedAt,
   enemySpeedMultiplierForPhase,
   fireWeapon,
@@ -60,7 +58,7 @@ import {
   selectWeapon,
   selectQuickSlot,
   startReload,
-  weaponIdForModel,
+  type CombatState,
 } from '../src/rules';
 
 describe('戦闘ルール', () => {
@@ -70,47 +68,13 @@ describe('戦闘ルール', () => {
     expect(scrapVisualTierFor(SCRAP_VISUAL_TIER_THRESHOLDS.large)).toBe('large');
   });
 
-  it('武器ごとの射撃、弾倉、リロード、弾種契約を定義する', () => {
-    expect(WEAPONS.rifle).toMatchObject({
-      damageType: 'smallCaliber',
-      damage: 2,
-      automatic: true,
-      fireIntervalMs: 150,
-      magazineSize: 20,
-      reserveInitial: 40,
-      reserveMax: 60,
-      reloadMs: 1200,
-      pellets: 1,
-      knockback: 0,
-    });
-    expect(WEAPONS.shotgun).toMatchObject({
-      damageType: 'scatter',
-      damage: 2,
-      automatic: false,
-      fireIntervalMs: 750,
-      magazineSize: 4,
-      reserveInitial: 8,
-      reserveMax: 12,
-      reloadMs: 1600,
-      pellets: 5,
-      knockback: 240,
-    });
-    expect(WEAPONS.shotgun.spread).toBeGreaterThan(0);
-    expect(WEAPONS.shotgun.range).toBeLessThan(WEAPONS.rifle.range);
-    expect(WEAPONS.handgun).toMatchObject({
-      damageType: WEAPONS.rifle.damageType,
-      damage: WEAPONS.rifle.damage,
-      speed: WEAPONS.rifle.speed,
-      range: WEAPONS.rifle.range,
-      spread: WEAPONS.rifle.spread,
-      knockback: WEAPONS.rifle.knockback,
-      reloadMs: WEAPONS.rifle.reloadMs,
-      automatic: false,
-      pellets: 1,
-      reserveInitial: HANDGUN_AMMO.reserveInitial,
-      reserveMax: HANDGUN_AMMO.reserveMax,
-    });
-    expect(Object.values(HANDGUN_AMMO).every(amount => amount % WEAPONS.handgun.magazineSize === 0)).toBe(true);
+  it('7武器modelを3マテリアルへ対応付け、連弩と火炎放射器を連射可能にする', () => {
+    expect(WEAPON_MODEL_ORDER).toHaveLength(7);
+    expect(AMMO_MATERIAL_ORDER).toHaveLength(3);
+    expect(WEAPON_MODEL_ORDER.every(model => WEAPONS[model].material in AMMO_MATERIALS)).toBe(true);
+    expect(WEAPON_MODEL_ORDER.filter(model => WEAPONS[model].material === 'ballistic-material')).toHaveLength(5);
+    expect(WEAPONS['repeating-crossbow']).toMatchObject({ material: 'projectile-material', automatic: true });
+    expect(WEAPONS.flamethrower).toMatchObject({ material: 'special-cell', automatic: true });
   });
 
   it('敵種と弾種のダメージ倍率を解決する', () => {
@@ -275,133 +239,163 @@ describe('戦闘ルール', () => {
   });
 
   it('勝利状態は射撃、リロード、被ダメージ、敵、箱取得を無副作用で拒否する', () => {
-    const victory = { ...INITIAL_STATE, victory: true, reloading: 'rifle' as const };
+    const weapon = activeWeapon(INITIAL_STATE);
+    if (!weapon)
+      throw new Error('初期weaponが必要です。');
+    const victory = { ...INITIAL_STATE, victory: true, reloading: weapon.id };
     expect(canFireAt(victory, 0)).toBe(false);
     expect(fireWeapon(victory, 0).state).toBe(victory);
     expect(startReload(victory)).toBe(victory);
-    expect(completeReload(victory, 'rifle')).toBe(victory);
+    expect(completeReload(victory, weapon.id)).toBe(victory);
     expect(selectWeapon(victory, 'shotgun')).toBe(victory);
     expect(damagePlayer(victory, 100)).toBe(victory);
     expect(damageEnemy(victory, 'basic-1', 100)).toBe(victory);
     expect(respawnEnemy(victory, 'basic-1')).toBe(victory);
-    AMMO_TYPE_ORDER.forEach((ammoType) => {
-      expect(collectTypedAmmoBox(victory, ammoType, AMMO_TYPES[ammoType].boxQuantity)).toEqual({
-        state: victory,
-        collected: 0,
-        remaining: AMMO_TYPES[ammoType].boxQuantity,
-      });
-      expect(dropAmmoBox(victory, ammoType)).toEqual({ state: victory, dropped: 0 });
+    AMMO_MATERIAL_ORDER.forEach((material) => {
+      expect(dropAmmoMaterial(victory, material)).toEqual({ state: victory, dropped: 0 });
+      expect(collectMaterial(victory, material, AMMO_MATERIALS[material].boxQuantity)).toBe(victory);
     });
-    expect(collectWeapon(victory, 'shotgun')).toBe(victory);
+    expect(collectWeapon(victory, createWeaponInstance('victory-shotgun', 'shotgun'))).toBe(victory);
     expect(collectMaterial(victory, 'scrap', 1)).toBe(victory);
   });
 
   it('ライフルは発射時に1発消費し、境界時だけ次弾を許可する', () => {
+    const initialWeapon = activeWeapon(INITIAL_STATE);
+    if (!initialWeapon)
+      throw new Error('初期weaponが必要です。');
     const first = fireWeapon(INITIAL_STATE, 100);
+    const firedWeapon = activeWeapon(first.state);
+    if (!firedWeapon)
+      throw new Error('発射後weaponが必要です。');
     expect(first.fired).toBe(true);
-    expect(first.state.ammo.rifle).toBe(19);
-    expect(canFireAt(first.state, 249)).toBe(false);
-    expect(canFireAt(first.state, 250)).toBe(true);
+    expect(firedWeapon.magazine).toBe(initialWeapon.magazine - 1);
+    expect(canFireAt(first.state, firedWeapon.nextFireAt - 1)).toBe(false);
+    expect(canFireAt(first.state, firedWeapon.nextFireAt)).toBe(true);
   });
 
-  it('ショットガンの発射待ち時間は武器切替後も維持する', () => {
-    const shotgun = selectWeapon(collectWeapon(INITIAL_STATE, 'shotgun'), 'shotgun');
-    const first = fireWeapon(shotgun, 100);
-    const switched = selectWeapon(first.state, 'rifle');
-    expect(first.state.ammo.shotgun).toBe(3);
-    expect(fireWeapon(selectWeapon(switched, 'shotgun'), 849).fired).toBe(false);
-    expect(fireWeapon(selectWeapon(switched, 'shotgun'), 850).fired).toBe(true);
+  it('同model複数個体は弾倉と射撃待ちを共有しない', () => {
+    const firstInstance = createWeaponInstance('revolver-a', 'revolver');
+    const secondInstance = createWeaponInstance('revolver-b', 'revolver');
+    const paired = collectWeapon(collectWeapon(INITIAL_STATE, firstInstance), secondInstance);
+    const first = fireWeapon(selectQuickSlot(paired, 1), 100);
+    const firedFirst = activeWeapon(first.state);
+    if (!firedFirst)
+      throw new Error('1個目のweaponが必要です。');
+    const secondSelected = selectQuickSlot(first.state, 2);
+    const secondBeforeFire = activeWeapon(secondSelected);
+    if (!secondBeforeFire)
+      throw new Error('2個目のweaponが必要です。');
+    expect(secondBeforeFire.id).toBe(secondInstance.id);
+    expect(secondBeforeFire.magazine).toBe(secondInstance.magazine);
+    expect(canFireAt(secondSelected, 100)).toBe(true);
+    const second = fireWeapon(secondSelected, 100);
+    const firstSelected = selectQuickSlot(second.state, 1);
+    expect(canFireAt(firstSelected, firedFirst.nextFireAt - 1)).toBe(false);
+    expect(canFireAt(firstSelected, firedFirst.nextFireAt)).toBe(true);
   });
 
-  it('空の武器は発射せず、リロード完了で選択武器だけを補充する', () => {
-    const emptyRifle = { ...INITIAL_STATE, ammo: { ...INITIAL_STATE.ammo, rifle: 0 } };
+  it('空の武器は発射せず、reload完了時だけ対応マテリアルを消費する', () => {
+    const rifle = activeWeapon(INITIAL_STATE);
+    if (!rifle)
+      throw new Error('初期weaponが必要です。');
+    const definition = WEAPONS[rifle.model];
+    const emptyRifle: CombatState = {
+      ...INITIAL_STATE,
+      inventory: {
+        ...INITIAL_STATE.inventory,
+        quickSlots: [{ ...rifle, magazine: 0 }, null, null],
+      },
+    };
     expect(fireWeapon(emptyRifle, 0).fired).toBe(false);
     const reloading = startReload(emptyRifle);
-    expect(reloading.reloading).toBe('rifle');
+    expect(reloading.reloading).toBe(rifle.id);
     expect(fireWeapon(reloading, 0).fired).toBe(false);
-    const completed = completeReload(reloading, 'rifle');
-    expect(completed.ammo.rifle).toBe(WEAPONS.rifle.magazineSize);
-    expect(completed.ammo.shotgun).toBe(INITIAL_STATE.ammo.shotgun);
-    expect(completed.ammo.handgun).toBe(INITIAL_STATE.ammo.handgun);
-    expect(completed.reserve.rifle).toBe(INITIAL_STATE.reserve.rifle - WEAPONS.rifle.magazineSize);
-    expect(completed.reserve.shotgun).toBe(INITIAL_STATE.reserve.shotgun);
-    expect(completed.reserve.handgun).toBe(INITIAL_STATE.reserve.handgun);
+    const completed = completeReload(reloading, rifle.id);
+    const reloaded = activeWeapon(completed);
+    if (!reloaded)
+      throw new Error('reload後weaponが必要です。');
+    expect(reloaded.magazine).toBe(definition.magazineSize);
+    expect(completed.inventory.materials[definition.material]).toBe(
+      emptyRifle.inventory.materials[definition.material] - definition.magazineSize * definition.materialCostPerShot,
+    );
     expect(completed.reloading).toBeNull();
   });
-  it('予備弾薬が不足するリロードと種類別弾薬箱の部分・全量移動を扱う', () => {
-    const partial = {
+  it('マテリアル不足時はpartial reloadし、完了callbackを二重実行しても二重消費しない', () => {
+    const rifle = activeWeapon(INITIAL_STATE);
+    if (!rifle)
+      throw new Error('初期weaponが必要です。');
+    const definition = WEAPONS[rifle.model];
+    const availableRounds = 2;
+    const materialQuantity = definition.materialCostPerShot * availableRounds + definition.materialCostPerShot - 1;
+    const partial: CombatState = {
       ...INITIAL_STATE,
-      ammo: { ...INITIAL_STATE.ammo, rifle: 12 },
-      reserve: { ...INITIAL_STATE.reserve, rifle: 3 },
+      inventory: {
+        ...INITIAL_STATE.inventory,
+        quickSlots: [{ ...rifle, magazine: Math.max(0, definition.magazineSize - availableRounds - 1) }, null, null],
+        materials: { ...INITIAL_STATE.inventory.materials, [definition.material]: materialQuantity },
+      },
     };
+    const before = activeWeapon(partial);
+    if (!before)
+      throw new Error('partial reload前weaponが必要です。');
     const reloading = startReload(partial);
-    const completed = completeReload(reloading, 'rifle');
-    expect(completed.ammo.rifle).toBe(15);
-    expect(completed.reserve.rifle).toBe(0);
-    const emptyReserve = {
-      ...INITIAL_STATE,
-      ammo: { ...INITIAL_STATE.ammo, rifle: 0 },
-      reserve: { ...INITIAL_STATE.reserve, rifle: 0 },
-    };
-    expect(startReload(emptyReserve)).toBe(emptyReserve);
-    expect(emptyReserve.reloading).toBeNull();
-    expect(completeReload(emptyReserve, 'rifle')).toBe(emptyReserve);
-    AMMO_TYPE_ORDER.forEach((ammoType) => {
-      const { weapon, boxQuantity } = AMMO_TYPES[ammoType];
-      const partialCapacity = Math.max(1, Math.floor(boxQuantity / 2));
-      const partial = collectTypedAmmoBox({
-        ...INITIAL_STATE,
-        reserve: { ...INITIAL_STATE.reserve, [weapon]: WEAPONS[weapon].reserveMax - partialCapacity },
-      }, ammoType, boxQuantity);
-      expect(partial.collected).toBe(partialCapacity);
-      expect(partial.remaining).toBe(boxQuantity - partialCapacity);
-      expect(partial.state.reserve[weapon]).toBe(WEAPONS[weapon].reserveMax);
-      const full = collectTypedAmmoBox(partial.state, ammoType, partial.remaining);
-      expect(full).toEqual({ state: partial.state, collected: 0, remaining: partial.remaining });
+    expect(reloading.inventory.materials[definition.material]).toBe(materialQuantity);
+    const completed = completeReload(reloading, before.id);
+    const reloaded = activeWeapon(completed);
+    if (!reloaded)
+      throw new Error('partial reload後weaponが必要です。');
+    const loaded = Math.floor(materialQuantity / definition.materialCostPerShot);
+    expect(reloaded.magazine).toBe(before.magazine + loaded);
+    expect(completed.inventory.materials[definition.material]).toBe(materialQuantity - loaded * definition.materialCostPerShot);
+    expect(completeReload(completed, before.id)).toBe(completed);
 
-      const dropped = dropAmmoBox(INITIAL_STATE, ammoType);
-      expect(dropped.dropped).toBe(Math.min(INITIAL_STATE.reserve[weapon], boxQuantity));
-      expect(dropped.state.reserve[weapon]).toBe(INITIAL_STATE.reserve[weapon] - dropped.dropped);
-      const empty = { ...INITIAL_STATE, reserve: { ...INITIAL_STATE.reserve, [weapon]: 0 } };
-      expect(dropAmmoBox(empty, ammoType)).toEqual({ state: empty, dropped: 0 });
+    AMMO_MATERIAL_ORDER.forEach((material) => {
+      const dropped = dropAmmoMaterial(INITIAL_STATE, material);
+      expect(dropped.dropped).toBeGreaterThan(0);
+      expect(dropped.state.inventory.materials[material]).toBe(INITIAL_STATE.inventory.materials[material] - dropped.dropped);
+      const empty: CombatState = {
+        ...INITIAL_STATE,
+        inventory: {
+          ...INITIAL_STATE.inventory,
+          materials: { ...INITIAL_STATE.inventory.materials, [material]: 0 },
+        },
+      };
+      expect(dropAmmoMaterial(empty, material)).toEqual({ state: empty, dropped: 0 });
     });
   });
 
   it('武器切替はリロードを中断し、残弾を保持する', () => {
-    const fired = fireWeapon(selectWeapon(collectWeapon(INITIAL_STATE, 'shotgun'), 'shotgun'), 0).state;
-    const reloading = startReload(fired);
+    const shotgun = createWeaponInstance('switch-shotgun', 'shotgun', WEAPONS.shotgun.magazineSize - 1);
+    const reloading = startReload(selectQuickSlot(collectWeapon(INITIAL_STATE, shotgun), 1));
     const switched = selectWeapon(reloading, 'rifle');
     expect(switched.reloading).toBeNull();
-    expect(switched.ammo.shotgun).toBe(3);
-    expect(completeReload(switched, 'shotgun')).toEqual(switched);
-  });
-
-  it('同じhandgun WeaponIdのsidearm model切替は共有弾薬とリロードを維持する', () => {
-    const sidearms = collectWeapon(collectWeapon(INITIAL_STATE, 'revolver'), 'compact-pistol');
-    const revolver = selectQuickSlot(sidearms, 1);
-    expect(revolver.weapon).toBe('handgun');
-    const fired = fireWeapon(revolver, 0);
-    expect(fired.fired).toBe(true);
-    const reloading = startReload(fired.state);
-    expect(reloading.reloading).toBe('handgun');
-    const compactPistol = selectQuickSlot(reloading, 2);
-    expect(compactPistol.weapon).toBe(weaponIdForModel('compact-pistol'));
-    expect(compactPistol.inventory.selectedQuickSlot).toBe(2);
-    expect(compactPistol.ammo.handgun).toBe(reloading.ammo.handgun);
-    expect(compactPistol.reserve.handgun).toBe(reloading.reserve.handgun);
-    expect(compactPistol.reloading).toBe(reloading.reloading);
-    expect(compactPistol.nextFireAt.handgun).toBe(reloading.nextFireAt.handgun);
-  });
-
-  it('弾薬種は既存WeaponIdへ一意に対応し、sidearmはhandgun弾薬を共有する', () => {
-    const weaponIds = AMMO_TYPE_ORDER.map(type => AMMO_TYPES[type].weapon);
-    expect(new Set(weaponIds).size).toBe(Object.keys(WEAPONS).length);
-    expect(new Set(AMMO_TYPE_ORDER.map(type => AMMO_TYPES[type].worldColor)).size).toBe(AMMO_TYPE_ORDER.length);
-    AMMO_TYPE_ORDER.forEach((type) => {
-      expect(ammoTypeForWeapon(AMMO_TYPES[type].weapon)).toBe(type);
-      expect(AMMO_TYPES[type].boxQuantity).toBeGreaterThan(0);
+    expect(inventoryWeaponAt(switched, { container: 'quick', index: 1 })).toMatchObject({
+      id: shotgun.id,
+      magazine: shotgun.magazine,
     });
-    expect(ammoTypeForWeapon(weaponIdForModel('revolver'))).toBe(ammoTypeForWeapon(weaponIdForModel('compact-pistol')));
+    expect(completeReload(switched, shotgun.id)).toEqual(switched);
+  });
+
+  it('同modelのreloadは個体IDごとに完了対象を限定する', () => {
+    const first = createWeaponInstance('reload-revolver-a', 'revolver', WEAPONS.revolver.magazineSize - 1);
+    const second = createWeaponInstance('reload-revolver-b', 'revolver', WEAPONS.revolver.magazineSize - 1);
+    const paired = collectWeapon(collectWeapon(INITIAL_STATE, first), second);
+    const firstReload = startReload(selectQuickSlot(paired, 1));
+    expect(firstReload.reloading).toBe(first.id);
+    const secondSelected = selectQuickSlot(firstReload, 2);
+    expect(secondSelected.reloading).toBeNull();
+    const secondReload = startReload(secondSelected);
+    expect(secondReload.reloading).toBe(second.id);
+    expect(completeReload(secondReload, first.id)).toBe(secondReload);
+    const completed = completeReload(secondReload, second.id);
+    expect(inventoryWeaponAt(completed, { container: 'quick', index: 1 })).toMatchObject({
+      id: first.id,
+      magazine: first.magazine,
+    });
+    expect(inventoryWeaponAt(completed, { container: 'quick', index: 2 })).toMatchObject({
+      id: second.id,
+      magazine: WEAPONS.revolver.magazineSize,
+    });
   });
 
   it('基本敵9体とドローン3体を初期化し、対象だけへダメージと再出現を適用する', () => {
@@ -425,39 +419,33 @@ describe('戦闘ルール', () => {
   });
 
   it('武器モデルを空きquick slot優先で非stack格納し、slot選択と満杯no-opを保つ', () => {
-    expect(INITIAL_STATE.inventory).toEqual({
-      quickSlots: ['rifle', null, null],
-      backpackSlots: Array(BACKPACK_SLOT_COUNT).fill(null),
-      selectedQuickSlot: 0,
-      materials: { scrap: 0 },
-    });
+    expect(activeWeapon(INITIAL_STATE)).toMatchObject({ model: 'rifle' });
+    expect(INITIAL_STATE.inventory.backpackSlots).toEqual(Array(BACKPACK_SLOT_COUNT).fill(null));
     expect(selectQuickSlot(INITIAL_STATE, 1)).toBe(INITIAL_STATE);
-    const shotgun = collectWeapon(INITIAL_STATE, 'shotgun');
-    const revolver = collectWeapon(shotgun, 'revolver');
-    const duplicateRevolver = collectWeapon(revolver, 'revolver');
-    expect(revolver.inventory.quickSlots).toEqual(['rifle', 'shotgun', 'revolver']);
-    expect(duplicateRevolver.inventory.backpackSlots[0]).toBe('revolver');
-    expect(weaponIdForModel('revolver')).toBe('handgun');
-    expect(weaponIdForModel('compact-pistol')).toBe('handgun');
+    const shotgun = collectWeapon(INITIAL_STATE, createWeaponInstance('inventory-shotgun', 'shotgun'));
+    const revolver = collectWeapon(shotgun, createWeaponInstance('inventory-revolver-a', 'revolver'));
+    const duplicateRevolver = collectWeapon(revolver, createWeaponInstance('inventory-revolver-b', 'revolver'));
+    expect(revolver.inventory.quickSlots.map(weapon => weapon?.model)).toEqual(['rifle', 'shotgun', 'revolver']);
+    expect(duplicateRevolver.inventory.backpackSlots[0]).toMatchObject({ id: 'inventory-revolver-b', model: 'revolver' });
     const selected = selectQuickSlot(duplicateRevolver, 2);
-    expect(selected.weapon).toBe('handgun');
+    expect(activeWeapon(selected)).toMatchObject({ model: 'revolver' });
     expect(selected.inventory.selectedQuickSlot).toBe(2);
     expect(selectWeapon(selected, 'shotgun').inventory.selectedQuickSlot).toBe(1);
 
-    const models = Object.keys(WEAPON_MODELS) as (keyof typeof WEAPON_MODELS)[];
+    const models = WEAPON_MODEL_ORDER;
     let full = INITIAL_STATE;
     for (let index = 1; index < QUICK_SLOT_COUNT + BACKPACK_SLOT_COUNT; index += 1) {
       const model = models[index % models.length];
       if (!model)
         throw new Error('武器モデル設定が空です。');
-      full = collectWeapon(full, model);
+      full = collectWeapon(full, createWeaponInstance(`full-${index}`, model));
     }
     expect(full.inventory.quickSlots).not.toContain(null);
     expect(full.inventory.backpackSlots).not.toContain(null);
     const firstModel = models[0];
     if (!firstModel)
       throw new Error('武器モデル設定が空です。');
-    expect(collectWeapon(full, firstModel)).toBe(full);
+    expect(collectWeapon(full, createWeaponInstance('full-extra', firstModel))).toBe(full);
 
     const first = collectMaterial(selected, 'scrap', 1);
     const second = collectMaterial(first, 'scrap', 1);
@@ -466,41 +454,51 @@ describe('戦闘ルール', () => {
   });
 
   it('詳細インベントリは武器を移動・交換し、空いた選択quick slotを戦闘に使わない', () => {
-    const collected = collectWeapon(collectWeapon(collectWeapon(INITIAL_STATE, 'shotgun'), 'revolver'), 'compact-pistol');
-    const selected = {
-      ...selectQuickSlot(collected, 1),
-      ammo: { ...collected.ammo, shotgun: Math.max(0, WEAPONS.shotgun.magazineSize - 1) },
-    };
+    const shotgun = createWeaponInstance('move-shotgun', 'shotgun', WEAPONS.shotgun.magazineSize - 1);
+    const collected = collectWeapon(
+      collectWeapon(
+        collectWeapon(INITIAL_STATE, shotgun),
+        createWeaponInstance('move-revolver', 'revolver'),
+      ),
+      createWeaponInstance('move-compact', 'compact-pistol'),
+    );
+    const selected = selectQuickSlot(collected, 1);
     const reloading = startReload(selected);
-    expect(reloading.reloading).toBe('shotgun');
+    expect(reloading.reloading).toBe(shotgun.id);
 
     const moved = moveInventoryWeapon(reloading, { container: 'quick', index: 1 }, { container: 'backpack', index: 1 });
     expect(moved.inventory.selectedQuickSlot).toBe(1);
     expect(inventoryWeaponAt(moved, { container: 'quick', index: 1 })).toBeNull();
-    expect(inventoryWeaponAt(moved, { container: 'backpack', index: 1 })).toBe('shotgun');
-    expect(moved.weapon).toBeNull();
+    expect(inventoryWeaponAt(moved, { container: 'backpack', index: 1 })).toMatchObject({ id: shotgun.id, model: 'shotgun' });
     expect(moved.reloading).toBeNull();
-    expect(activeWeaponId(moved)).toBeNull();
+    expect(activeWeapon(moved)).toBeNull();
 
-    const staleWeapon = { ...moved, weapon: 'rifle' as const };
-    expect(canFireAt(staleWeapon, staleWeapon.nextFireAt.rifle)).toBe(false);
-    expect(fireWeapon(staleWeapon, staleWeapon.nextFireAt.rifle)).toEqual({ state: staleWeapon, fired: false });
-    expect(startReload(staleWeapon)).toBe(staleWeapon);
+    expect(canFireAt(moved, 0)).toBe(false);
+    expect(fireWeapon(moved, 0)).toEqual({ state: moved, fired: false });
+    expect(startReload(moved)).toBe(moved);
 
     const restored = moveInventoryWeapon(moved, { container: 'backpack', index: 0 }, { container: 'quick', index: 1 });
     expect(restored.inventory.selectedQuickSlot).toBe(1);
-    expect(restored.weapon).toBe(weaponIdForModel('compact-pistol'));
+    expect(activeWeapon(restored)).toMatchObject({ model: 'compact-pistol' });
     const swapped = moveInventoryWeapon(restored, { container: 'quick', index: 2 }, { container: 'backpack', index: 1 });
-    expect(inventoryWeaponAt(swapped, { container: 'quick', index: 2 })).toBe('shotgun');
-    expect(inventoryWeaponAt(swapped, { container: 'backpack', index: 1 })).toBe('revolver');
+    expect(inventoryWeaponAt(swapped, { container: 'quick', index: 2 })).toMatchObject({ id: shotgun.id, model: 'shotgun' });
+    expect(inventoryWeaponAt(swapped, { container: 'backpack', index: 1 })).toMatchObject({ model: 'revolver' });
     expect(removeInventoryWeapon(swapped, { container: 'backpack', index: 9 })).toBe(swapped);
   });
 
-  it('再挑戦は所持品、武器別残弾、発射待ち、リロード、敵12個体を初期化する', () => {
-    const changed = {
-      ...fireWeapon(selectWeapon(collectWeapon(INITIAL_STATE, 'shotgun'), 'shotgun'), 100).state,
-      reloading: 'shotgun' as const,
-    };
+  it('world drop後の再取得は同じweapon個体と装填済み弾を保持する', () => {
+    const droppedWeapon = createWeaponInstance('drop-revolver', 'revolver', WEAPONS.revolver.magazineSize - 1, 345);
+    const carried = collectWeapon(INITIAL_STATE, droppedWeapon);
+    const beforeDrop = inventoryWeaponAt(carried, { container: 'quick', index: 1 });
+    if (!beforeDrop)
+      throw new Error('drop前weaponが必要です。');
+    const removed = removeInventoryWeapon(carried, { container: 'quick', index: 1 });
+    const repicked = collectWeapon(removed, beforeDrop);
+    expect(inventoryWeaponAt(repicked, { container: 'quick', index: 1 })).toEqual(beforeDrop);
+  });
+
+  it('再挑戦は所持品、個別弾倉、発射待ち、リロード、敵12個体を初期化する', () => {
+    const changed = startReload(fireWeapon(INITIAL_STATE, 100).state);
     const retried = retryCombat();
     expect(changed).not.toEqual(retried);
     expect(retried).toEqual(INITIAL_STATE);
@@ -509,16 +507,10 @@ describe('戦闘ルール', () => {
     expect(retried.inventory.quickSlots).not.toBe(INITIAL_STATE.inventory.quickSlots);
     expect(retried.inventory.backpackSlots).not.toBe(INITIAL_STATE.inventory.backpackSlots);
     expect(retried.inventory.materials).not.toBe(INITIAL_STATE.inventory.materials);
-    expect(retried.ammo).not.toBe(INITIAL_STATE.ammo);
-    expect(retried.reserve).not.toBe(INITIAL_STATE.reserve);
-    expect(retried.nextFireAt).not.toBe(INITIAL_STATE.nextFireAt);
+    expect(retried.inventory.quickSlots[0]).not.toBe(INITIAL_STATE.inventory.quickSlots[0]);
     expect(retried.enemies).not.toBe(INITIAL_STATE.enemies);
     ENEMY_INSTANCE_IDS.forEach((id) => {
       expect(retried.enemies[id]).not.toBe(INITIAL_STATE.enemies[id]);
-    });
-    AMMO_TYPE_ORDER.forEach((type) => {
-      const weapon = AMMO_TYPES[type].weapon;
-      expect(retried.reserve[weapon]).toBe(INITIAL_STATE.reserve[weapon]);
     });
   });
 });

@@ -5,6 +5,10 @@ requirements: REQ-SURVIVAL-TIME-LIMIT
 
 # survival-time-limit-v1 仕様
 
+## Issue #77の限定同期
+
+[SPEC-AMMO-MATERIAL-V1](ammo-material-v1.md) を、AmmoType、reserve、旧world ammo、初期ammo表現の現行仕様として参照する。本書のTimerEvent、generation guard、terminal、retry、stable box respawn規則は維持し、全体を supersede しない。
+
 ## #71前の時間と状態（履歴）
 
 run開始時刻を startedAt、現在のゲーム時刻を now とする。残り時間は次で求め、範囲を0〜180000msへ収める。

@@ -5,6 +5,10 @@ requirements: REQ-COMBAT-CHOICE
 
 # combat-choice-v1 仕様
 
+## Issue #77の限定supersede
+
+[SPEC-AMMO-MATERIAL-V1](ammo-material-v1.md) は、WeaponId別shared ammo、5武器表、shared nextFireAtとreload、retry時の旧ammo表現だけを supersede する。現行は7 WeaponModel、3マテリアル、WeaponInstanceごとのmagazineとnextFireAtを使う。移動、敵、wall、map、照準、入力、既存bullet/collider/range/hit/effectの規則は維持する。
+
 > [Issue #38](https://github.com/WFrog2511/2d-coop-survival/issues/38) follow-upにより、敵HP、ドローン耐性、death再出現delayは本書の初版値から更新された。
 >
 > [Issue #71](https://github.com/WFrog2511/2d-coop-survival/issues/71)は、本書の旧二武器・第三武器対象外・固定weapon種slotの記述を履歴とする。ハンドガン、リボルバー、コンパクトピストルは`WeaponId`のhandgunとshared ammo stateを使い、`1`〜`3`はクイックスロットを選択する。

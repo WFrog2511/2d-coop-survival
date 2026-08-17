@@ -6,6 +6,10 @@ definition_of_delivery: https://github.com/WFrog2511/2d-coop-survival/issues/71
 
 # inventory-v1 要件
 
+## Issue #77の限定supersede
+
+[REQ-AMMO-MATERIAL-V1](ammo-material-v1.md) は、各枠を WeaponModel またはnullとする表現、shared sidearm ammo、AmmoType、pouch reserve、world ammo、terminal/retry時の旧ammo stateだけを supersede する。現行はWeaponInstance、3マテリアル、instanceごとのmagazineとnextFireAtを使う。3 quick slot、10 backpack slot、weaponのmove/swap、native drag and drop、配置候補、weapon枠の非stack契約は本書のまま維持する。
+
 ## 成果物段階
 
 Prototype standard のローカルで実プレイ可能なプロトタイプとする。所持品と world item はブラウザ内だけで扱い、永続化・通信同期は行わない。
