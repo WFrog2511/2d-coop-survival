@@ -1,4 +1,4 @@
-import type { EnemyVisibility, SpawnDirection, TilePosition } from '../arena-map';
+import type { ArenaMap, EnemyVisibility, SpawnDirection, Tile, TilePosition } from '../arena-map';
 import { DIRECTION_LABELS, ENEMY_IDS } from '../game-data';
 import { PLAYER_ROLES, type PlayerRoleId } from '../player-data';
 import { AMMO_MATERIAL_ORDER, AMMO_MATERIALS, STABLE_ENEMY_SLOT_COUNT, WEAPONS, activeEnemyCount, activeWeapon, currentRunPhase, currentWaveNumber, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, type AmmoMaterial, type CombatState, type EnemyInstanceId, type InventorySlotRef, type RunState, type WeaponInstance } from '../rules';
@@ -19,6 +19,20 @@ export type EnemyHudView = {
   silhouetteTexture: string;
   silhouetteAlpha: number;
   silhouetteVisible: boolean;
+};
+
+export type MinimapMarker = {
+  kind: 'enemy' | 'weapon' | 'ammo' | 'scrap';
+  tile: TilePosition;
+};
+
+export type MinimapView = {
+  map: Pick<ArenaMap, 'width' | 'height' | 'tiles'>;
+  observedTiles: ReadonlyMap<string, Tile>;
+  visibleTileKeys: ReadonlySet<string>;
+  terrainChanged: boolean;
+  playerTile: TilePosition;
+  markers: readonly MinimapMarker[];
 };
 
 export type ArenaHudView = {
@@ -89,6 +103,11 @@ export function formatSurvivalTime(remainingMs: number): string {
 
 export class ArenaHud {
   private readonly game = element<HTMLElement>('#game');
+  private readonly minimap = element<HTMLCanvasElement>('[data-testid="minimap"]');
+  private readonly minimapContext = this.minimap.getContext('2d');
+  private readonly minimapTerrain = document.createElement('canvas');
+  private readonly minimapTerrainContext = this.minimapTerrain.getContext('2d');
+  private minimapTerrainInitialized = false;
   private readonly playerHp = element<HTMLOutputElement>('[data-testid="hp"]');
   private readonly playerHpBar = element<HTMLProgressElement>('[data-testid="hp-bar"]');
   private readonly weaponHud = element<HTMLOutputElement>('[data-testid="weapon"]');
@@ -322,6 +341,88 @@ export class ArenaHud {
     this.playerTileHud.dataset.visibilityMaskAlpha = String(alpha);
     this.playerTileHud.dataset.obscuredTileCount = String(obscuredTileCount);
     this.playerTileHud.dataset.visibilityPlayerTile = `${playerTile.x},${playerTile.y}`;
+  }
+
+  /** 現在視界と既知地形だけを小さなCanvasへ描画する。 */
+  public updateMinimap(view: MinimapView): void {
+    const context = this.minimapContext;
+    const terrainContext = this.minimapTerrainContext;
+    if (!context || !terrainContext)
+      return;
+    const width = this.minimap.width;
+    const height = this.minimap.height;
+    const tileWidth = width / view.map.width;
+    const tileHeight = height / view.map.height;
+    if (
+      view.terrainChanged
+      || !this.minimapTerrainInitialized
+      || this.minimapTerrain.width !== width
+      || this.minimapTerrain.height !== height
+    ) {
+      this.redrawMinimapTerrain(view, terrainContext, width, height, tileWidth, tileHeight);
+      this.minimapTerrainInitialized = true;
+    }
+    context.clearRect(0, 0, width, height);
+    context.drawImage(this.minimapTerrain, 0, 0);
+    view.markers.forEach((marker) => {
+      const color = marker.kind === 'enemy'
+        ? '#ff6b6b'
+        : marker.kind === 'weapon'
+          ? '#8fd8ff'
+          : marker.kind === 'ammo'
+            ? '#ffe17a'
+            : '#c6b4ff';
+      context.fillStyle = color;
+      context.fillRect(
+        marker.tile.x * tileWidth + Math.max(1, tileWidth * 0.2),
+        marker.tile.y * tileHeight + Math.max(1, tileHeight * 0.2),
+        Math.max(2, tileWidth * 0.6),
+        Math.max(2, tileHeight * 0.6),
+      );
+    });
+    context.fillStyle = '#ffffff';
+    context.fillRect(
+      view.playerTile.x * tileWidth + Math.max(1, tileWidth * 0.15),
+      view.playerTile.y * tileHeight + Math.max(1, tileHeight * 0.15),
+      Math.max(2, tileWidth * 0.7),
+      Math.max(2, tileHeight * 0.7),
+    );
+    this.minimap.dataset.width = String(view.map.width);
+    this.minimap.dataset.height = String(view.map.height);
+    this.minimap.dataset.observedTiles = String(view.observedTiles.size);
+    this.minimap.dataset.visibleTiles = String(view.visibleTileKeys.size);
+    this.minimap.dataset.playerTile = `${view.playerTile.x},${view.playerTile.y}`;
+    this.minimap.dataset.visibleMarkers = view.markers
+      .map(marker => `${marker.kind}:${marker.tile.x},${marker.tile.y}`)
+      .join('|');
+  }
+
+  private redrawMinimapTerrain(
+    view: MinimapView,
+    context: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    tileWidth: number,
+    tileHeight: number,
+  ): void {
+    this.minimapTerrain.width = width;
+    this.minimapTerrain.height = height;
+    const drawTile = (key: string, tile: Tile, floor: string, wall: string): void => {
+      const [x, y] = key.split(',').map(Number);
+      if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= view.map.width || y >= view.map.height)
+        return;
+      context.fillStyle = tile === 'wall' ? wall : floor;
+      context.fillRect(x * tileWidth, y * tileHeight, Math.ceil(tileWidth), Math.ceil(tileHeight));
+    };
+    context.fillStyle = '#07111e';
+    context.fillRect(0, 0, width, height);
+    view.observedTiles.forEach((tile, key) => drawTile(key, tile, '#193148', '#3b5164'));
+    view.visibleTileKeys.forEach((key) => {
+      const [x, y] = key.split(',').map(Number);
+      const tile = Number.isInteger(x) && Number.isInteger(y) ? view.map.tiles[y]?.[x] : undefined;
+      if (tile)
+        drawTile(key, tile, '#3b7690', '#8aa8bd');
+    });
   }
 
   public updateEnemy(id: EnemyInstanceId, view: EnemyHudView): void {

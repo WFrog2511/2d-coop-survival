@@ -6,6 +6,8 @@ import {
   hasLineOfSight,
   ARENA_HEIGHT_TILES,
   ARENA_WIDTH_TILES,
+  ARENA_CENTER,
+  CENTRAL_RESERVE_SIZE_TILES,
   SPAWN_DIRECTIONS,
   SPAWN_PHASE_MS,
   TILE_SIZE,
@@ -62,6 +64,50 @@ function mapFrom(rows: ArenaMap['tiles']): ArenaMap {
   };
 }
 
+function expectStandardArenaInvariants(map: ArenaMap): void {
+  expect(map.width).toBe(ARENA_WIDTH_TILES);
+  expect(map.height).toBe(ARENA_HEIGHT_TILES);
+  expect(map.width % 2).toBe(1);
+  expect(map.height % 2).toBe(1);
+  expect(map.tiles).toHaveLength(map.height);
+  expect(map.tiles.every(row => row.length === map.width)).toBe(true);
+
+  const center = { x: Math.floor(map.width / 2), y: Math.floor(map.height / 2) };
+  const halfReserveSize = Math.floor(CENTRAL_RESERVE_SIZE_TILES / 2);
+  const bounds = {
+    left: center.x - halfReserveSize,
+    top: center.y - halfReserveSize,
+    right: center.x + halfReserveSize,
+    bottom: center.y + halfReserveSize,
+  };
+  const reserve = map.centralReserve;
+  if (!reserve)
+    throw new Error('標準アリーナには中央予約metadataが必要です。');
+  expect(ARENA_CENTER).toEqual(center);
+  expect(CENTRAL_RESERVE_SIZE_TILES % 2).toBe(1);
+  expect(reserve.bounds).toEqual(bounds);
+  expect(bounds.right - bounds.left + 1).toBe(CENTRAL_RESERVE_SIZE_TILES);
+  expect(bounds.bottom - bounds.top + 1).toBe(CENTRAL_RESERVE_SIZE_TILES);
+  for (let y = bounds.top; y <= bounds.bottom; y += 1)
+    for (let x = bounds.left; x <= bounds.right; x += 1)
+      expect(map.tiles[y][x]).toBe('wall');
+
+  const expectedApproaches: Record<SpawnDirection, TilePosition> = {
+    up: { x: center.x, y: bounds.top - 1 },
+    right: { x: bounds.right + 1, y: center.y },
+    down: { x: center.x, y: bounds.bottom + 1 },
+    left: { x: bounds.left - 1, y: center.y },
+  };
+  expect(reserve.approaches).toEqual(expectedApproaches);
+  SPAWN_DIRECTIONS.forEach((direction) => {
+    const approach = reserve.approaches[direction];
+    expect(map.tiles[approach.y][approach.x]).toBe('floor');
+    expect(findPath(map, map.start, approach).length).toBeGreaterThan(0);
+  });
+  expect(map.tiles[map.start.y][map.start.x]).toBe('floor');
+  expect(allFloorsReachable(map)).toBe(true);
+}
+
 describe('自動生成アリーナ', () => {
   test('同一seedは同じ地形を生成し、次seedは変化する', () => {
     const first = generateArenaMap(seed);
@@ -72,59 +118,21 @@ describe('自動生成アリーナ', () => {
     expect(next.tiles).not.toEqual(first.tiles);
   });
 
-  test('80×50の通常生成は14部屋、指定サイズ、1〜3幅の通路、1マス障害物を持つ', () => {
+  test('通常生成は設定と中央予約metadataから導かれる境界・接近経路を持つ', () => {
     const map = generateArenaMap(seed);
-    expect(ARENA_WIDTH_TILES).toBe(80);
-    expect(ARENA_HEIGHT_TILES).toBe(50);
-    expect(map.width).toBe(80);
-    expect(map.height).toBe(50);
-    expect(map.tiles).toHaveLength(50);
-    expect(map.tiles.every(row => row.length === 80)).toBe(true);
-    expect(map.rooms).toHaveLength(14);
-    expect(map.rooms.every(room => room.width >= 8 && room.width <= 12)).toBe(true);
-    expect(map.rooms.every(room => room.height >= 6 && room.height <= 10)).toBe(true);
-    expect(map.corridors).toHaveLength(13);
-    expect(map.corridors.every(corridor => corridor.width >= 1 && corridor.width <= 3)).toBe(true);
-    expect(map.obstacles.length).toBeGreaterThan(0);
+    expectStandardArenaInvariants(map);
   });
 
-  test('代表seedは通常生成を使い、fallbackに偏らない', () => {
+  test('代表seedも同じ標準アリーナ不変条件を満たす', () => {
     [15, seed, nextSeed(seed)].forEach((fixedSeed) => {
       const map = generateArenaMap(fixedSeed);
-      expect(map.rooms).toHaveLength(14);
-      expect(allFloorsReachable(map)).toBe(true);
+      expectStandardArenaInvariants(map);
     });
   });
 
-  test('fallbackは80×50内の3列3行中央開始で8部屋と幅2通路を置く', () => {
+  test('fallbackも設定由来の予約領域と到達可能な接近経路を維持する', () => {
     const map = generateFallbackArenaMap(seed);
-    expect(map.rooms).toEqual([
-      { x: 34, y: 20, width: 12, height: 10 },
-      { x: 34, y: 5, width: 12, height: 10 },
-      { x: 7, y: 20, width: 12, height: 10 },
-      { x: 34, y: 35, width: 12, height: 10 },
-      { x: 61, y: 20, width: 12, height: 10 },
-      { x: 7, y: 5, width: 12, height: 10 },
-      { x: 61, y: 5, width: 12, height: 10 },
-      { x: 7, y: 35, width: 12, height: 10 },
-    ]);
-    expect(map.start).toEqual({ x: 40, y: 25 });
-    expect(map.corridors).toHaveLength(7);
-    expect(map.corridors.every(corridor => corridor.width === 2)).toBe(true);
-    expect(map.corridors.slice(0, 4).map(corridor => ({ from: corridor.from, to: corridor.to }))).toEqual([
-      { from: { x: 40, y: 25 }, to: { x: 40, y: 10 } },
-      { from: { x: 40, y: 25 }, to: { x: 13, y: 25 } },
-      { from: { x: 40, y: 25 }, to: { x: 40, y: 40 } },
-      { from: { x: 40, y: 25 }, to: { x: 67, y: 25 } },
-    ]);
-    expect(map.obstacles).toEqual([]);
-    expect(map.rooms.every(room =>
-      room.x >= 1
-      && room.y >= 1
-      && room.x + room.width < ARENA_WIDTH_TILES - 1
-      && room.y + room.height < ARENA_HEIGHT_TILES - 1,
-    )).toBe(true);
-    expect(allFloorsReachable(map)).toBe(true);
+    expectStandardArenaInvariants(map);
   });
 
   test('fallbackは4主方向それぞれで12 slotの厳格な方向spawn候補を確保する', () => {
@@ -155,13 +163,13 @@ describe('自動生成アリーナ', () => {
 
   test('外周はwallで、すべてのfloorは開始地点から到達可能である', () => {
     const map = generateArenaMap(seed);
-    for (let x = 0; x < ARENA_WIDTH_TILES; x += 1) {
+    for (let x = 0; x < map.width; x += 1) {
       expect(map.tiles[0][x]).toBe('wall');
-      expect(map.tiles[ARENA_HEIGHT_TILES - 1][x]).toBe('wall');
+      expect(map.tiles[map.height - 1][x]).toBe('wall');
     }
-    for (let y = 0; y < ARENA_HEIGHT_TILES; y += 1) {
+    for (let y = 0; y < map.height; y += 1) {
       expect(map.tiles[y][0]).toBe('wall');
-      expect(map.tiles[y][ARENA_WIDTH_TILES - 1]).toBe('wall');
+      expect(map.tiles[y][map.width - 1]).toBe('wall');
     }
     expect(allFloorsReachable(map)).toBe(true);
   });
@@ -573,6 +581,13 @@ describe('自動生成アリーナ', () => {
       right: 20 * TILE_SIZE + 1,
       bottom: 12 * TILE_SIZE + 1,
     })).toEqual({ left: 0, top: 0, right: 20, bottom: 12 });
+    const compactMap = { width: 20, height: 16, tileSize: TILE_SIZE / 2 };
+    expect(viewportTileRect({
+      left: compactMap.tileSize * 3,
+      top: compactMap.tileSize * 2,
+      right: compactMap.tileSize * 7,
+      bottom: compactMap.tileSize * 5,
+    }, compactMap)).toEqual({ left: 3, top: 2, right: 6, bottom: 4 });
   });
 
   test('spawnは占有tileを重複選択せず、各待ち時間は範囲内かつ決定的である', () => {

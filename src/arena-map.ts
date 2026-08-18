@@ -1,6 +1,7 @@
 export const TILE_SIZE = 40;
-export const ARENA_WIDTH_TILES = 80;
-export const ARENA_HEIGHT_TILES = 50;
+export const ARENA_WIDTH_TILES = 113;
+export const ARENA_HEIGHT_TILES = 71;
+export const CENTRAL_RESERVE_SIZE_TILES = 13;
 export const AMMO_BOX_COUNT = 4;
 export const SPAWN_PHASE_MS = 60_000;
 export const WORLD_WEAPON_DROP_MAX_PATH_DISTANCE = 2;
@@ -10,21 +11,9 @@ const NORMAL_ROOM_COUNT = 14;
 const NORMAL_ROOM_WIDTH = { minimum: 8, maximum: 12 };
 const NORMAL_ROOM_HEIGHT = { minimum: 6, maximum: 10 };
 const NORMAL_ROOM_PLACEMENT_ATTEMPTS = 80;
-const FALLBACK_ROOM_COLUMNS = 3;
-const FALLBACK_ROOM_ROWS = 3;
 const FALLBACK_ROOM_COUNT = 8;
 const FALLBACK_ROOM_WIDTH = 12;
 const FALLBACK_ROOM_HEIGHT = 10;
-const FALLBACK_ROOM_SLOTS = [
-  { column: 1, row: 1 },
-  { column: 1, row: 0 },
-  { column: 0, row: 1 },
-  { column: 1, row: 2 },
-  { column: 2, row: 1 },
-  { column: 0, row: 0 },
-  { column: 2, row: 0 },
-  { column: 0, row: 2 },
-] as const;
 
 /** アリーナを構成する壁または床のtile種別。 */
 export type Tile = 'wall' | 'floor';
@@ -44,6 +33,12 @@ export type Room = { x: number; y: number; width: number; height: number };
 /** 二つの部屋を結ぶ直交通路の定義。 */
 export type Corridor = { from: TilePosition; to: TilePosition; width: number; horizontalFirst: boolean };
 
+/** 中央に確保する将来用の予約領域と、その周囲の安定した接近候補。 */
+export type CentralReserve = {
+  bounds: TileRect;
+  approaches: Record<SpawnDirection, TilePosition>;
+};
+
 /** spawn遅延計算に使う敵種別。 */
 export type ArenaEnemyKind = 'basic' | 'drone';
 
@@ -61,6 +56,7 @@ export type ArenaMap = {
   corridors: Corridor[];
   obstacles: TilePosition[];
   start: TilePosition;
+  centralReserve?: CentralReserve;
 };
 
 /** 通常のspawn候補を選ぶためのプレイヤー、表示領域、占有位置。 */
@@ -78,6 +74,25 @@ export type EnemySpawnRequest = Omit<SpawnRequest, 'direction'> & {
 
 /** 基本敵がプレイヤーへ接近するときの役割。 */
 export type BasicApproachRole = 'direct' | 'left' | 'right';
+
+export const ARENA_CENTER: TilePosition = {
+  x: Math.floor(ARENA_WIDTH_TILES / 2),
+  y: Math.floor(ARENA_HEIGHT_TILES / 2),
+};
+
+export const CENTRAL_RESERVE_BOUNDS: TileRect = {
+  left: ARENA_CENTER.x - Math.floor(CENTRAL_RESERVE_SIZE_TILES / 2),
+  top: ARENA_CENTER.y - Math.floor(CENTRAL_RESERVE_SIZE_TILES / 2),
+  right: ARENA_CENTER.x + Math.floor(CENTRAL_RESERVE_SIZE_TILES / 2),
+  bottom: ARENA_CENTER.y + Math.floor(CENTRAL_RESERVE_SIZE_TILES / 2),
+};
+
+export const CENTRAL_RESERVE_APPROACHES: Record<SpawnDirection, TilePosition> = {
+  up: { x: ARENA_CENTER.x, y: CENTRAL_RESERVE_BOUNDS.top - 1 },
+  right: { x: CENTRAL_RESERVE_BOUNDS.right + 1, y: ARENA_CENTER.y },
+  down: { x: ARENA_CENTER.x, y: CENTRAL_RESERVE_BOUNDS.bottom + 1 },
+  left: { x: CENTRAL_RESERVE_BOUNDS.left - 1, y: ARENA_CENTER.y },
+};
 
 /**
  * 経過時間から現在のspawn phase番号を求める。
@@ -117,14 +132,22 @@ export function spawnDirectionForSlot(primary: SpawnDirection, stableSlot: numbe
  * world座標の表示範囲をtile境界へ変換する。
  *
  * @param view world座標で表した表示範囲。
+ * @param map 変換に使うアリーナ寸法とtileサイズ。
  * @returns アリーナ内へ丸めたtile境界。
  */
-export function viewportTileRect(view: { left: number; top: number; right: number; bottom: number }): TileRect {
+export function viewportTileRect(
+  view: { left: number; top: number; right: number; bottom: number },
+  map: Pick<ArenaMap, 'width' | 'height' | 'tileSize'> = {
+    width: ARENA_WIDTH_TILES,
+    height: ARENA_HEIGHT_TILES,
+    tileSize: TILE_SIZE,
+  },
+): TileRect {
   return {
-    left: Math.max(0, Math.floor(view.left / TILE_SIZE)),
-    top: Math.max(0, Math.floor(view.top / TILE_SIZE)),
-    right: Math.max(0, Math.min(ARENA_WIDTH_TILES - 1, Math.ceil(view.right / TILE_SIZE) - 1)),
-    bottom: Math.max(0, Math.min(ARENA_HEIGHT_TILES - 1, Math.ceil(view.bottom / TILE_SIZE) - 1)),
+    left: Math.max(0, Math.floor(view.left / map.tileSize)),
+    top: Math.max(0, Math.floor(view.top / map.tileSize)),
+    right: Math.max(0, Math.min(map.width - 1, Math.ceil(view.right / map.tileSize) - 1)),
+    bottom: Math.max(0, Math.min(map.height - 1, Math.ceil(view.bottom / map.tileSize) - 1)),
   };
 }
 
@@ -566,17 +589,18 @@ export function basicApproachRoleFor(enemyId: string): BasicApproachRole | null 
 
 function generateCandidate(seed: number, generationSeed: number, fallback: boolean): ArenaMap | null {
   const random = new SeededRandom(generationSeed);
+  const centralReserve = createCentralReserve();
   const roomCount = fallback ? FALLBACK_ROOM_COUNT : NORMAL_ROOM_COUNT;
   const rooms: Room[] = [];
   for (let roomIndex = 0; roomIndex < roomCount; roomIndex += 1) {
-    const room = placeRoom(random, rooms, fallback, roomIndex);
+    const room = placeRoom(random, rooms, fallback, roomIndex, centralReserve.bounds);
     if (!room) return null;
     rooms.push(room);
   }
   const tiles = Array.from({ length: ARENA_HEIGHT_TILES }, () =>
     Array<Tile>(ARENA_WIDTH_TILES).fill('wall'),
   );
-  rooms.forEach(room => carveRoom(tiles, room));
+  rooms.forEach(room => carveRoom(tiles, room, centralReserve.bounds));
   const corridors = fallback
     ? fallbackCorridors(rooms)
     : rooms.slice(1).map((room, index) => ({
@@ -585,9 +609,15 @@ function generateCandidate(seed: number, generationSeed: number, fallback: boole
         width: random.integer(1, 3),
         horizontalFirst: random.integer(0, 1) === 0,
       }));
-  corridors.forEach(corridor => carveCorridor(tiles, corridor));
+  corridors.forEach(corridor => carveCorridor(tiles, corridor, centralReserve.bounds));
+  carveReserveApproachRing(tiles, centralReserve.bounds);
+  fillReserveWithWalls(tiles, centralReserve.bounds);
   const start = roomCenter(rooms[0]);
-  const protectedTiles = new Set<string>([positionKey(start), ...corridors.flatMap(corridor => corridorTiles(corridor).map(positionKey))]);
+  const protectedTiles = new Set<string>([
+    positionKey(start),
+    ...centralReserveRingTiles(centralReserve.bounds).map(positionKey),
+    ...corridors.flatMap(corridor => corridorTiles(corridor).map(positionKey)),
+  ]);
   const obstacles = fallback ? [] : placeObstacles(tiles, rooms, protectedTiles, random);
   obstacles.forEach((position) => {
     tiles[position.y][position.x] = 'wall';
@@ -602,66 +632,142 @@ function generateCandidate(seed: number, generationSeed: number, fallback: boole
     corridors,
     obstacles,
     start,
+    centralReserve,
   };
 }
 
-function placeRoom(random: SeededRandom, rooms: readonly Room[], fallback: boolean, index: number): Room | null {
-  if (fallback) return fallbackRoomAt(index);
+function placeRoom(
+  random: SeededRandom,
+  rooms: readonly Room[],
+  fallback: boolean,
+  index: number,
+  centralReserve: TileRect,
+): Room | null {
+  if (fallback) return fallbackRoomAt(index, centralReserve);
+  if (index === 0) return centralStartRoom(centralReserve);
   for (let attempt = 0; attempt < NORMAL_ROOM_PLACEMENT_ATTEMPTS; attempt += 1) {
     const width = random.integer(NORMAL_ROOM_WIDTH.minimum, NORMAL_ROOM_WIDTH.maximum);
     const height = random.integer(NORMAL_ROOM_HEIGHT.minimum, NORMAL_ROOM_HEIGHT.maximum);
-    const startingRoom = index === 0;
     const room = {
-      x: random.integer(
-        startingRoom ? Math.floor(ARENA_WIDTH_TILES * 0.3) : 1,
-        startingRoom ? Math.floor(ARENA_WIDTH_TILES * 0.7) - width : ARENA_WIDTH_TILES - width - 2,
-      ),
-      y: random.integer(
-        startingRoom ? Math.floor(ARENA_HEIGHT_TILES * 0.3) : 1,
-        startingRoom ? Math.floor(ARENA_HEIGHT_TILES * 0.7) - height : ARENA_HEIGHT_TILES - height - 2,
-      ),
+      x: random.integer(1, ARENA_WIDTH_TILES - width - 2),
+      y: random.integer(1, ARENA_HEIGHT_TILES - height - 2),
       width,
       height,
     };
+    if (roomOverlapsTileRect(room, centralReserve)) continue;
     if (rooms.every(existing => !roomsTouchWithMargin(room, existing))) return room;
   }
   return null;
 }
 
-function fallbackRoomAt(index: number): Room {
-  const slot = FALLBACK_ROOM_SLOTS[index];
-  if (!slot) throw new Error('fallback部屋の配置が不正です。');
-  const interiorWidth = ARENA_WIDTH_TILES - 2;
-  const centerColumn = Math.floor(FALLBACK_ROOM_COLUMNS / 2);
-  const centerRow = Math.floor(FALLBACK_ROOM_ROWS / 2);
-  const centerX = Math.floor((ARENA_WIDTH_TILES - FALLBACK_ROOM_WIDTH) / 2);
-  const centerY = Math.floor((ARENA_HEIGHT_TILES - FALLBACK_ROOM_HEIGHT) / 2);
-  const horizontalOffset = Math.floor((interiorWidth - FALLBACK_ROOM_WIDTH * 2) / 2);
-  const verticalOffset = Math.floor((ARENA_HEIGHT_TILES - FALLBACK_ROOM_HEIGHT * 2) / 2);
+function centralStartRoom(centralReserve: TileRect): Room {
   return {
-    x: centerX + (slot.column - centerColumn) * horizontalOffset,
-    y: centerY + (slot.row - centerRow) * verticalOffset,
+    x: centralReserve.left - FALLBACK_ROOM_WIDTH,
+    y: ARENA_CENTER.y - Math.floor(FALLBACK_ROOM_HEIGHT / 2),
     width: FALLBACK_ROOM_WIDTH,
     height: FALLBACK_ROOM_HEIGHT,
   };
 }
 
+function fallbackRoomAt(index: number, centralReserve: TileRect): Room {
+  const centralX = ARENA_CENTER.x - Math.floor(FALLBACK_ROOM_WIDTH / 2);
+  const centralY = ARENA_CENTER.y - Math.floor(FALLBACK_ROOM_HEIGHT / 2);
+  const topY = centralReserve.top - FALLBACK_ROOM_HEIGHT - 6;
+  const bottomY = centralReserve.bottom + 7;
+  const leftX = centralReserve.left - FALLBACK_ROOM_WIDTH * 2 - 11;
+  const rightX = centralReserve.right + FALLBACK_ROOM_WIDTH + 12;
+  const rooms = [
+    centralStartRoom(centralReserve),
+    { x: centralX, y: topY, width: FALLBACK_ROOM_WIDTH, height: FALLBACK_ROOM_HEIGHT },
+    { x: centralReserve.right + 2, y: centralY, width: FALLBACK_ROOM_WIDTH, height: FALLBACK_ROOM_HEIGHT },
+    { x: centralX, y: bottomY, width: FALLBACK_ROOM_WIDTH, height: FALLBACK_ROOM_HEIGHT },
+    { x: leftX, y: topY, width: FALLBACK_ROOM_WIDTH, height: FALLBACK_ROOM_HEIGHT },
+    { x: rightX, y: topY, width: FALLBACK_ROOM_WIDTH, height: FALLBACK_ROOM_HEIGHT },
+    { x: leftX, y: bottomY, width: FALLBACK_ROOM_WIDTH, height: FALLBACK_ROOM_HEIGHT },
+    { x: rightX, y: bottomY, width: FALLBACK_ROOM_WIDTH, height: FALLBACK_ROOM_HEIGHT },
+  ];
+  const room = rooms[index];
+  if (!room || roomOverlapsTileRect(room, centralReserve))
+    throw new Error('fallback部屋の配置が不正です。');
+  return room;
+}
+
 function fallbackCorridors(rooms: readonly Room[]): Corridor[] {
   const connections = [
-    [0, 1],
-    [0, 2],
-    [0, 3],
-    [0, 4],
-    [1, 5],
-    [1, 6],
-    [2, 7],
+    [0, 1, false],
+    [1, 2, true],
+    [0, 3, false],
+    [1, 4, true],
+    [1, 5, true],
+    [3, 6, true],
+    [3, 7, true],
   ] as const;
-  return connections.map(([fromIndex, toIndex]) => ({
+  return connections.map(([fromIndex, toIndex, horizontalFirst]) => ({
     from: roomCenter(rooms[fromIndex]),
     to: roomCenter(rooms[toIndex]),
     width: 2,
-    horizontalFirst: true,
+    horizontalFirst,
   }));
+}
+
+function createCentralReserve(): CentralReserve {
+  return {
+    bounds: { ...CENTRAL_RESERVE_BOUNDS },
+    approaches: {
+      up: { ...CENTRAL_RESERVE_APPROACHES.up },
+      right: { ...CENTRAL_RESERVE_APPROACHES.right },
+      down: { ...CENTRAL_RESERVE_APPROACHES.down },
+      left: { ...CENTRAL_RESERVE_APPROACHES.left },
+    },
+  };
+}
+
+function roomOverlapsTileRect(room: Room, bounds: TileRect): boolean {
+  return room.x <= bounds.right
+    && room.x + room.width - 1 >= bounds.left
+    && room.y <= bounds.bottom
+    && room.y + room.height - 1 >= bounds.top;
+}
+
+function insideTileRect(position: TilePosition, bounds: TileRect): boolean {
+  return position.x >= bounds.left
+    && position.x <= bounds.right
+    && position.y >= bounds.top
+    && position.y <= bounds.bottom;
+}
+
+function centralReserveRingTiles(bounds: TileRect): TilePosition[] {
+  const tiles: TilePosition[] = [];
+  for (let x = bounds.left - 1; x <= bounds.right + 1; x += 1) {
+    tiles.push({ x, y: bounds.top - 1 });
+    tiles.push({ x, y: bounds.bottom + 1 });
+  }
+  for (let y = bounds.top; y <= bounds.bottom; y += 1) {
+    tiles.push({ x: bounds.left - 1, y });
+    tiles.push({ x: bounds.right + 1, y });
+  }
+  return tiles;
+}
+
+/**
+ * 予約領域の外周を既存BFSが通れる四方向の接近リングとして残す。
+ *
+ * @param tiles 更新対象のアリーナtile配列。
+ * @param bounds 中央予約領域のtile境界。
+ */
+function carveReserveApproachRing(tiles: Tile[][], bounds: TileRect): void {
+  const mapHeight = tiles.length;
+  const mapWidth = tiles[0]?.length ?? 0;
+  centralReserveRingTiles(bounds).forEach((position) => {
+    if (position.x > 0 && position.y > 0 && position.x < mapWidth - 1 && position.y < mapHeight - 1)
+      tiles[position.y][position.x] = 'floor';
+  });
+}
+
+function fillReserveWithWalls(tiles: Tile[][], bounds: TileRect): void {
+  for (let y = bounds.top; y <= bounds.bottom; y += 1)
+    for (let x = bounds.left; x <= bounds.right; x += 1)
+      tiles[y][x] = 'wall';
 }
 
 function roomsTouchWithMargin(left: Room, right: Room): boolean {
@@ -671,31 +777,41 @@ function roomsTouchWithMargin(left: Room, right: Room): boolean {
     && left.y + left.height >= right.y - 1;
 }
 
-function carveRoom(tiles: Tile[][], room: Room): void {
+function carveRoom(tiles: Tile[][], room: Room, centralReserve: TileRect): void {
   for (let y = room.y; y < room.y + room.height; y += 1) {
-    for (let x = room.x; x < room.x + room.width; x += 1) tiles[y][x] = 'floor';
+    for (let x = room.x; x < room.x + room.width; x += 1)
+      if (!insideTileRect({ x, y }, centralReserve))
+        tiles[y][x] = 'floor';
   }
 }
 
-function carveCorridor(tiles: Tile[][], corridor: Corridor): void {
+function carveCorridor(tiles: Tile[][], corridor: Corridor, centralReserve: TileRect): void {
   const corner = corridor.horizontalFirst
     ? { x: corridor.to.x, y: corridor.from.y }
     : { x: corridor.from.x, y: corridor.to.y };
-  carveSegment(tiles, corridor.from, corner, corridor.width);
-  carveSegment(tiles, corner, corridor.to, corridor.width);
+  carveSegment(tiles, corridor.from, corner, corridor.width, centralReserve);
+  carveSegment(tiles, corner, corridor.to, corridor.width, centralReserve);
 }
 
-function carveSegment(tiles: Tile[][], from: TilePosition, to: TilePosition, width: number): void {
+function carveSegment(
+  tiles: Tile[][],
+  from: TilePosition,
+  to: TilePosition,
+  width: number,
+  centralReserve: TileRect,
+): void {
   const horizontal = from.y === to.y;
   const radiusBefore = Math.floor((width - 1) / 2);
   const radiusAfter = width - 1 - radiusBefore;
   const start = horizontal ? Math.min(from.x, to.x) : Math.min(from.y, to.y);
   const end = horizontal ? Math.max(from.x, to.x) : Math.max(from.y, to.y);
+  const mapHeight = tiles.length;
+  const mapWidth = tiles[0]?.length ?? 0;
   for (let main = start; main <= end; main += 1) {
     for (let offset = -radiusBefore; offset <= radiusAfter; offset += 1) {
       const x = horizontal ? main : from.x + offset;
       const y = horizontal ? from.y + offset : main;
-      if (x > 0 && y > 0 && x < ARENA_WIDTH_TILES - 1 && y < ARENA_HEIGHT_TILES - 1) {
+      if (x > 0 && y > 0 && x < mapWidth - 1 && y < mapHeight - 1 && !insideTileRect({ x, y }, centralReserve)) {
         tiles[y][x] = 'floor';
       }
     }

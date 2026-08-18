@@ -11,6 +11,8 @@ last_updated: 2026-08-08
 
 # 自動生成アリーナ v1 詳細設計
 
+> **v2への限定supersede**: [standard-arena-map-v2 詳細設計](standard-arena-map-v2.md) は、標準mapの寸法、中央予約領域、map instanceを基準にしたbounds、単独プレイヤーのLOSミニマップだけを本書から更新する。RuntimeTopology、room graph、Acoustic Graph、terrain mutation、boss、team / drone / network / tactical / ping、正式UI、map resizeは引き続き対象外である。本書のうちv2と矛盾しない既存の決定的生成、BFS、spawn、retry境界は履歴兼参照として残す。
+
 ## 1. 目的
 
 固定アリーナでは敵がプレイヤーへ直進するため、高速ドローンへの散弾の優位性と武器の立ち位置が十分に生まれない。この設計は、遮蔽物と狭い通路を持つ広域アリーナ、追従カメラ、地面グリッド、画面外からの敵出現を最小限に追加し、アサルトライフルを主武器、近距離のショットガンを副武器として選択できる状況を作る。
