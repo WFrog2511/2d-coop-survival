@@ -9,3 +9,4 @@
 - [combat-choice-v1 基本設計](combat-choice-v1.md): WeaponModel、quick/backpack drag/drop inventory、shared sidearm ammoを既存combat stateへ限定統合する設計。
 - [standard-arena-map-v2 基本設計](standard-arena-map-v2.md): map生成・Phaser runtime・Canvas HUDの最小責務分割と探索状態の流れ。
 - [runtime-topology-v1 基本設計](runtime-topology-v1.md): stable mapとcurrent terrainの分離、terrain-only Phaser rebuild、最小DEV入口。
+- [runtime-area-graph-v1 基本設計](runtime-area-graph-v1.md): current topologyから派生する最小空間graphと後続AI境界。
