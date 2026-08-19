@@ -3,6 +3,7 @@ import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, basicApproachRoleFor,
 import { EnemyActor } from './arena/enemy-actor';
 import { ArenaEffects } from './arena/effects';
 import { ArenaHud, type InventoryDragSource, type InventoryDropTarget, type MinimapMarker } from './arena/hud';
+import { createRuntimeAreaGraph, type RuntimeAreaGraph } from './runtime-area-graph';
 import { applyRuntimeTopologyMutations, createRuntimeTopology, type RuntimeTopology, type RuntimeTopologyMutation } from './runtime-topology';
 import { ENEMIES, ENEMY_DEFEAT_HIT_STOP_MS, ENEMY_HIT_STOP_MS, ENEMY_IDS, ENEMY_LABELS, ENEMY_SPAWN_ORDER, INITIAL_ENEMY_IDS, INITIAL_WORLD_WEAPON_MODELS, PLAYER_HIT_STOP_MS, SCRAP_DROP_AMOUNTS, STAGGERED_ENEMIES, scrapVisualTierFor, type ScrapVisualTier } from './game-data';
 import { GUNSLINGER_BOOT_KNIFE_DAMAGE, GUNSLINGER_COMBO_TIMEOUT_MS, PLAYER_DASH_DURATION_MS, PLAYER_ROLES, canDashAt, canFireWhileDashing, dashCooldownUntil, dashDirectionFor, dashSpeedFor, gunslingerComboAfterEvent, gunslingerSpeedBuffUntil, gunslingerSpeedMultiplierAt, reloadDurationForWorldWeapon, type DashDirection, type PlayerRole } from './player-data';
@@ -257,6 +258,7 @@ class Arena extends Phaser.Scene {
   private keys!: Controls;
   private map!: ArenaMap;
   private topology!: RuntimeTopology;
+  private areaGraph!: RuntimeAreaGraph;
   private mapSeed = Date.now() >>> 0;
   private generation = 0;
   private state: CombatState = retryCombat();
@@ -614,6 +616,7 @@ class Arena extends Phaser.Scene {
     this.mapSeed = this.map.seed;
     this.requiredCentralReserve();
     this.topology = createRuntimeTopology(this.map);
+    this.areaGraph = createRuntimeAreaGraph(this.topology);
     this.resetVisibilityMask();
     this.buildMap();
     const start = this.world(this.map.start);
@@ -678,6 +681,7 @@ class Arena extends Phaser.Scene {
     if (next === this.topology)
       return;
     this.topology = next;
+    this.areaGraph = createRuntimeAreaGraph(this.topology);
     this.rebuildTerrain();
     this.paths = {} as Record<EnemyInstanceId, PathState>;
     this.visibilityTiles = {};

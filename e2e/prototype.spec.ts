@@ -77,6 +77,11 @@ type ArenaDebugScene = {
     tiles: readonly (readonly ('wall' | 'floor')[])[];
     revision: number;
   };
+  areaGraph: {
+    revision: number;
+    nodes: readonly { id: string; kind: 'area' | 'junction' | 'corridor' }[];
+    tileNodeIds: readonly (readonly (string | undefined)[])[];
+  };
   observedTiles: { get: (key: string) => 'wall' | 'floor' | undefined };
   visibleTileKeys: { has: (key: string) => boolean };
   state: {
@@ -797,7 +802,7 @@ test('Issue #64: retryはミニマップ探索を初期化し、表示はキー�
   await expect(minimap).toHaveAttribute('data-visible-tiles', String(expectedVisible));
 });
 
-test('Issue #98: DEVの通常wall変更はcurrent topology、描画、collider、minimapだけを更新する', async ({ page }) => {
+test('Issue #98 / #100: DEVの通常wall変更はcurrent terrainとarea graphを更新する', async ({ page }) => {
   const schedule = createRunSchedule(1_000, 500);
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
@@ -860,11 +865,20 @@ test('Issue #98: DEVの通常wall変更はcurrent topology、描画、collider�
     const wallArt = scene.wallArt;
     const wallArtCommandCount = wallArt.commandBuffer.length;
     const enemyBefore = enemySnapshot();
+    const areaGraph = scene.areaGraph;
     scene.debugOpenWall(wall);
     const centerX = wall.x * scene.topology.tileSize + scene.topology.tileSize / 2;
     const centerY = wall.y * scene.topology.tileSize + scene.topology.tileSize / 2;
     return {
       topology: scene.topology,
+      areaGraph: {
+        sameSnapshot: scene.areaGraph === areaGraph,
+        revision: scene.areaGraph.revision,
+        node: (() => {
+          const nodeId = scene.areaGraph.tileNodeIds[wall.y]?.[wall.x];
+          return nodeId === undefined ? undefined : scene.areaGraph.nodes.find(candidate => candidate.id === nodeId);
+        })(),
+      },
       observed: scene.observedTiles.get(`${wall.x},${wall.y}`),
       visible: scene.visibleTileKeys.has(`${wall.x},${wall.y}`),
       hasWallCollider: scene.walls.getChildren().some(candidate =>
@@ -887,6 +901,9 @@ test('Issue #98: DEVの通常wall変更はcurrent topology、描画、collider�
 
   expect(opened.topology.revision).toBe(1);
   expect(opened.topology.tiles[wall.y]?.[wall.x]).toBe('floor');
+  expect(opened.areaGraph.sameSnapshot).toBe(false);
+  expect(opened.areaGraph.revision).toBe(opened.topology.revision);
+  expect(opened.areaGraph.node?.kind).toMatch(/^(area|junction|corridor)$/);
   expect(map.tiles[wall.y][wall.x]).toBe('wall');
   expect(findPath(opened.topology, floor, wall)).toEqual([floor, wall]);
   expect(opened.observed).toBe('floor');
@@ -921,9 +938,14 @@ test('Issue #98: DEVの通常wall変更はcurrent topology、描画、collider�
   const retried = await page.evaluate((tile) => {
     const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
     if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
-    return { revision: scene.topology.revision, tile: scene.topology.tiles[tile.y]?.[tile.x] };
+    return {
+      revision: scene.topology.revision,
+      tile: scene.topology.tiles[tile.y]?.[tile.x],
+      areaGraphRevision: scene.areaGraph.revision,
+    };
   }, wall);
   expect(retried.revision).toBe(0);
+  expect(retried.areaGraphRevision).toBe(0);
   expect(retried.tile).toBe(retryMap.tiles[wall.y][wall.x]);
 });
 
