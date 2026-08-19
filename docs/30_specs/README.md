@@ -9,3 +9,4 @@
 - [player-actions-v1 仕様](player-actions-v1.md): 回避、近傍pickup selector、開始ゲート、DEV E2E経路の検証契約。
 - [gunslinger-v1 仕様](gunslinger-v1.md): 調整定数、回避overlap、共通撃破経路、combo/buff HUDの検証契約。
 - [inventory-v1 仕様](inventory-v1.md): world weapon model、共通2行E prompt、quick/backpack state、Tab drag/drop、terminal/retryの検証契約。
+- [standard-arena-map-v2 仕様](standard-arena-map-v2.md): 中央予約metadata、map instance bounds、最後に見たterrainと現在可視markerのミニマップ契約。

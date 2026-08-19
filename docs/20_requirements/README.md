@@ -9,3 +9,4 @@
 - [player-actions-v1 要件](player-actions-v1.md): 回避、Eによる弾薬箱取得、役職選択開始ゲートの範囲と対象外。
 - [gunslinger-v1 要件](gunslinger-v1.md): ガンスリンガー限定の回避ブーツナイフ、コンボ、短時間の通常移動速度buff。
 - [inventory-v1 要件](inventory-v1.md): weapon model・素材のworld pickup、quick slot 3件とbackpack 10件、Tab drag/drop、terminal/retry。
+- [standard-arena-map-v2 要件](standard-arena-map-v2.md): 奇数113×71、中央13×13予約、4接近候補、instance bounds、単独プレイヤー用最小ミニマップ。

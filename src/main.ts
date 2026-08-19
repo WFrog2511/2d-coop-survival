@@ -1,8 +1,8 @@
 import Phaser from 'phaser';
-import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, basicApproachRoleFor, enemyVisibility, findPath, hasLineOfSight, type EnemyVisibility, generateArenaMap, generateNextArenaMap, hiddenRecycleThresholdFor, nextSeed, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, selectEnemySpawnTile, selectInitialWeaponPickupTiles, selectSpawnTile, selectWorldWeaponDropTile, spawnDirectionForSlot, spawnPhaseAt, type ArenaMap, type TilePosition, viewportTileRect } from './arena-map';
+import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, basicApproachRoleFor, enemyVisibility, findPath, hasLineOfSight, type EnemyVisibility, generateArenaMap, generateNextArenaMap, hiddenRecycleThresholdFor, nextSeed, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, selectEnemySpawnTile, selectInitialWeaponPickupTiles, selectSpawnTile, selectWorldWeaponDropTile, spawnDirectionForSlot, spawnPhaseAt, type ArenaMap, type Tile, type TilePosition, viewportTileRect } from './arena-map';
 import { EnemyActor } from './arena/enemy-actor';
 import { ArenaEffects } from './arena/effects';
-import { ArenaHud, type InventoryDragSource, type InventoryDropTarget } from './arena/hud';
+import { ArenaHud, type InventoryDragSource, type InventoryDropTarget, type MinimapMarker } from './arena/hud';
 import { ENEMIES, ENEMY_DEFEAT_HIT_STOP_MS, ENEMY_HIT_STOP_MS, ENEMY_IDS, ENEMY_LABELS, ENEMY_SPAWN_ORDER, INITIAL_ENEMY_IDS, INITIAL_WORLD_WEAPON_MODELS, PLAYER_HIT_STOP_MS, SCRAP_DROP_AMOUNTS, STAGGERED_ENEMIES, scrapVisualTierFor, type ScrapVisualTier } from './game-data';
 import { GUNSLINGER_BOOT_KNIFE_DAMAGE, GUNSLINGER_COMBO_TIMEOUT_MS, PLAYER_DASH_DURATION_MS, PLAYER_ROLES, canDashAt, canFireWhileDashing, dashCooldownUntil, dashDirectionFor, dashSpeedFor, gunslingerComboAfterEvent, gunslingerSpeedBuffUntil, gunslingerSpeedMultiplierAt, reloadDurationForWorldWeapon, type DashDirection, type PlayerRole } from './player-data';
 import { selectNearbyPickup } from './pickups';
@@ -64,8 +64,6 @@ import {
 
 const WIDTH = 800;
 const HEIGHT = 500;
-const WORLD_WIDTH = ARENA_WIDTH_TILES * TILE_SIZE;
-const WORLD_HEIGHT = ARENA_HEIGHT_TILES * TILE_SIZE;
 const BULLET_POOL_SIZE = 48;
 const IS_DEV = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV);
 const DEFAULT_ENEMY_INITIAL_COUNT = INITIAL_ENEMY_IDS.length;
@@ -79,6 +77,7 @@ const MAX_COMBAT_WAVE_DURATION_MS = 300000;
 const MIN_REST_DURATION_MS = 500;
 const MAX_REST_DURATION_MS = 120000;
 const MAP_PALETTE_FADE_MS = 450;
+const VISIBILITY_MASK_TEXTURE_KEY = 'visibility-mask';
 type EnemySpawnReason = 'initial' | 'stagger' | 'death' | 'recycle' | 'debug';
 type EnemySpawnConfig = {
   initialCount: number;
@@ -248,8 +247,12 @@ class Arena extends Phaser.Scene {
   private fadingGround: Phaser.GameObjects.Graphics | undefined;
   private fadingWallArt: Phaser.GameObjects.Graphics | undefined;
   private mapPaletteTransition: Phaser.Tweens.Tween | undefined;
-  private visibilityMask!: Phaser.GameObjects.Graphics;
+  private visibilityMask!: Phaser.GameObjects.Image;
+  private visibilityMaskTexture!: Phaser.Textures.CanvasTexture;
   private visibilityMaskPlayerTile: TilePosition | undefined;
+  private readonly observedTiles = new Map<string, Tile>();
+  private readonly visibleTileKeys = new Set<string>();
+  private minimapTerrainChanged = true;
   private keys!: Controls;
   private map!: ArenaMap;
   private mapSeed = Date.now() >>> 0;
@@ -306,7 +309,6 @@ class Arena extends Phaser.Scene {
       .setBodySize(28, 28)
       .setDepth(3)
       .setTint(this.playerRole.tint);
-    this.visibilityMask = this.add.graphics().setDepth(2).setAlpha(0.25);
     this.enemyActors = {} as Record<EnemyInstanceId, EnemyActor>;
     ENEMY_IDS.forEach((id) => {
       const config = ENEMIES[id];
@@ -359,6 +361,7 @@ class Arena extends Phaser.Scene {
     this.updateReloadProgressHud();
     ENEMY_IDS.forEach(id => this.moveEnemy(id));
     this.updateEnemyVisibility();
+    this.updateMinimap();
     if (this.aimDirection) {
       const aim = this.aimPoint();
       this.player.rotation = Phaser.Math.Angle.Between(this.player.x, this.player.y, aim.x, aim.y);
@@ -521,6 +524,23 @@ class Arena extends Phaser.Scene {
     this.updateEnemyVisibility(true);
   }
 
+  public debugMoveWorldItemTo(id: string, tile: TilePosition): void {
+    if (!IS_DEV)
+      throw new Error('debugMoveWorldItemToはDEV環境だけで使用できます。');
+    if (!Number.isInteger(tile.x) || !Number.isInteger(tile.y) || this.map.tiles[tile.y]?.[tile.x] !== 'floor')
+      throw new Error('debugMoveWorldItemToの移動先はfloor tileである必要があります。');
+    const item = this.worldItemStates.get(id);
+    if (!item || !item.sprite.active)
+      throw new Error('移動するactive world itemがありません。');
+    const nextTile = { ...tile };
+    const point = this.world(nextTile);
+    item.tile = nextTile;
+    item.sprite.setData('tile', nextTile);
+    item.sprite.setPosition(point.x, point.y);
+    item.sprite.refreshBody();
+    this.updatePickupPrompt();
+  }
+
   public debugDamageEnemy(id: EnemyInstanceId, amount: number): void {
     if (!IS_DEV)
       throw new Error('debugDamageEnemyはDEV環境だけで使用できます。');
@@ -571,7 +591,9 @@ class Arena extends Phaser.Scene {
     this.paths = {} as Record<EnemyInstanceId, PathState>;
     this.visibilityTiles = {};
     this.visibilityMaskPlayerTile = undefined;
-    this.visibilityMask.clear();
+    this.observedTiles.clear();
+    this.visibleTileKeys.clear();
+    this.minimapTerrainChanged = true;
     this.disableAllBullets();
     const initialEnemyIds = initialEnemyIdsFor(ENEMY_SPAWN_CONFIG);
     ENEMY_IDS.forEach((id) => {
@@ -579,12 +601,14 @@ class Arena extends Phaser.Scene {
     });
     this.map = initial ? generateArenaMap(this.mapSeed) : generateNextArenaMap(this.map);
     this.mapSeed = this.map.seed;
+    this.resetVisibilityMask();
     this.buildMap();
     const start = this.world(this.map.start);
     this.player.enableBody(true, start.x, start.y, true, true).setVelocity(0, 0);
     this.updateVisibilityMask(true);
     const camera = this.cameras.main;
-    camera.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+    const world = this.mapWorldSize();
+    camera.setBounds(0, 0, world.width, world.height);
     camera.centerOn(start.x, start.y);
     camera.startFollow(this.player);
     camera.preRender();
@@ -592,6 +616,7 @@ class Arena extends Phaser.Scene {
     this.buildWorldItems();
     this.updatePickupPrompt();
     this.updateEnemyVisibility(true);
+    this.updateMinimap();
     this.startSurvivalTimer();
     if (IS_DEV)
       (window as Window & { __arenaScene?: Arena }).__arenaScene = this;
@@ -610,13 +635,16 @@ class Arena extends Phaser.Scene {
     this.worldItems.clear(true, true);
     this.ammoBoxStates.clear();
     this.worldItemStates.clear();
-    this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+    const world = this.mapWorldSize();
+    this.physics.world.setBounds(0, 0, world.width, world.height);
     for (let y = 0; y < this.map.height; y += 1)
       for (let x = 0; x < this.map.width; x += 1)
         if (this.map.tiles[y][x] === 'wall') {
-          const px = x * TILE_SIZE;
-          const py = y * TILE_SIZE;
-          const wall = this.physics.add.staticImage(px + TILE_SIZE / 2, py + TILE_SIZE / 2, 'wall');
+          const px = x * this.map.tileSize;
+          const py = y * this.map.tileSize;
+          const wall = this.physics.add.staticImage(px + this.map.tileSize / 2, py + this.map.tileSize / 2, 'wall');
+          wall.setDisplaySize(this.map.tileSize, this.map.tileSize);
+          wall.refreshBody();
           wall.setVisible(false);
           this.walls.add(wall);
         }
@@ -678,19 +706,37 @@ class Arena extends Phaser.Scene {
   private createMapPaletteGraphics(phase: RunPhase): { ground: Phaser.GameObjects.Graphics; wallArt: Phaser.GameObjects.Graphics } {
     const ground = this.add.graphics().setDepth(-2);
     const wallArt = this.add.graphics().setDepth(-1);
+    const world = this.mapWorldSize();
+    const tileSize = this.map.tileSize;
     const palette = phase === 'combat'
       ? { ground: 0x101827, grid: 0x31516b, wall: 0x26374a, wallEdge: 0x55728b }
       : { ground: 0x6b573b, grid: 0xae8a58, wall: 0x79573a, wallEdge: 0xe2bb78 };
-    ground.fillStyle(palette.ground, 1).fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT).lineStyle(1, palette.grid, 0.55);
-    for (let x = 0; x <= WORLD_WIDTH; x += TILE_SIZE)
-      ground.lineBetween(x, 0, x, WORLD_HEIGHT);
-    for (let y = 0; y <= WORLD_HEIGHT; y += TILE_SIZE)
-      ground.lineBetween(0, y, WORLD_WIDTH, y);
+    ground.fillStyle(palette.ground, 1).fillRect(0, 0, world.width, world.height).lineStyle(1, palette.grid, 0.55);
+    for (let x = 0; x <= world.width; x += tileSize)
+      ground.lineBetween(x, 0, x, world.height);
+    for (let y = 0; y <= world.height; y += tileSize)
+      ground.lineBetween(0, y, world.width, y);
     wallArt.fillStyle(palette.wall, 1).lineStyle(1, palette.wallEdge, 1);
     for (let y = 0; y < this.map.height; y += 1)
       for (let x = 0; x < this.map.width; x += 1)
         if (this.map.tiles[y][x] === 'wall')
-          wallArt.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE).strokeRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          wallArt.fillRect(x * tileSize, y * tileSize, tileSize, tileSize).strokeRect(x * tileSize, y * tileSize, tileSize, tileSize);
+    const reserve = this.map.centralReserve;
+    if (reserve) {
+      const x = reserve.bounds.left * tileSize;
+      const y = reserve.bounds.top * tileSize;
+      const width = (reserve.bounds.right - reserve.bounds.left + 1) * tileSize;
+      const height = (reserve.bounds.bottom - reserve.bounds.top + 1) * tileSize;
+      const marker = phase === 'combat' ? 0xc58cff : 0x6d3b0b;
+      wallArt.fillStyle(marker, 0.22).fillRect(x, y, width, height).lineStyle(3, marker, 1).strokeRect(x + 1.5, y + 1.5, width - 3, height - 3);
+      Object.values(reserve.approaches).forEach((approach) => {
+        wallArt.fillStyle(marker, 1).fillCircle(
+          approach.x * tileSize + tileSize / 2,
+          approach.y * tileSize + tileSize / 2,
+          5,
+        );
+      });
+    }
     return { ground, wallArt };
   }
 
@@ -909,8 +955,8 @@ class Arena extends Phaser.Scene {
       ?? { x: Math.cos(this.player.rotation), y: Math.sin(this.player.rotation) };
     const distance = this.player.displayWidth / 2;
     return {
-      x: (this.player.x + direction.x * distance) / TILE_SIZE,
-      y: (this.player.y + direction.y * distance) / TILE_SIZE,
+      x: (this.player.x + direction.x * distance) / this.map.tileSize,
+      y: (this.player.y + direction.y * distance) / this.map.tileSize,
     };
   }
 
@@ -1144,16 +1190,92 @@ class Arena extends Phaser.Scene {
     const playerTile = this.tile(this.player);
     if (!force && this.visibilityMaskPlayerTile && sameTile(this.visibilityMaskPlayerTile, playerTile))
       return;
-    this.visibilityMask.clear().fillStyle(0x000000, 1);
+    const context = this.visibilityMaskTexture.context;
+    context.clearRect(0, 0, this.map.width, this.map.height);
+    context.fillStyle = '#000000';
+    const nextVisibleTileKeys = new Set<string>();
+    let observedTerrainChanged = false;
     let obscuredTileCount = 0;
     for (let y = 0; y < this.map.height; y += 1)
       for (let x = 0; x < this.map.width; x += 1)
         if (!hasLineOfSight(this.map, playerTile, { x, y })) {
-          this.visibilityMask.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          context.fillRect(x, y, 1, 1);
           obscuredTileCount += 1;
+        } else {
+          const key = `${x},${y}`;
+          const tile = this.map.tiles[y][x];
+          nextVisibleTileKeys.add(key);
+          if (this.observedTiles.get(key) !== tile) {
+            this.observedTiles.set(key, tile);
+            observedTerrainChanged = true;
+          }
         }
+    this.visibilityMaskTexture.refresh();
+    const visibleTerrainChanged = nextVisibleTileKeys.size !== this.visibleTileKeys.size
+      || [...nextVisibleTileKeys].some(key => !this.visibleTileKeys.has(key));
+    if (visibleTerrainChanged) {
+      this.visibleTileKeys.clear();
+      nextVisibleTileKeys.forEach(key => this.visibleTileKeys.add(key));
+    }
+    if (observedTerrainChanged || visibleTerrainChanged)
+      this.minimapTerrainChanged = true;
     this.visibilityMaskPlayerTile = { ...playerTile };
     arenaHud.updateVisibilityMask(this.visibilityMask.alpha, obscuredTileCount, playerTile);
+  }
+
+  private resetVisibilityMask(): void {
+    const world = this.mapWorldSize();
+    if (!this.visibilityMaskTexture) {
+      const texture = this.textures.createCanvas(VISIBILITY_MASK_TEXTURE_KEY, this.map.width, this.map.height);
+      if (!texture)
+        throw new Error('視界mask用CanvasTextureを作成できません。');
+      texture.setFilter(Phaser.Textures.FilterMode.NEAREST);
+      this.visibilityMaskTexture = texture;
+      this.visibilityMask = this.add.image(0, 0, VISIBILITY_MASK_TEXTURE_KEY);
+    } else {
+      this.visibilityMaskTexture.setSize(this.map.width, this.map.height);
+    }
+    this.visibilityMask
+      .setPosition(0, 0)
+      .setOrigin(0)
+      .setDisplaySize(world.width, world.height)
+      .setDepth(2)
+      .setAlpha(0.25);
+  }
+
+  private updateMinimap(): void {
+    const markers: MinimapMarker[] = [];
+    if (!this.state.defeated && !this.state.victory) {
+      ENEMY_IDS.forEach((id) => {
+        const actor = this.enemyActors[id];
+        if (!actor.active || actor.runtimeView().visibility !== 'normal')
+          return;
+        const tile = this.tile(actor.sprite);
+        if (this.visibleTileKeys.has(tileKey(tile)))
+          markers.push({ kind: 'enemy', tile });
+      });
+      this.ammoBoxStates.forEach((state) => {
+        if (state.currentTile && state.quantity > 0 && this.visibleTileKeys.has(tileKey(state.currentTile)))
+          markers.push({ kind: 'ammo', tile: state.currentTile });
+      });
+      this.worldItemStates.forEach((item) => {
+        if (!item.sprite.active || !this.visibleTileKeys.has(tileKey(item.tile)))
+          return;
+        markers.push({
+          kind: item.kind === 'weapon' ? 'weapon' : item.kind === 'ammo-material' ? 'ammo' : 'scrap',
+          tile: item.tile,
+        });
+      });
+    }
+    arenaHud.updateMinimap({
+      map: this.map,
+      observedTiles: this.observedTiles,
+      visibleTileKeys: this.visibleTileKeys,
+      terrainChanged: this.minimapTerrainChanged,
+      playerTile: this.tile(this.player),
+      markers,
+    });
+    this.minimapTerrainChanged = false;
   }
 
   private moveEnemy(id: EnemyInstanceId): void {
@@ -1653,6 +1775,7 @@ class Arena extends Phaser.Scene {
     this.inventoryOpen = false;
     arenaHud.setInventoryOpen(false);
     arenaHud.setPickupPrompt(undefined);
+    this.updateMinimap();
     arenaHud.showResult(result);
     this.refreshHud();
   }
@@ -1772,20 +1895,27 @@ class Arena extends Phaser.Scene {
 
   private tile(sprite: Phaser.GameObjects.Components.Transform): TilePosition {
     return {
-      x: Phaser.Math.Clamp(Math.floor(sprite.x / TILE_SIZE), 0, ARENA_WIDTH_TILES - 1),
-      y: Phaser.Math.Clamp(Math.floor(sprite.y / TILE_SIZE), 0, ARENA_HEIGHT_TILES - 1),
+      x: Phaser.Math.Clamp(Math.floor(sprite.x / this.map.tileSize), 0, this.map.width - 1),
+      y: Phaser.Math.Clamp(Math.floor(sprite.y / this.map.tileSize), 0, this.map.height - 1),
     };
   }
 
   private world(tile: TilePosition): { x: number; y: number } {
     return {
-      x: tile.x * TILE_SIZE + TILE_SIZE / 2,
-      y: tile.y * TILE_SIZE + TILE_SIZE / 2,
+      x: tile.x * this.map.tileSize + this.map.tileSize / 2,
+      y: tile.y * this.map.tileSize + this.map.tileSize / 2,
+    };
+  }
+
+  private mapWorldSize(): { width: number; height: number } {
+    return {
+      width: this.map.width * this.map.tileSize,
+      height: this.map.height * this.map.tileSize,
     };
   }
 
   private viewport(): { left: number; top: number; right: number; bottom: number } {
-    return viewportTileRect(this.cameras.main.worldView);
+    return viewportTileRect(this.cameras.main.worldView, this.map);
   }
 
   private updateTileHud(): void {
