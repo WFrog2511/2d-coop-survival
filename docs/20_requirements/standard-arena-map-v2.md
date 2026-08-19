@@ -6,6 +6,8 @@ definition_of_delivery: https://github.com/WFrog2511/2d-coop-survival/issues/64
 
 # standard-arena-map-v2 要件
 
+> **runtime-topology-v1への限定supersede**: [runtime-topology-v1 要件](runtime-topology-v1.md) は、stable `ArenaMap`から分離するcurrent terrain、atomic mutation、revision、terrain rebuildだけを後続sliceとして更新する。本書の標準寸法、中央予約、seed決定性、ミニマップの既存契約、その他の対象外は履歴兼参照として維持する。
+
 ## 成果物段階
 
 Prototype standard の試遊優先モードで、ローカルの単独プレイヤーが探索できる標準アリーナと最小ミニマップを提供する。数値や見た目の方向性は試遊で確認し、通信・永続化・汎用マップ基盤は含めない。
@@ -23,7 +25,7 @@ Prototype standard の試遊優先モードで、ローカルの単独プレイ�
 
 ## 対象外
 
-- RuntimeTopology、room graph、loop生成、Acoustic Graph、地形破壊・変化、boss、map resize query
+- RuntimeTopologyと限定的なterrain mutationは[runtime-topology-v1 要件](runtime-topology-v1.md)へ移す。room graph、loop生成、Acoustic Graph、地形破壊のゲームループ、boss、map resize queryは引き続き対象外とする。
 - チーム共有、drone視界、down状態、network同期、tactical map、ping、正式UI
 - ミニマップのスクリーンショット比較、汎用ミニマップframework、新規依存、HUD全体の再設計
 

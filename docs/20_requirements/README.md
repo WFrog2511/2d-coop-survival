@@ -10,3 +10,4 @@
 - [gunslinger-v1 要件](gunslinger-v1.md): ガンスリンガー限定の回避ブーツナイフ、コンボ、短時間の通常移動速度buff。
 - [inventory-v1 要件](inventory-v1.md): weapon model・素材のworld pickup、quick slot 3件とbackpack 10件、Tab drag/drop、terminal/retry。
 - [standard-arena-map-v2 要件](standard-arena-map-v2.md): 奇数113×71、中央13×13予約、4接近候補、instance bounds、単独プレイヤー用最小ミニマップ。
+- [runtime-topology-v1 要件](runtime-topology-v1.md): stable mapから分離したcurrent terrain、atomic batch、revision、中央予約・外周guard、DEV wall→floor。
