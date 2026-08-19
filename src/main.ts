@@ -1,8 +1,9 @@
 import Phaser from 'phaser';
-import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, basicApproachRoleFor, enemyVisibility, findPath, hasLineOfSight, type EnemyVisibility, generateArenaMap, generateNextArenaMap, hiddenRecycleThresholdFor, nextSeed, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, selectEnemySpawnTile, selectInitialWeaponPickupTiles, selectSpawnTile, selectWorldWeaponDropTile, spawnDirectionForSlot, spawnPhaseAt, type ArenaMap, type Tile, type TilePosition, viewportTileRect } from './arena-map';
+import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, basicApproachRoleFor, enemyVisibility, findPath, hasLineOfSight, type CentralReserve, type EnemyVisibility, generateArenaMap, generateNextArenaMap, hiddenRecycleThresholdFor, nextSeed, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, selectEnemySpawnTile, selectInitialWeaponPickupTiles, selectSpawnTile, selectWorldWeaponDropTile, spawnDirectionForSlot, spawnPhaseAt, type ArenaMap, type Tile, type TilePosition, viewportTileRect } from './arena-map';
 import { EnemyActor } from './arena/enemy-actor';
 import { ArenaEffects } from './arena/effects';
 import { ArenaHud, type InventoryDragSource, type InventoryDropTarget, type MinimapMarker } from './arena/hud';
+import { applyRuntimeTopologyMutations, createRuntimeTopology, type RuntimeTopology, type RuntimeTopologyMutation } from './runtime-topology';
 import { ENEMIES, ENEMY_DEFEAT_HIT_STOP_MS, ENEMY_HIT_STOP_MS, ENEMY_IDS, ENEMY_LABELS, ENEMY_SPAWN_ORDER, INITIAL_ENEMY_IDS, INITIAL_WORLD_WEAPON_MODELS, PLAYER_HIT_STOP_MS, SCRAP_DROP_AMOUNTS, STAGGERED_ENEMIES, scrapVisualTierFor, type ScrapVisualTier } from './game-data';
 import { GUNSLINGER_BOOT_KNIFE_DAMAGE, GUNSLINGER_COMBO_TIMEOUT_MS, PLAYER_DASH_DURATION_MS, PLAYER_ROLES, canDashAt, canFireWhileDashing, dashCooldownUntil, dashDirectionFor, dashSpeedFor, gunslingerComboAfterEvent, gunslingerSpeedBuffUntil, gunslingerSpeedMultiplierAt, reloadDurationForWorldWeapon, type DashDirection, type PlayerRole } from './player-data';
 import { selectNearbyPickup } from './pickups';
@@ -255,6 +256,7 @@ class Arena extends Phaser.Scene {
   private minimapTerrainChanged = true;
   private keys!: Controls;
   private map!: ArenaMap;
+  private topology!: RuntimeTopology;
   private mapSeed = Date.now() >>> 0;
   private generation = 0;
   private state: CombatState = retryCombat();
@@ -512,7 +514,7 @@ class Arena extends Phaser.Scene {
   public debugMovePlayerTo(tile: TilePosition): void {
     if (!IS_DEV)
       throw new Error('debugMovePlayerToはDEV環境だけで使用できます。');
-    if (!Number.isInteger(tile.x) || !Number.isInteger(tile.y) || this.map.tiles[tile.y]?.[tile.x] !== 'floor')
+    if (!Number.isInteger(tile.x) || !Number.isInteger(tile.y) || this.topology.tiles[tile.y]?.[tile.x] !== 'floor')
       throw new Error('debugMovePlayerToの移動先はfloor tileである必要があります。');
     this.cancelPlayerDash();
     const point = this.world(tile);
@@ -527,7 +529,7 @@ class Arena extends Phaser.Scene {
   public debugMoveWorldItemTo(id: string, tile: TilePosition): void {
     if (!IS_DEV)
       throw new Error('debugMoveWorldItemToはDEV環境だけで使用できます。');
-    if (!Number.isInteger(tile.x) || !Number.isInteger(tile.y) || this.map.tiles[tile.y]?.[tile.x] !== 'floor')
+    if (!Number.isInteger(tile.x) || !Number.isInteger(tile.y) || this.topology.tiles[tile.y]?.[tile.x] !== 'floor')
       throw new Error('debugMoveWorldItemToの移動先はfloor tileである必要があります。');
     const item = this.worldItemStates.get(id);
     if (!item || !item.sprite.active)
@@ -539,6 +541,15 @@ class Arena extends Phaser.Scene {
     item.sprite.setPosition(point.x, point.y);
     item.sprite.refreshBody();
     this.updatePickupPrompt();
+  }
+
+  /** DEV用に通常wallを開き、実行中地形だけを更新する。 */
+  public debugOpenWall(tile: TilePosition): void {
+    if (!IS_DEV)
+      throw new Error('debugOpenWallはDEV環境だけで使用できます。');
+    if (!Number.isInteger(tile.x) || !Number.isInteger(tile.y) || this.topology.tiles[tile.y]?.[tile.x] !== 'wall')
+      throw new Error('debugOpenWallの対象は通常wall tileである必要があります。');
+    this.applyTopologyMutations([{ ...tile, tile: 'floor' }]);
   }
 
   public debugDamageEnemy(id: EnemyInstanceId, amount: number): void {
@@ -601,6 +612,8 @@ class Arena extends Phaser.Scene {
     });
     this.map = initial ? generateArenaMap(this.mapSeed) : generateNextArenaMap(this.map);
     this.mapSeed = this.map.seed;
+    this.requiredCentralReserve();
+    this.topology = createRuntimeTopology(this.map);
     this.resetVisibilityMask();
     this.buildMap();
     const start = this.world(this.map.start);
@@ -625,31 +638,63 @@ class Arena extends Phaser.Scene {
   }
 
   private buildMap(): void {
+    this.clearRunItems();
+    this.rebuildTerrain();
+  }
+
+  private clearRunItems(): void {
+    this.ammoBoxes.clear(true, true);
+    this.worldItems.clear(true, true);
+    this.ammoBoxStates.clear();
+    this.worldItemStates.clear();
+  }
+
+  private rebuildTerrain(): void {
     this.cancelMapPaletteTransition();
     this.ground?.destroy();
     this.wallArt?.destroy();
     this.ground = undefined;
     this.wallArt = undefined;
     this.walls.clear(true, true);
-    this.ammoBoxes.clear(true, true);
-    this.worldItems.clear(true, true);
-    this.ammoBoxStates.clear();
-    this.worldItemStates.clear();
     const world = this.mapWorldSize();
     this.physics.world.setBounds(0, 0, world.width, world.height);
-    for (let y = 0; y < this.map.height; y += 1)
-      for (let x = 0; x < this.map.width; x += 1)
-        if (this.map.tiles[y][x] === 'wall') {
-          const px = x * this.map.tileSize;
-          const py = y * this.map.tileSize;
-          const wall = this.physics.add.staticImage(px + this.map.tileSize / 2, py + this.map.tileSize / 2, 'wall');
-          wall.setDisplaySize(this.map.tileSize, this.map.tileSize);
+    for (let y = 0; y < this.topology.height; y += 1)
+      for (let x = 0; x < this.topology.width; x += 1)
+        if (this.topology.tiles[y][x] === 'wall') {
+          const px = x * this.topology.tileSize;
+          const py = y * this.topology.tileSize;
+          const wall = this.physics.add.staticImage(px + this.topology.tileSize / 2, py + this.topology.tileSize / 2, 'wall');
+          wall.setDisplaySize(this.topology.tileSize, this.topology.tileSize);
           wall.refreshBody();
           wall.setVisible(false);
           this.walls.add(wall);
         }
     this.walls.refresh();
     this.updateMapPalette(true);
+  }
+
+  private applyTopologyMutations(mutations: readonly RuntimeTopologyMutation[]): void {
+    const next = applyRuntimeTopologyMutations(this.topology, mutations, this.requiredCentralReserve());
+    if (next === this.topology)
+      return;
+    this.topology = next;
+    this.rebuildTerrain();
+    this.paths = {} as Record<EnemyInstanceId, PathState>;
+    this.visibilityTiles = {};
+    this.visibilityMaskPlayerTile = undefined;
+    this.minimapTerrainChanged = true;
+    this.updateVisibilityMask(true);
+    this.updateEnemyVisibility(true);
+    this.updateMinimap();
+    this.updatePickupPrompt();
+    this.refreshHud();
+  }
+
+  private requiredCentralReserve(): CentralReserve {
+    const reserve = this.map.centralReserve;
+    if (!reserve)
+      throw new Error('runtime topologyには中央予約metadataが必要です。');
+    return reserve;
   }
 
   private updateMapPalette(force = false): void {
@@ -707,7 +752,7 @@ class Arena extends Phaser.Scene {
     const ground = this.add.graphics().setDepth(-2);
     const wallArt = this.add.graphics().setDepth(-1);
     const world = this.mapWorldSize();
-    const tileSize = this.map.tileSize;
+    const tileSize = this.topology.tileSize;
     const palette = phase === 'combat'
       ? { ground: 0x101827, grid: 0x31516b, wall: 0x26374a, wallEdge: 0x55728b }
       : { ground: 0x6b573b, grid: 0xae8a58, wall: 0x79573a, wallEdge: 0xe2bb78 };
@@ -717,9 +762,9 @@ class Arena extends Phaser.Scene {
     for (let y = 0; y <= world.height; y += tileSize)
       ground.lineBetween(0, y, world.width, y);
     wallArt.fillStyle(palette.wall, 1).lineStyle(1, palette.wallEdge, 1);
-    for (let y = 0; y < this.map.height; y += 1)
-      for (let x = 0; x < this.map.width; x += 1)
-        if (this.map.tiles[y][x] === 'wall')
+    for (let y = 0; y < this.topology.height; y += 1)
+      for (let x = 0; x < this.topology.width; x += 1)
+        if (this.topology.tiles[y][x] === 'wall')
           wallArt.fillRect(x * tileSize, y * tileSize, tileSize, tileSize).strokeRect(x * tileSize, y * tileSize, tileSize, tileSize);
     const reserve = this.map.centralReserve;
     if (reserve) {
@@ -741,7 +786,8 @@ class Arena extends Phaser.Scene {
   }
 
   private buildAmmoBoxes(): void {
-    selectAmmoBoxTiles(this.map).forEach((tile, index) => {
+    const terrain = { ...this.topology, seed: this.map.seed, start: this.map.start };
+    selectAmmoBoxTiles(terrain).forEach((tile, index) => {
       const boxId = `ammo-box-${index + 1}`;
       const material = AMMO_MATERIAL_BOX_CYCLE[index % AMMO_MATERIAL_BOX_CYCLE.length];
       if (!material)
@@ -760,8 +806,9 @@ class Arena extends Phaser.Scene {
 
   private buildWorldItems(): void {
     const occupied = this.activeAmmoBoxTiles();
+    const terrain = { ...this.topology, seed: this.map.seed, start: this.map.start };
     const weaponTiles = selectInitialWeaponPickupTiles(
-      this.map,
+      terrain,
       occupied,
       INITIAL_WORLD_WEAPON_MODELS.length,
     );
@@ -955,8 +1002,8 @@ class Arena extends Phaser.Scene {
       ?? { x: Math.cos(this.player.rotation), y: Math.sin(this.player.rotation) };
     const distance = this.player.displayWidth / 2;
     return {
-      x: (this.player.x + direction.x * distance) / this.map.tileSize,
-      y: (this.player.y + direction.y * distance) / this.map.tileSize,
+      x: (this.player.x + direction.x * distance) / this.topology.tileSize,
+      y: (this.player.y + direction.y * distance) / this.topology.tileSize,
     };
   }
 
@@ -1024,11 +1071,11 @@ class Arena extends Phaser.Scene {
     const weapon = inventoryWeaponAt(this.state, source);
     if (!weapon)
       return;
-    const tile = selectWorldWeaponDropTile(this.map, this.tile(this.player), [
+    const tile = selectWorldWeaponDropTile(this.topology, this.tile(this.player), [
       ...this.activeWorldItemTiles(),
       ...this.activeAmmoBoxTiles(),
       ...this.activeEnemyTiles(),
-    ]);
+    ], this.map.seed);
     if (!tile) {
       arenaHud.setInventoryDragMessage('置ける場所がありません');
       return;
@@ -1047,11 +1094,11 @@ class Arena extends Phaser.Scene {
     const result = dropAmmoMaterial(this.state, material);
     if (result.dropped === 0)
       return;
-    const tile = selectWorldWeaponDropTile(this.map, this.tile(this.player), [
+    const tile = selectWorldWeaponDropTile(this.topology, this.tile(this.player), [
       ...this.activeWorldItemTiles(),
       ...this.activeAmmoBoxTiles(),
       ...this.activeEnemyTiles(),
-    ]);
+    ], this.map.seed);
     if (!tile) {
       arenaHud.setInventoryDragMessage('置ける場所がありません');
       return;
@@ -1191,19 +1238,19 @@ class Arena extends Phaser.Scene {
     if (!force && this.visibilityMaskPlayerTile && sameTile(this.visibilityMaskPlayerTile, playerTile))
       return;
     const context = this.visibilityMaskTexture.context;
-    context.clearRect(0, 0, this.map.width, this.map.height);
+    context.clearRect(0, 0, this.topology.width, this.topology.height);
     context.fillStyle = '#000000';
     const nextVisibleTileKeys = new Set<string>();
     let observedTerrainChanged = false;
     let obscuredTileCount = 0;
-    for (let y = 0; y < this.map.height; y += 1)
-      for (let x = 0; x < this.map.width; x += 1)
-        if (!hasLineOfSight(this.map, playerTile, { x, y })) {
+    for (let y = 0; y < this.topology.height; y += 1)
+      for (let x = 0; x < this.topology.width; x += 1)
+        if (!hasLineOfSight(this.topology, playerTile, { x, y })) {
           context.fillRect(x, y, 1, 1);
           obscuredTileCount += 1;
         } else {
           const key = `${x},${y}`;
-          const tile = this.map.tiles[y][x];
+          const tile = this.topology.tiles[y][x];
           nextVisibleTileKeys.add(key);
           if (this.observedTiles.get(key) !== tile) {
             this.observedTiles.set(key, tile);
@@ -1226,14 +1273,14 @@ class Arena extends Phaser.Scene {
   private resetVisibilityMask(): void {
     const world = this.mapWorldSize();
     if (!this.visibilityMaskTexture) {
-      const texture = this.textures.createCanvas(VISIBILITY_MASK_TEXTURE_KEY, this.map.width, this.map.height);
+      const texture = this.textures.createCanvas(VISIBILITY_MASK_TEXTURE_KEY, this.topology.width, this.topology.height);
       if (!texture)
         throw new Error('視界mask用CanvasTextureを作成できません。');
       texture.setFilter(Phaser.Textures.FilterMode.NEAREST);
       this.visibilityMaskTexture = texture;
       this.visibilityMask = this.add.image(0, 0, VISIBILITY_MASK_TEXTURE_KEY);
     } else {
-      this.visibilityMaskTexture.setSize(this.map.width, this.map.height);
+      this.visibilityMaskTexture.setSize(this.topology.width, this.topology.height);
     }
     this.visibilityMask
       .setPosition(0, 0)
@@ -1268,7 +1315,7 @@ class Arena extends Phaser.Scene {
       });
     }
     arenaHud.updateMinimap({
-      map: this.map,
+      map: this.topology,
       observedTiles: this.observedTiles,
       visibleTileKeys: this.visibleTileKeys,
       terrainChanged: this.minimapTerrainChanged,
@@ -1301,9 +1348,9 @@ class Arena extends Phaser.Scene {
         const tieBreakSeed = config.kind === 'basic'
           ? nextSeed(this.map.seed + ENEMY_IDS.indexOf(id))
           : undefined;
-        let path = findPath(this.map, enemyTile, approachTarget, tieBreakSeed);
+        let path = findPath(this.topology, enemyTile, approachTarget, tieBreakSeed);
         if (path.length === 0 && !sameTile(approachTarget, playerTile))
-          path = findPath(this.map, enemyTile, playerTile, tieBreakSeed);
+          path = findPath(this.topology, enemyTile, playerTile, tieBreakSeed);
         this.paths[id] = {
           path,
           nextAt: this.time.now + 250,
@@ -1388,7 +1435,7 @@ class Arena extends Phaser.Scene {
         .map(other => this.tile(this.enemyActors[other].sprite)),
     ];
     const tile = selectEnemySpawnTile(
-      this.map,
+      this.topology,
       { player: playerTile, viewport: this.viewport(), occupied, direction },
       nextSeed(this.map.seed + this.respawnCount[id] * 31 + this.recycleCount[id] * 131 + stableSlot),
       ENEMY_SPAWN_CONFIG.candidatePool,
@@ -1471,7 +1518,7 @@ class Arena extends Phaser.Scene {
         this.updateHiddenRecycle(id, visibility, playerTile, enemyTile);
         return;
       }
-      const visibility = enemyVisibility(this.map, playerTile, enemyTile);
+      const visibility = enemyVisibility(this.topology, playerTile, enemyTile);
       this.applyEnemyVisibility(id, visibility);
       this.visibilityTiles[id] = { player: playerTile, enemy: enemyTile };
       this.updateHiddenRecycle(id, visibility, playerTile, enemyTile);
@@ -1503,7 +1550,7 @@ class Arena extends Phaser.Scene {
       this.hiddenSince.set(id, this.time.now);
       return;
     }
-    const pathDistance = findPath(this.map, enemyTile, playerTile).length - 1;
+    const pathDistance = findPath(this.topology, enemyTile, playerTile).length - 1;
     if (pathDistance < hiddenRecyclePathDistanceForPhase(currentRunPhase(this.runState))) {
       this.hiddenSince.set(id, this.time.now);
       return;
@@ -1806,7 +1853,7 @@ class Arena extends Phaser.Scene {
           .map(id => this.tile(this.enemyActors[id].sprite)),
       ];
       const tile = selectSpawnTile(
-        this.map,
+        this.topology,
         { player: playerTile, viewport: this.viewport(), occupied },
         nextSeed(this.map.seed + current.respawnCount + current.seedOffset),
       );
@@ -1895,27 +1942,27 @@ class Arena extends Phaser.Scene {
 
   private tile(sprite: Phaser.GameObjects.Components.Transform): TilePosition {
     return {
-      x: Phaser.Math.Clamp(Math.floor(sprite.x / this.map.tileSize), 0, this.map.width - 1),
-      y: Phaser.Math.Clamp(Math.floor(sprite.y / this.map.tileSize), 0, this.map.height - 1),
+      x: Phaser.Math.Clamp(Math.floor(sprite.x / this.topology.tileSize), 0, this.topology.width - 1),
+      y: Phaser.Math.Clamp(Math.floor(sprite.y / this.topology.tileSize), 0, this.topology.height - 1),
     };
   }
 
   private world(tile: TilePosition): { x: number; y: number } {
     return {
-      x: tile.x * this.map.tileSize + this.map.tileSize / 2,
-      y: tile.y * this.map.tileSize + this.map.tileSize / 2,
+      x: tile.x * this.topology.tileSize + this.topology.tileSize / 2,
+      y: tile.y * this.topology.tileSize + this.topology.tileSize / 2,
     };
   }
 
   private mapWorldSize(): { width: number; height: number } {
     return {
-      width: this.map.width * this.map.tileSize,
-      height: this.map.height * this.map.tileSize,
+      width: this.topology.width * this.topology.tileSize,
+      height: this.topology.height * this.topology.tileSize,
     };
   }
 
   private viewport(): { left: number; top: number; right: number; bottom: number } {
-    return viewportTileRect(this.cameras.main.worldView, this.map);
+    return viewportTileRect(this.cameras.main.worldView, this.topology);
   }
 
   private updateTileHud(): void {

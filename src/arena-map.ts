@@ -18,11 +18,25 @@ const FALLBACK_ROOM_HEIGHT = 10;
 /** アリーナを構成する壁または床のtile種別。 */
 export type Tile = 'wall' | 'floor';
 
+/** 生成metadataを持たず、地形判定だけに使う最小のmap構造。 */
+export type ArenaTerrain = {
+  width: number;
+  height: number;
+  tileSize: number;
+  tiles: readonly (readonly Tile[])[];
+};
+
 /** 敵spawnを割り当てる四方向。 */
 export type SpawnDirection = (typeof SPAWN_DIRECTIONS)[number];
 
 /** tile座標を表す整数位置。 */
 export type TilePosition = { x: number; y: number };
+
+/** 初期配置の決定性に必要なseedと開始位置を持つ地形構造。 */
+export type ArenaPlacementTerrain = ArenaTerrain & {
+  seed: number;
+  start: TilePosition;
+};
 
 /** tile単位の表示領域を表す境界矩形。 */
 export type TileRect = { left: number; top: number; right: number; bottom: number };
@@ -46,11 +60,8 @@ export type ArenaEnemyKind = 'basic' | 'drone';
 export type EnemyVisibility = 'normal' | 'boundary' | 'hidden';
 
 /** 生成済みアリーナの地形、開始位置、再現用seed。 */
-export type ArenaMap = {
+export type ArenaMap = ArenaTerrain & {
   seed: number;
-  width: number;
-  height: number;
-  tileSize: number;
   tiles: Tile[][];
   rooms: Room[];
   corridors: Corridor[];
@@ -137,7 +148,7 @@ export function spawnDirectionForSlot(primary: SpawnDirection, stableSlot: numbe
  */
 export function viewportTileRect(
   view: { left: number; top: number; right: number; bottom: number },
-  map: Pick<ArenaMap, 'width' | 'height' | 'tileSize'> = {
+  map: Pick<ArenaTerrain, 'width' | 'height' | 'tileSize'> = {
     width: ARENA_WIDTH_TILES,
     height: ARENA_HEIGHT_TILES,
     tileSize: TILE_SIZE,
@@ -225,7 +236,7 @@ export function generateNextArenaMap(current: ArenaMap): ArenaMap {
  * @param position 判定するtile座標。
  * @returns 範囲内の床tileなら真。
  */
-export function isFloor(map: ArenaMap, position: TilePosition): boolean {
+export function isFloor(map: ArenaTerrain, position: TilePosition): boolean {
   return position.x >= 0
     && position.y >= 0
     && position.x < map.width
@@ -242,7 +253,7 @@ export function isFloor(map: ArenaMap, position: TilePosition): boolean {
  * @returns 壁に遮られない見通しがあれば真。
  */
 export function hasLineOfSight(
-  map: ArenaMap,
+  map: ArenaTerrain,
   player: TilePosition,
   target: TilePosition,
 ): boolean {
@@ -260,7 +271,7 @@ export function hasLineOfSight(
  * @returns 敵に適用する表示状態。
  */
 export function enemyVisibility(
-  map: ArenaMap,
+  map: ArenaTerrain,
   player: TilePosition,
   enemy: TilePosition,
 ): EnemyVisibility {
@@ -281,7 +292,7 @@ export function enemyVisibility(
  * @returns 始点から終点までのtile列。到達不能なら空配列。
  */
 export function findPath(
-  map: ArenaMap,
+  map: ArenaTerrain,
   start: TilePosition,
   target: TilePosition,
   tieBreakSeed?: number,
@@ -332,7 +343,7 @@ export function allFloorsReachable(map: ArenaMap): boolean {
  * @returns seed順で選んだ、3x3取得範囲が重ならない弾薬箱のtile座標。
  */
 export function selectAmmoBoxTiles(
-  map: ArenaMap,
+  map: ArenaPlacementTerrain,
   occupied: readonly TilePosition[] = [],
   count = AMMO_BOX_COUNT,
 ): TilePosition[] {
@@ -364,7 +375,7 @@ export function selectAmmoBoxTiles(
  * @returns 3x3取得範囲が重ならない到達可能tile群。
  */
 export function selectInitialWeaponPickupTiles(
-  map: ArenaMap,
+  map: ArenaPlacementTerrain,
   occupied: readonly TilePosition[] = [],
   count = 1,
 ): TilePosition[] {
@@ -408,7 +419,7 @@ export function selectInitialWeaponPickupTiles(
  * @returns 選択したtile座標。候補がなければnull。
  */
 export function selectInitialWeaponPickupTile(
-  map: ArenaMap,
+  map: ArenaPlacementTerrain,
   occupied: readonly TilePosition[] = [],
 ): TilePosition | null {
   return selectInitialWeaponPickupTiles(map, occupied, 1)[0] ?? null;
@@ -420,12 +431,14 @@ export function selectInitialWeaponPickupTile(
  * @param map 選択対象のアリーナ地形。
  * @param player 配置元プレイヤーの現在tile。
  * @param occupied active world item、弾薬箱、敵など配置不可のtile。
+ * @param seed 同距離候補の決定順に使うstable seed。
  * @returns 道なり距離上限内の候補。候補がなければnull。
  */
 export function selectWorldWeaponDropTile(
-  map: ArenaMap,
+  map: ArenaTerrain,
   player: TilePosition,
   occupied: readonly TilePosition[] = [],
+  seed = terrainSeed(map),
 ): TilePosition | null {
   const occupiedKeys = new Set(occupied.map(positionKey));
   const distances = pathDistances(map, player);
@@ -440,8 +453,8 @@ export function selectWorldWeaponDropTile(
   candidates.sort((left, right) => {
     const distance = left.distance - right.distance;
     if (distance !== 0) return distance;
-    const rank = mixSeed(map.seed, 'world-weapon-drop:' + positionKey(left.position))
-      - mixSeed(map.seed, 'world-weapon-drop:' + positionKey(right.position));
+    const rank = mixSeed(seed, 'world-weapon-drop:' + positionKey(left.position))
+      - mixSeed(seed, 'world-weapon-drop:' + positionKey(right.position));
     if (rank !== 0) return rank;
     return left.position.y - right.position.y || left.position.x - right.position.x;
   });
@@ -457,7 +470,7 @@ export function selectWorldWeaponDropTile(
  * @returns 選択したtile座標。候補がなければnull。
  */
 export function selectSpawnTile(
-  map: ArenaMap,
+  map: ArenaTerrain,
   request: SpawnRequest,
   seed: number,
 ): TilePosition | null {
@@ -493,7 +506,7 @@ export function selectSpawnTile(
  * @returns 選択した非可視tile座標。候補がなければnull。
  */
 export function selectEnemySpawnTile(
-  map: ArenaMap,
+  map: ArenaTerrain,
   request: EnemySpawnRequest,
   seed: number,
   candidatePoolSize = 10,
@@ -858,7 +871,7 @@ function corridorTiles(corridor: Corridor): TilePosition[] {
   return points;
 }
 
-function floorTiles(map: ArenaMap): TilePosition[] {
+function floorTiles(map: ArenaTerrain): TilePosition[] {
   const result: TilePosition[] = [];
   for (let y = 0; y < map.height; y += 1) {
     for (let x = 0; x < map.width; x += 1) {
@@ -868,14 +881,14 @@ function floorTiles(map: ArenaMap): TilePosition[] {
   return result;
 }
 
-function inBounds(map: ArenaMap, position: TilePosition): boolean {
+function inBounds(map: ArenaTerrain, position: TilePosition): boolean {
   return position.x >= 0
     && position.y >= 0
     && position.x < map.width
     && position.y < map.height;
 }
 
-function pathDistances(map: ArenaMap, start: TilePosition): Map<string, number> {
+function pathDistances(map: ArenaTerrain, start: TilePosition): Map<string, number> {
   if (!isFloor(map, start)) return new Map();
   const distances = new Map<string, number>([[positionKey(start), 0]]);
   const queue = [start];
@@ -960,6 +973,11 @@ function orderedPathNeighbours(position: TilePosition, tieBreakSeed?: number): T
 function sameTileLayout(left: ArenaMap, right: ArenaMap): boolean {
   return left.tiles.every((row, y) => row.every((tile, x) => tile === right.tiles[y][x]));
 }
+
+function terrainSeed(map: ArenaTerrain): number {
+  return 'seed' in map && typeof map.seed === 'number' ? map.seed : 0;
+}
+
 function positionKey(position: TilePosition): string {
   return `${position.x},${position.y}`;
 }

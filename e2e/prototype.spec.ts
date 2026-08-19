@@ -47,11 +47,18 @@ type EnemySpawnMetadata = {
   visibility: string;
   recycleCount: string;
 };
+type ArenaDebugBody = {
+  active?: boolean;
+  enable?: boolean;
+  width?: number;
+  height?: number;
+  reset: (x: number, y: number) => void;
+};
 type ArenaDebugEnemy = {
   active: boolean;
   x: number;
   y: number;
-  body?: { reset: (x: number, y: number) => void };
+  body?: ArenaDebugBody;
   setPosition: (x: number, y: number) => ArenaDebugEnemy;
   setVelocity: (x: number, y: number) => ArenaDebugEnemy;
 };
@@ -60,22 +67,36 @@ type ArenaDebugScene = {
   scene: { setVisible: (value: boolean) => unknown };
   cameras: { main: { worldView: { left: number; top: number; right: number; bottom: number } } };
   children: { getChildren: () => readonly { fillColor?: number }[] };
+  walls: { getChildren: () => readonly { active: boolean; x: number; y: number }[] };
+  wallArt: { commandBuffer: readonly unknown[] };
   player: { x: number; y: number; rotation: number; tintTopLeft: number };
+  topology: {
+    width: number;
+    height: number;
+    tileSize: number;
+    tiles: readonly (readonly ('wall' | 'floor')[])[];
+    revision: number;
+  };
+  observedTiles: { get: (key: string) => 'wall' | 'floor' | undefined };
+  visibleTileKeys: { has: (key: string) => boolean };
   state: {
     inventory: {
       quickSlots: readonly ({ id: string; model: WeaponModel; magazine: number; nextFireAt: number } | null)[];
       materials: Record<AmmoMaterial, number>;
     };
+    enemies: Record<EnemyId, { hp: number; maxHp: number; defeated: boolean }>;
   };
-  enemyActors: Record<EnemyId, { sprite: ArenaDebugEnemy }>;
+  enemyActors: Record<EnemyId, { active: boolean; sprite: ArenaDebugEnemy }>;
   textures: { get: (key: string) => { getSourceImage: () => HTMLCanvasElement } };
   debugRespawnEnemy: (id: EnemyId) => void;
   debugSetHiddenRecycleEnabled: (enabled: boolean) => void;
   debugSetPlayerInvulnerable: (enabled: boolean) => void;
   debugMovePlayerTo: (tile: TilePosition) => void;
   debugMoveWorldItemTo: (id: string, tile: TilePosition) => void;
+  debugOpenWall: (tile: TilePosition) => void;
   debugDamageEnemy: (id: EnemyId, amount: number) => void;
   refreshHud: () => void;
+  updateMinimap: () => void;
 };
 
 function devStartUrl(path: string): string {
@@ -570,6 +591,36 @@ function findDashLane(map: ReturnType<typeof generateArenaMap>): {
   throw new Error('回避検証用の4タイル直線が見つかりません。');
 }
 
+function findRuntimeWallOpening(map: ReturnType<typeof generateArenaMap>): {
+  wall: TilePosition;
+  floor: TilePosition;
+  key: 'w' | 'a' | 's' | 'd';
+} {
+  const reserve = map.centralReserve;
+  const directions: readonly { x: number; y: number; key: 'w' | 'a' | 's' | 'd' }[] = [
+    { x: 1, y: 0, key: 'd' },
+    { x: -1, y: 0, key: 'a' },
+    { x: 0, y: 1, key: 's' },
+    { x: 0, y: -1, key: 'w' },
+  ];
+  for (let y = 1; y < map.height - 1; y += 1)
+    for (let x = 1; x < map.width - 1; x += 1) {
+      const inReserve = reserve
+        && x >= reserve.bounds.left
+        && x <= reserve.bounds.right
+        && y >= reserve.bounds.top
+        && y <= reserve.bounds.bottom;
+      if (map.tiles[y][x] !== 'wall' || inReserve)
+        continue;
+      for (const direction of directions) {
+        const floor = { x: x - direction.x, y: y - direction.y };
+        if (map.tiles[floor.y]?.[floor.x] === 'floor')
+          return { wall: { x, y }, floor, key: direction.key };
+      }
+    }
+  throw new Error('runtime topology E2E用の通常wallが見つかりません。');
+}
+
 function directionFromPlayer(player: TilePosition, spawn: TilePosition): SpawnDirection {
   const dx = spawn.x - player.x;
   const dy = spawn.y - player.y;
@@ -744,6 +795,136 @@ test('Issue #64: retryはミニマップ探索を初期化し、表示はキー�
   await expect(playerTile).toHaveText(`${retryMap.start.x},${retryMap.start.y}`);
   await expect(minimap).toHaveAttribute('data-observed-tiles', String(expectedVisible));
   await expect(minimap).toHaveAttribute('data-visible-tiles', String(expectedVisible));
+});
+
+test('Issue #98: DEVの通常wall変更はcurrent topology、描画、collider、minimapだけを更新する', async ({ page }) => {
+  const schedule = createRunSchedule(1_000, 500);
+  await page.clock.install({ time: 1 });
+  await page.clock.pauseAt(1);
+  await page.goto(devStartUrl(
+    `/?enemyInitialCount=1&enemyStaggerIntervalMs=5000&combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+  ));
+  await expect(page.locator('#game canvas')).toBeVisible();
+  await startInitialCombat(page, schedule.restDurationMs);
+  const activeEnemyId: EnemyId = 'basic-1';
+  await expect(page.getByTestId(`${activeEnemyId}-hp`)).toHaveAttribute('data-active', 'true');
+  await setHiddenRecycle(page, false);
+  await setPlayerInvulnerable(page, true);
+  await setArenaPhysics(page, 'pause');
+  const mapSeed = Number(await page.getByTestId('map-seed').textContent());
+  const map = generateArenaMap(mapSeed);
+  const { wall, floor, key } = findRuntimeWallOpening(map);
+  const worldItemsBefore = await activeWorldItems(page);
+  const ammoBoxesBefore = await activeAmmoBoxes(page);
+  const inventoryBefore = await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    return scene.state.inventory;
+  });
+
+  const opened = await page.evaluate(({ floor, wall, enemyId }) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    const actor = scene.enemyActors[enemyId];
+    const sprite = actor.sprite;
+    const body = sprite.body;
+    if (!body) throw new Error(`${enemyId}のArcade Bodyが必要です。`);
+    const enemySnapshot = () => {
+      const currentBody = sprite.body;
+      if (!currentBody) throw new Error(`${enemyId}のArcade Bodyが必要です。`);
+      const enemy = scene.state.enemies[enemyId];
+      return {
+        actorActive: actor.active,
+        spriteActive: sprite.active,
+        bodyEnabled: Boolean(currentBody.enable),
+        bodyActive: Boolean(currentBody.active),
+        bodyWidth: Number(currentBody.width),
+        bodyHeight: Number(currentBody.height),
+        hp: enemy.hp,
+        maxHp: enemy.maxHp,
+        defeated: enemy.defeated,
+      };
+    };
+    const minimapPixel = () => {
+      const canvas = document.querySelector<HTMLCanvasElement>('[data-testid="minimap"]');
+      if (!canvas) throw new Error('ミニマップCanvasが見つかりません。');
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('ミニマップCanvasの2D contextがありません。');
+      const x = Math.min(canvas.width - 1, Math.floor((wall.x + 0.5) * canvas.width / scene.topology.width));
+      const y = Math.min(canvas.height - 1, Math.floor((wall.y + 0.5) * canvas.height / scene.topology.height));
+      return Array.from(context.getImageData(x, y, 1, 1).data);
+    };
+    scene.debugMovePlayerTo(floor);
+    scene.updateMinimap();
+    const minimapPixelBefore = minimapPixel();
+    const wallArt = scene.wallArt;
+    const wallArtCommandCount = wallArt.commandBuffer.length;
+    const enemyBefore = enemySnapshot();
+    scene.debugOpenWall(wall);
+    const centerX = wall.x * scene.topology.tileSize + scene.topology.tileSize / 2;
+    const centerY = wall.y * scene.topology.tileSize + scene.topology.tileSize / 2;
+    return {
+      topology: scene.topology,
+      observed: scene.observedTiles.get(`${wall.x},${wall.y}`),
+      visible: scene.visibleTileKeys.has(`${wall.x},${wall.y}`),
+      hasWallCollider: scene.walls.getChildren().some(candidate =>
+        candidate.active && candidate.x === centerX && candidate.y === centerY),
+      inventory: scene.state.inventory,
+      enemy: {
+        sameActor: scene.enemyActors[enemyId] === actor,
+        sameSprite: scene.enemyActors[enemyId].sprite === sprite,
+        sameBody: scene.enemyActors[enemyId].sprite.body === body,
+        before: enemyBefore,
+        after: enemySnapshot(),
+      },
+      minimapPixelBefore,
+      minimapPixelAfter: minimapPixel(),
+      wallArtRebuilt: scene.wallArt !== wallArt,
+      wallArtCommandCountBefore: wallArtCommandCount,
+      wallArtCommandCountAfter: scene.wallArt.commandBuffer.length,
+    };
+  }, { floor, wall, enemyId: activeEnemyId });
+
+  expect(opened.topology.revision).toBe(1);
+  expect(opened.topology.tiles[wall.y]?.[wall.x]).toBe('floor');
+  expect(map.tiles[wall.y][wall.x]).toBe('wall');
+  expect(findPath(opened.topology, floor, wall)).toEqual([floor, wall]);
+  expect(opened.observed).toBe('floor');
+  expect(opened.visible).toBe(true);
+  expect(opened.hasWallCollider).toBe(false);
+  expect(opened.enemy.sameActor).toBe(true);
+  expect(opened.enemy.sameSprite).toBe(true);
+  expect(opened.enemy.sameBody).toBe(true);
+  expect(opened.enemy.after).toEqual(opened.enemy.before);
+  expect(opened.minimapPixelAfter).not.toEqual(opened.minimapPixelBefore);
+  expect(opened.wallArtRebuilt).toBe(true);
+  expect(opened.wallArtCommandCountAfter).toBeLessThan(opened.wallArtCommandCountBefore);
+  expect(opened.inventory).toEqual(inventoryBefore);
+  expect(await activeWorldItems(page)).toEqual(worldItemsBefore);
+  expect(await activeAmmoBoxes(page)).toEqual(ammoBoxesBefore);
+
+  await setArenaPhysics(page, 'resume');
+  await page.keyboard.down(key);
+  try {
+    await page.clock.runFor(140);
+    await expect(page.getByTestId('player-tile')).toHaveText(`${wall.x},${wall.y}`);
+  } finally {
+    await page.keyboard.up(key);
+  }
+
+  const previousSeed = await page.getByTestId('map-seed').textContent();
+  await page.clock.fastForward(runDurationMs(schedule));
+  await expect(page.getByTestId('victory')).toBeVisible();
+  await page.getByTestId('retry').click();
+  await expect(page.getByTestId('map-seed')).not.toHaveText(previousSeed ?? '');
+  const retryMap = generateArenaMap(Number(await page.getByTestId('map-seed').textContent()));
+  const retried = await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    return { revision: scene.topology.revision, tile: scene.topology.tiles[tile.y]?.[tile.x] };
+  }, wall);
+  expect(retried.revision).toBe(0);
+  expect(retried.tile).toBe(retryMap.tiles[wall.y][wall.x]);
 });
 
 test('開始前のSpace選択を保ち、開始後のキーボード移動を受け付ける', async ({ page }) => {

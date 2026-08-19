@@ -6,6 +6,8 @@ specification: SPEC-STANDARD-ARENA-MAP-V2
 
 # standard-arena-map-v2 詳細設計
 
+> **runtime-topology-v1への限定supersede**: [runtime-topology-v1 詳細設計](runtime-topology-v1.md) はcurrent tiles、atomic batch、revision、terrain rebuild、cache refreshだけを後続sliceとして定める。本書の生成metadata、中央予約、標準map、既存観測契約は履歴兼参照として維持する。
+
 ## メタ情報
 
 | 項目 | 内容 |
@@ -33,15 +35,15 @@ specification: SPEC-STANDARD-ARENA-MAP-V2
 
 | 対象外 | 理由 |
 | --- | --- |
-| RuntimeTopology、room graph、loop、Acoustic Graph | 後続の構造・敵AI sliceで判断する |
-| terrain mutation、boss、map resize | 現在の生成・試遊契約を超える |
+| RuntimeTopology、限定的なterrain mutation | [runtime-topology-v1 詳細設計](runtime-topology-v1.md)で扱う。room graph、loop、Acoustic Graphは引き続き後続判断 |
+| boss、map resize | 現在の生成・試遊契約を超える |
 | team / drone / down / network / tactical / ping /正式UI | 単独プレイヤーの最小表示だけを先に確認する |
 
 ## 3. データ設計と手動同期
 
 | データ | 所有者 | 契約 |
 | --- | --- | --- |
-| `ArenaMap` | `src/arena-map.ts` | run固有の幅・高さ・tileSize、tile配列、start、生成済み標準mapの`centralReserve` |
+| `ArenaMap` | `src/arena-map.ts` | run固有の幅・高さ・tileSize、生成時tile配列、start、生成済み標準mapの`centralReserve`。current tilesは後続`RuntimeTopology`へ分離する |
 | `CentralReserve` | `src/arena-map.ts` | inclusive boundsと`up/right/down/left`のapproaches。予約内部はwall、approachは到達可能floor |
 | `observedTiles` | `src/main.ts` | `Map<string, Tile>`。可視になった時点のterrainを最後に見た値として保存する |
 | `visibleTileKeys` | `src/main.ts` | 現在のLOS結果だけを持ち、visibility更新ごとに再構築する |

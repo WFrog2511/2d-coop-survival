@@ -1,4 +1,4 @@
-import type { ArenaMap, EnemyVisibility, SpawnDirection, Tile, TilePosition } from '../arena-map';
+import type { ArenaTerrain, EnemyVisibility, SpawnDirection, Tile, TilePosition } from '../arena-map';
 import { DIRECTION_LABELS, ENEMY_IDS } from '../game-data';
 import { PLAYER_ROLES, type PlayerRoleId } from '../player-data';
 import { AMMO_MATERIAL_ORDER, AMMO_MATERIALS, STABLE_ENEMY_SLOT_COUNT, WEAPONS, activeEnemyCount, activeWeapon, currentRunPhase, currentWaveNumber, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, type AmmoMaterial, type CombatState, type EnemyInstanceId, type InventorySlotRef, type RunState, type WeaponInstance } from '../rules';
@@ -27,7 +27,7 @@ export type MinimapMarker = {
 };
 
 export type MinimapView = {
-  map: Pick<ArenaMap, 'width' | 'height' | 'tiles'>;
+  map: Pick<ArenaTerrain, 'width' | 'height' | 'tiles'>;
   observedTiles: ReadonlyMap<string, Tile>;
   visibleTileKeys: ReadonlySet<string>;
   terrainChanged: boolean;

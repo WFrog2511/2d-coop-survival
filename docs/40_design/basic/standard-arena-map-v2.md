@@ -7,6 +7,8 @@ implementation_issue: https://github.com/WFrog2511/2d-coop-survival/issues/64
 
 # standard-arena-map-v2 基本設計
 
+> **runtime-topology-v1への限定supersede**: [runtime-topology-v1 基本設計](runtime-topology-v1.md) はstable mapとcurrent terrainの分離、terrain-only rebuildだけを追加する。本書の生成、中央予約、単独プレイヤー用ミニマップ、その他の設計境界は履歴兼参照として残す。
+
 ## 責務分割
 
 | 境界 | 責務 |
@@ -20,7 +22,7 @@ implementation_issue: https://github.com/WFrog2511/2d-coop-survival/issues/64
 
 ## データと流れ
 
-`ArenaMap` はtile配列とrun固有の幅・高さ・tileSizeを正本とする。標準生成では `CentralReserve` を追加し、中央のsealed矩形と4方向approachを提供する。`main.ts` はこのmapを一度だけ描画・物理化し、UIはmapから算出されたtile座標だけを受け取る。
+`ArenaMap` は生成時のtile配列とrun固有の幅・高さ・tileSizeを正本とする。標準生成では `CentralReserve` を追加し、中央のsealed矩形と4方向approachを提供する。current terrainの描画・物理化・UI入力は後続の`RuntimeTopology`を使い、seedとmetadataはstable mapに残す。
 
 ~~~mermaid
 flowchart LR
@@ -43,6 +45,6 @@ retry / new runは既存のgenerationとtimer停止の境界を維持する。�
 
 ## Ponytailの境界
 
-既存のPhaser Graphics、Canvas 2D、DOM HUD、BFS、LOSを再利用する。room graph、terrain mutation、team視界、network、tactical UI、汎用minimap abstractionはこの1実装しか持たない段階では導入しない。
+既存のPhaser Graphics、Canvas 2D、DOM HUD、BFS、LOSを再利用する。限定的なterrain mutationは後続の[runtime-topology-v1 基本設計](runtime-topology-v1.md)へ移した。room graph、team視界、network、tactical UI、汎用minimap abstractionはこの1実装しか持たない段階では導入しない。
 
 `ponytail: 単独プレイヤーの最後に見たterrainと現在可視markerだけをCanvasへ描く。team / drone / ping /地形変化が同時に必要になった時に、観測状態の共有境界を再検討する。`

@@ -5,6 +5,8 @@ requirements: REQ-STANDARD-ARENA-MAP-V2
 
 # standard-arena-map-v2 仕様
 
+> **runtime-topology-v1への限定supersede**: [runtime-topology-v1 仕様](runtime-topology-v1.md) はcurrent terrainの所有者とmutation後のruntime入力だけを更新する。`ArenaMap`の生成、寸法、seed、start、中央予約metadataと、本書のそれ以外のミニマップ契約は変更しない。
+
 ## 標準mapと予約metadata
 
 - `generateArenaMap(seed)` と `generateFallbackArenaMap(seed)` が返す標準 `ArenaMap` は、`width=113`、`height=71`、`tileSize=40`、奇数の幅・高さを持つ。
@@ -16,7 +18,7 @@ requirements: REQ-STANDARD-ARENA-MAP-V2
 
 ## runtime境界
 
-- `ArenaMap.width`、`ArenaMap.height`、`ArenaMap.tileSize` を、camera bounds、Arcade Physics world bounds、床grid、wall Graphics、wall collider、world/tile変換、viewport clampの入力に使う。
+- 生成時の`ArenaMap.width`、`ArenaMap.height`、`ArenaMap.tileSize`はrun寸法の正本である。current terrainを読むcamera bounds、Arcade Physics world bounds、床grid、wall Graphics、wall collider、world/tile変換、viewport clampには、後続の`RuntimeTopology`が同じ寸法と現在tileを提供する。
 - 中央予約領域は既存Graphics上で淡い識別色のborder・fillと、4接近候補の小さな印を描く。これは進入不可な地形を置き換えるものではない。
 - `viewportTileRect(view, map)` は第二引数のmap寸法と`tileSize`でworld座標をtileへ変換し、left/top/right/bottomをclampする。第二引数を省略した場合だけ標準設定を使う。
 
