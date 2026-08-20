@@ -1,6 +1,7 @@
 import type { ArenaTerrain, EnemyVisibility, SpawnDirection, Tile, TilePosition } from '../arena-map';
 import { DIRECTION_LABELS, ENEMY_IDS } from '../game-data';
 import { PLAYER_ROLES, type PlayerRoleId } from '../player-data';
+import type { SoundWaveTile } from '../runtime-acoustic-graph';
 import { AMMO_MATERIAL_ORDER, AMMO_MATERIALS, STABLE_ENEMY_SLOT_COUNT, WEAPONS, activeEnemyCount, activeWeapon, currentRunPhase, currentWaveNumber, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, type AmmoMaterial, type CombatState, type EnemyInstanceId, type InventorySlotRef, type RunState, type WeaponInstance } from '../rules';
 
 export type EnemyHudView = {
@@ -26,6 +27,13 @@ export type MinimapMarker = {
   tile: TilePosition;
 };
 
+/** world mapと同じ伝播snapshotから描画するミニマップ用の一時音波。 */
+export type MinimapSoundWave = {
+  tiles: readonly SoundWaveTile[];
+  color: string;
+  alpha: number;
+};
+
 export type MinimapView = {
   map: Pick<ArenaTerrain, 'width' | 'height' | 'tiles'>;
   observedTiles: ReadonlyMap<string, Tile>;
@@ -33,6 +41,7 @@ export type MinimapView = {
   terrainChanged: boolean;
   playerTile: TilePosition;
   markers: readonly MinimapMarker[];
+  soundWaves: readonly MinimapSoundWave[];
 };
 
 export type ArenaHudView = {
@@ -364,6 +373,22 @@ export class ArenaHud {
     }
     context.clearRect(0, 0, width, height);
     context.drawImage(this.minimapTerrain, 0, 0);
+    context.save();
+    view.soundWaves.forEach((wave) => {
+      context.fillStyle = wave.color;
+      wave.tiles.forEach((entry) => {
+        if (!view.observedTiles.has(`${entry.tile.x},${entry.tile.y}`))
+          return;
+        context.globalAlpha = wave.alpha * entry.alpha;
+        context.fillRect(
+          entry.tile.x * tileWidth + Math.max(1, tileWidth * 0.14),
+          entry.tile.y * tileHeight + Math.max(1, tileHeight * 0.14),
+          Math.max(2, tileWidth * 0.72),
+          Math.max(2, tileHeight * 0.72),
+        );
+      });
+    });
+    context.restore();
     view.markers.forEach((marker) => {
       const color = marker.kind === 'enemy'
         ? '#ff6b6b'

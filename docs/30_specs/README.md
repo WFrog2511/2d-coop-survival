@@ -12,3 +12,4 @@
 - [standard-arena-map-v2 仕様](standard-arena-map-v2.md): 中央予約metadata、map instance bounds、最後に見たterrainと現在可視markerのミニマップ契約。
 - [runtime-topology-v1 仕様](runtime-topology-v1.md): current tilesのclone・atomic validation・revision、terrain-only rebuild、DEV E2Eの検証契約。
 - [runtime-area-graph-v1 仕様](runtime-area-graph-v1.md): area / junction / corridor分類、component/edge、決定性、Arena再導出の検証契約。
+- [acoustic-graph-v1 仕様](acoustic-graph-v1.md): node Dijkstra、predecessor境界seed、shared view、safe failureの検証契約。

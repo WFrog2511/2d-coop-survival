@@ -52,16 +52,6 @@ export function gunslingerSpeedMultiplierAt(now: number, speedBuffUntil: number)
   return now < speedBuffUntil ? GUNSLINGER_SPEED_MULTIPLIER : 1;
 }
 
-export const PLAYER_DASH_SOUND = {
-  duration: 90,
-  startFrequency: 220,
-  endFrequency: 80,
-  volume: 0.06,
-  waveform: 'sawtooth' as const,
-  noiseVolume: 0.025,
-  noiseFrequency: 2200,
-};
-
 export const PLAYER_ROLES = [
   { id: 'gunner', label: 'ガンナー', color: '青', accent: '#55d6ff', tint: 0x55d6ff },
   { id: 'sniper', label: 'スナイパー', color: '紫', accent: '#a88cff', tint: 0xa88cff },

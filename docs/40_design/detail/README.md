@@ -9,3 +9,4 @@
 - [standard-arena-map-v2 詳細設計](standard-arena-map-v2.md): TypeScript手動同期の中央予約、instance bounds、最後に見たterrain、最小ミニマップ。
 - [runtime-topology-v1 詳細設計](runtime-topology-v1.md): TypeScript手動同期のatomic batch、revision、terrain rebuild、cache refresh、DEV E2E。
 - [runtime-area-graph-v1 詳細設計](runtime-area-graph-v1.md): TypeScript手動同期の空間分類、component/edge、runtime lifecycle、DEV E2E。
+- [acoustic-graph-v1 詳細設計](acoustic-graph-v1.md): node Dijkstra、render-only BFS、action lifecycle、safe failureのTypeScript手動同期。

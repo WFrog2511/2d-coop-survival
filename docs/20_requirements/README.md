@@ -12,3 +12,4 @@
 - [standard-arena-map-v2 要件](standard-arena-map-v2.md): 奇数113×71、中央13×13予約、4接近候補、instance bounds、単独プレイヤー用最小ミニマップ。
 - [runtime-topology-v1 要件](runtime-topology-v1.md): stable mapから分離したcurrent terrain、atomic batch、revision、中央予約・外周guard、DEV wall→floor。
 - [runtime-area-graph-v1 要件](runtime-area-graph-v1.md): current topology由来のarea / junction / corridor node、edge、決定的query、DEV観測。
+- [acoustic-graph-v1 要件](acoustic-graph-v1.md): RuntimeAreaGraph nodeを正本にする論理音響、render-only tile表示、shared minimap、AI対象外。

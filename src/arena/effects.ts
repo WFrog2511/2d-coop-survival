@@ -1,10 +1,10 @@
 import Phaser from 'phaser';
+import { PLAYER_DASH_SOUND, PLAYER_MOVEMENT_SOUND, PLAYER_PICKUP_SOUND, WEAPON_SOUND_WAVES } from '../acoustic-data';
 import {
   CAMERA_SHAKE_COOLDOWN_MS,
   ENEMY_DEFEAT_SHAKE,
   ENEMY_DEFEAT_SOUND,
   ENEMY_HIT_EFFECT,
-  FIRE_SOUND,
   MUZZLE_FLASH,
   PLAYER_HIT_SHAKE,
   PLAYER_HIT_VIGNETTE,
@@ -13,7 +13,6 @@ import {
   type CameraShakeProfile,
   type SoundEffectProfile,
 } from '../game-data';
-import { PLAYER_DASH_SOUND } from '../player-data';
 import type { EnemyKind, WeaponModel } from '../rules';
 
 export class ArenaEffects {
@@ -46,7 +45,7 @@ export class ArenaEffects {
     angle: number,
   ): void {
     this.shakeCamera(WEAPON_FIRE_SHAKE[weapon]);
-    this.playSoundEffect(FIRE_SOUND[weapon]);
+    this.playSoundEffect(WEAPON_SOUND_WAVES[weapon].audio);
     this.playMuzzleFlash(player, weapon, angle);
   }
 
@@ -80,7 +79,15 @@ export class ArenaEffects {
   }
 
   public playPlayerDash(): void {
-    this.playSoundEffect(PLAYER_DASH_SOUND);
+    this.playSoundEffect(PLAYER_DASH_SOUND.audio);
+  }
+
+  public playPlayerMovement(): void {
+    this.playSoundEffect(PLAYER_MOVEMENT_SOUND.audio);
+  }
+
+  public playPlayerPickup(): void {
+    this.playSoundEffect(PLAYER_PICKUP_SOUND.audio);
   }
 
   private playSoundEffect(effect: SoundEffectProfile): void {
