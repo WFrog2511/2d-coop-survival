@@ -12,6 +12,10 @@ definition_of_delivery: https://github.com/WFrog2511/2d-coop-survival/issues/12
 
 [REQ-AMMO-MATERIAL-V1](ammo-material-v1.md) は、WeaponId別shared ammo、5武器表、shared nextFireAtとreload、retry時の旧ammo表現だけを supersede する。現行は7 WeaponModel、3マテリアル、WeaponInstanceごとのmagazineとnextFireAtを使う。移動、敵、壁、map、照準、入力、既存のbullet/collider/range/hit/effect経路は本書の契約を維持する。
 
+## 現行map・音響への限定supersede
+
+[REQ-STANDARD-ARENA-MAP-V2](standard-arena-map-v2.md) は、本書に残る旧map寸法、通路幅、ランダム部屋内障害物、fallback地形の記述だけを履歴化する。現行の生成は2tile幅の通常/fallback通路、中央予約の2layer annulus、空の`obstacles`を使う。current terrainの3×3 area / 2×2 corridor分類は[REQ-RUNTIME-AREA-GRAPH-V1](runtime-area-graph-v1.md)、音響の`非表示` / `通常` / `音響デバッグ`表示は[REQ-ACOUSTIC-GRAPH-V1](acoustic-graph-v1.md)が正本である。map形状の次の調整は[Issue #104](https://github.com/WFrog2511/2d-coop-survival/issues/104)で扱う。本書の武器、敵、入力、戦闘loopの履歴契約はこの限定supersedeでは変更しない。
+
 ## 目的
 
 prototype-v0を拡張し、初期ライフルとworld pickupで取得するショットガン・sidearm model、9体の基本敵・3体の高速ドローンを、遮蔽物を持つ自動生成アリーナで選択・識別・撃破できる最小戦闘ループを提供する。

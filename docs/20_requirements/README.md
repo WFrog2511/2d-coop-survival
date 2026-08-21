@@ -9,7 +9,7 @@
 - [player-actions-v1 要件](player-actions-v1.md): 回避、Eによる弾薬箱取得、役職選択開始ゲートの範囲と対象外。
 - [gunslinger-v1 要件](gunslinger-v1.md): ガンスリンガー限定の回避ブーツナイフ、コンボ、短時間の通常移動速度buff。
 - [inventory-v1 要件](inventory-v1.md): weapon model・素材のworld pickup、quick slot 3件とbackpack 10件、Tab drag/drop、terminal/retry。
-- [standard-arena-map-v2 要件](standard-arena-map-v2.md): 奇数113×71、中央13×13予約、4接近候補、instance bounds、単独プレイヤー用最小ミニマップ。
+- [standard-arena-map-v2 要件](standard-arena-map-v2.md): 奇数113×71、2tile幅の通常/fallback通路、中央13×13予約と2layer annulus、空obstacles、4接近候補、instance bounds、単独プレイヤー用最小ミニマップ。形状の追加調整はIssue #104。
 - [runtime-topology-v1 要件](runtime-topology-v1.md): stable mapから分離したcurrent terrain、atomic batch、revision、中央予約・外周guard、DEV wall→floor。
-- [runtime-area-graph-v1 要件](runtime-area-graph-v1.md): current topology由来のarea / junction / corridor node、edge、決定的query、DEV観測。
-- [acoustic-graph-v1 要件](acoustic-graph-v1.md): RuntimeAreaGraph nodeを正本にする論理音響、render-only tile表示、shared minimap、AI対象外。
+- [runtime-area-graph-v1 要件](runtime-area-graph-v1.md): current topology由来の3×3 area / 2×2 corridor / 細いjunction node、edge、決定的query、DEV観測。
+- [acoustic-graph-v1 要件](acoustic-graph-v1.md): RuntimeAreaGraph nodeを正本にする論理音響、通常表示とlogical retentionの分離、非表示/通常/debug、world/minimap共有debug、AI対象外。

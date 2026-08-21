@@ -66,6 +66,24 @@ h1 {
   aspect-ratio: 8 / 5;
 }
 
+.sound-wave-mode {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 8px;
+  color: #c7f7ff;
+  cursor: pointer;
+}
+
+.sound-wave-mode select {
+  accent-color: #7ee7ff;
+  border: 1px solid #55728b;
+  border-radius: 4px;
+  color: #e8f6ff;
+  background: #182639;
+  font: inherit;
+}
+
 #game canvas {
   width: 100%;
   height: 100%;

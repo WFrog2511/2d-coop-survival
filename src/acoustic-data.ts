@@ -15,8 +15,8 @@ export type SoundActionProfile = Readonly<{
   audio: SoundEffectProfile;
 }>;
 
-/** 連射時に同時表示する音波の上限。 */
-export const MAX_ACTIVE_SOUND_WAVES = 6;
+/** 通常表示へ発生時に採用できる音波viewの上限。 */
+export const MAX_NORMAL_SOUND_WAVE_VIEWS = 6;
 
 /** area graphのnodeを渡る論理strength消費を試遊用にまとめる。 */
 export const ACOUSTIC_PROPAGATION_COSTS: AcousticPropagationCosts = {

@@ -6,12 +6,12 @@ customer_review_issue: https://github.com/WFrog2511/2d-coop-survival/issues/17
 related_adr: none
 status: Implemented
 owner: Terra
-last_updated: 2026-08-08
+last_updated: 2026-08-21
 ---
 
 # 自動生成アリーナ v1 詳細設計
 
-> **v2への限定supersede**: [standard-arena-map-v2 詳細設計](standard-arena-map-v2.md) は、標準mapの寸法、中央予約領域、map instanceを基準にしたbounds、単独プレイヤーのLOSミニマップだけを本書から更新する。RuntimeTopology、room graph、Acoustic Graph、terrain mutation、boss、team / drone / network / tactical / ping、正式UI、map resizeは引き続き対象外である。本書のうちv2と矛盾しない既存の決定的生成、BFS、spawn、retry境界は履歴兼参照として残す。
+> **現行設計への限定supersede**: [standard-arena-map-v2 詳細設計](standard-arena-map-v2.md) は、標準mapの寸法、中央予約領域、map instanceを基準にしたbounds、通常/fallbackの2tile幅通路、中央予約外側の2layer annulus、空の`obstacles`、単独プレイヤーのLOSミニマップを本書から更新する。current terrainの3×3 area / 2×2 corridor分類は[runtime-area-graph-v1 詳細設計](runtime-area-graph-v1.md)、三modeの音響表示とnode/room debugは[acoustic-graph-v1 詳細設計](acoustic-graph-v1.md)を参照する。map形状の次の改善は[Issue #104](https://github.com/WFrog2511/2d-coop-survival/issues/104)で扱う。本書のうち現行設計と矛盾しない既存の決定的生成、BFS、spawn、retry境界は履歴兼参照として残す。
 
 ## 1. 目的
 
@@ -264,3 +264,4 @@ Feature: 遮蔽物のある自動生成アリーナ
 | 2026-08-02 | 実装同期 | 純粋生成・BFS・spawnとPhaser統合、再挑戦map差の検証結果を反映した。 | Sol review / Terra implementation |
 | 2026-08-08 | Issue #38同期 | death再出現delayを5000〜9000ms/3000〜6000msへ更新した。 | Sol |
 | 2026-08-08 | Issue #39同期 | 80×50・3200×2000pxのワールド、通常14部屋、3列×3行中央開始の8部屋fallback、固定canvas表示を反映した。 | Terra implementation |
+| 2026-08-21 | 現行設計への限定supersedeを追記 | 現行map、runtime分類、音響debugの正本と、形状改善をIssue #104へ切り出す境界を明確化した。 | Codex |

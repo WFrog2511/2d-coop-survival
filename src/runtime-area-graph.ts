@@ -4,6 +4,11 @@ import type { RuntimeTopology } from './runtime-topology';
 /** current floorを分類したruntime nodeの種類。 */
 export type RuntimeAreaNodeKind = 'area' | 'junction' | 'corridor';
 
+/** areaとして扱う最小の全floor正方形の一辺。 */
+export const MIN_AREA_OPEN_SIZE_TILES = 3;
+
+const CORRIDOR_BAND_WIDTH_TILES = MIN_AREA_OPEN_SIZE_TILES - 1;
+
 /** 同じ種類の4近傍floor componentを表すruntime node。 */
 export type RuntimeAreaNode = Readonly<{
   id: string;
@@ -105,24 +110,29 @@ export function runtimeAreaNeighbors(graph: RuntimeAreaGraph, nodeId: string): r
 }
 
 function classifyFloorTile(topology: RuntimeTopology, x: number, y: number): RuntimeAreaNodeKind {
-  if (participatesInArea(topology, x, y))
+  if (participatesInOpenSquare(topology, x, y, MIN_AREA_OPEN_SIZE_TILES))
     return 'area';
+  if (participatesInOpenSquare(topology, x, y, CORRIDOR_BAND_WIDTH_TILES))
+    return 'corridor';
   const floorNeighbors = CARDINAL_DIRECTIONS.filter(direction => isFloor(topology, x + direction.x, y + direction.y));
   return floorNeighbors.length >= 3 ? 'junction' : 'corridor';
 }
 
-function participatesInArea(topology: RuntimeTopology, x: number, y: number): boolean {
-  return [
-    { x, y },
-    { x: x - 1, y },
-    { x, y: y - 1 },
-    { x: x - 1, y: y - 1 },
-  ].some(origin =>
-    isFloor(topology, origin.x, origin.y)
-    && isFloor(topology, origin.x + 1, origin.y)
-    && isFloor(topology, origin.x, origin.y + 1)
-    && isFloor(topology, origin.x + 1, origin.y + 1),
-  );
+/** 指定tileを含む全floor正方形が一つでもあるかを調べる。 */
+function participatesInOpenSquare(topology: RuntimeTopology, x: number, y: number, size: number): boolean {
+  for (let originY = y - size + 1; originY <= y; originY += 1)
+    for (let originX = x - size + 1; originX <= x; originX += 1)
+      if (isOpenSquare(topology, originX, originY, size))
+        return true;
+  return false;
+}
+
+function isOpenSquare(topology: RuntimeTopology, originX: number, originY: number, size: number): boolean {
+  for (let y = originY; y < originY + size; y += 1)
+    for (let x = originX; x < originX + size; x += 1)
+      if (!isFloor(topology, x, y))
+        return false;
+  return true;
 }
 
 function isFloor(topology: RuntimeTopology, x: number, y: number): boolean {

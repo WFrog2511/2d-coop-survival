@@ -1,7 +1,8 @@
-import type { ArenaTerrain, EnemyVisibility, SpawnDirection, Tile, TilePosition } from '../arena-map';
+import type { ArenaTerrain, EnemyVisibility, Room, SpawnDirection, Tile, TilePosition } from '../arena-map';
 import { DIRECTION_LABELS, ENEMY_IDS } from '../game-data';
 import { PLAYER_ROLES, type PlayerRoleId } from '../player-data';
 import type { SoundWaveTile } from '../runtime-acoustic-graph';
+import type { RuntimeAreaNodeKind } from '../runtime-area-graph';
 import { AMMO_MATERIAL_ORDER, AMMO_MATERIALS, STABLE_ENEMY_SLOT_COUNT, WEAPONS, activeEnemyCount, activeWeapon, currentRunPhase, currentWaveNumber, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, type AmmoMaterial, type CombatState, type EnemyInstanceId, type InventorySlotRef, type RunState, type WeaponInstance } from '../rules';
 
 export type EnemyHudView = {
@@ -34,6 +35,28 @@ export type MinimapSoundWave = {
   alpha: number;
 };
 
+/** 音響debugでworldとminimapが共有する、graph単位の一時表示snapshot。 */
+export type AcousticDebugView = {
+  revision: number;
+  rooms: readonly Room[];
+  source: TilePosition | undefined;
+  nodes: readonly {
+    id: string;
+    kind: RuntimeAreaNodeKind;
+    tiles: readonly TilePosition[];
+    center: { x: number; y: number };
+    arrived: boolean;
+    source: boolean;
+    arrivalCost: number | undefined;
+  }[];
+  edges: readonly {
+    from: { x: number; y: number };
+    to: { x: number; y: number };
+    predecessor: boolean;
+    arrivalCost: number | undefined;
+  }[];
+};
+
 export type MinimapView = {
   map: Pick<ArenaTerrain, 'width' | 'height' | 'tiles'>;
   observedTiles: ReadonlyMap<string, Tile>;
@@ -42,6 +65,7 @@ export type MinimapView = {
   playerTile: TilePosition;
   markers: readonly MinimapMarker[];
   soundWaves: readonly MinimapSoundWave[];
+  acousticDebug: AcousticDebugView | undefined;
 };
 
 export type ArenaHudView = {
@@ -108,6 +132,75 @@ export function formatSurvivalTime(remainingMs: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
+}
+
+/** 未踏地形を隠す通常minimapとは別に、debug時だけcurrent graphの全体像を重ねる。 */
+function drawAcousticDebugMinimap(
+  context: CanvasRenderingContext2D,
+  debug: AcousticDebugView,
+  tileWidth: number,
+  tileHeight: number,
+): void {
+  const colors: Record<RuntimeAreaNodeKind, string> = {
+    area: '#74c8ff',
+    junction: '#ffcf70',
+    corridor: '#c79dff',
+  };
+  context.save();
+  context.lineWidth = Math.max(1, Math.min(tileWidth, tileHeight) * 0.25);
+  context.strokeStyle = '#f2c4ff';
+  context.globalAlpha = 0.8;
+  debug.rooms.forEach((room) => {
+    context.strokeRect(room.x * tileWidth, room.y * tileHeight, room.width * tileWidth, room.height * tileHeight);
+  });
+  debug.nodes.forEach((node) => {
+    context.fillStyle = colors[node.kind];
+    context.globalAlpha = node.arrived ? 0.44 : 0.20;
+    node.tiles.forEach((tile) => {
+      context.fillRect(tile.x * tileWidth, tile.y * tileHeight, tileWidth, tileHeight);
+    });
+  });
+  context.lineWidth = Math.max(1, Math.min(tileWidth, tileHeight) * 0.18);
+  context.strokeStyle = '#bed2de';
+  context.globalAlpha = 0.7;
+  debug.edges.forEach((edge) => {
+    context.beginPath();
+    context.moveTo((edge.from.x + 0.5) * tileWidth, (edge.from.y + 0.5) * tileHeight);
+    context.lineTo((edge.to.x + 0.5) * tileWidth, (edge.to.y + 0.5) * tileHeight);
+    context.stroke();
+  });
+  const predecessorEdges = debug.edges
+    .filter(edge => edge.predecessor)
+    .sort((left, right) => (left.arrivalCost ?? Number.POSITIVE_INFINITY) - (right.arrivalCost ?? Number.POSITIVE_INFINITY));
+  const maximumArrivalCost = predecessorEdges.at(-1)?.arrivalCost ?? 0;
+  context.strokeStyle = '#fff18a';
+  predecessorEdges.forEach((edge) => {
+    context.globalAlpha = maximumArrivalCost > 0 && edge.arrivalCost !== undefined
+      ? 0.45 + 0.55 * (1 - edge.arrivalCost / maximumArrivalCost)
+      : 1;
+    context.beginPath();
+    context.moveTo((edge.from.x + 0.5) * tileWidth, (edge.from.y + 0.5) * tileHeight);
+    context.lineTo((edge.to.x + 0.5) * tileWidth, (edge.to.y + 0.5) * tileHeight);
+    context.stroke();
+  });
+  context.strokeStyle = '#ffffff';
+  debug.nodes.forEach((node) => {
+    if (!node.arrived)
+      return;
+    node.tiles.forEach((tile) => {
+      context.strokeRect(tile.x * tileWidth, tile.y * tileHeight, tileWidth, tileHeight);
+    });
+  });
+  if (debug.source) {
+    context.fillStyle = '#ffffff';
+    context.fillRect(
+      debug.source.x * tileWidth + tileWidth * 0.2,
+      debug.source.y * tileHeight + tileHeight * 0.2,
+      tileWidth * 0.6,
+      tileHeight * 0.6,
+    );
+  }
+  context.restore();
 }
 
 export class ArenaHud {
@@ -389,6 +482,8 @@ export class ArenaHud {
       });
     });
     context.restore();
+    if (view.acousticDebug)
+      drawAcousticDebugMinimap(context, view.acousticDebug, tileWidth, tileHeight);
     view.markers.forEach((marker) => {
       const color = marker.kind === 'enemy'
         ? '#ff6b6b'

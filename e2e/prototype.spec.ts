@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { MAX_NORMAL_SOUND_WAVE_VIEWS } from '../src/acoustic-data';
 import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, SPAWN_PHASE_MS, TILE_SIZE, WORLD_WEAPON_DROP_MAX_PATH_DISTANCE, enemyVisibility, findPath, generateArenaMap, hasLineOfSight, hiddenRecycleThresholdFor, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, spawnDirectionForSlot, type SpawnDirection, type TilePosition, viewportTileRect } from '../src/arena-map';
 import { formatSurvivalTime } from '../src/arena/hud';
 import { INITIAL_WORLD_WEAPON_MODELS, SCRAP_DROP_AMOUNTS, SCRAP_VISUAL_TIER_THRESHOLDS, WORLD_SIDEARM_MODELS, scrapVisualTierFor } from '../src/game-data';
@@ -87,6 +88,8 @@ type AcousticTileDebug = {
   alpha: number;
 };
 type AcousticWaveDebug = {
+  normalAdmitted: boolean;
+  profile: { costTravelMs: number };
   snapshot: {
     revision: number;
     source: TilePosition;
@@ -101,6 +104,18 @@ type AcousticWaveDebug = {
 type AcousticWaveViewDebug = {
   tiles: readonly AcousticTileDebug[];
   profile: { minimapAlpha: number };
+};
+type AcousticDebugViewDebug = {
+  revision: number;
+  rooms: readonly { x: number; y: number; width: number; height: number }[];
+  source: TilePosition | undefined;
+  nodes: readonly {
+    id: string;
+    arrived: boolean;
+    source: boolean;
+    arrivalCost: number | undefined;
+  }[];
+  edges: readonly { predecessor: boolean; arrivalCost: number | undefined }[];
 };
 type ArenaDebugScene = {
   physics: { pause: () => void; resume: () => void };
@@ -120,11 +135,14 @@ type ArenaDebugScene = {
   };
   areaGraph: {
     revision: number;
-    nodes: readonly { id: string; kind: 'area' | 'junction' | 'corridor'; neighborIds: readonly string[] }[];
+    nodes: readonly { id: string; kind: 'area' | 'junction' | 'corridor'; tiles: readonly TilePosition[]; neighborIds: readonly string[] }[];
+    edges: readonly { from: string; to: string }[];
     tileNodeIds: readonly (readonly (string | undefined)[])[];
   };
   activeSoundWaves: readonly AcousticWaveDebug[];
   soundWaveViews: readonly AcousticWaveViewDebug[];
+  acousticDebugView: AcousticDebugViewDebug | undefined;
+  soundWaveGraphics: { commandBuffer: readonly unknown[] };
   playerDash?: { startX: number; startY: number; soundEmitted: boolean };
   playerDashCooldownUntil: number;
   observedTiles: { get: (key: string) => 'wall' | 'floor' | undefined };
@@ -159,6 +177,73 @@ async function startInitialCombat(
 ): Promise<void> {
   await page.clock.fastForward(preparationDurationMs);
   await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase', 'combat');
+}
+
+async function soundWaveModeRendering(page: import('@playwright/test').Page): Promise<{
+  activeWaveCount: number;
+  viewCount: number;
+  worldCommandCount: number;
+  normalFillRectCount: number;
+  debugDrawCallCount: number;
+}> {
+  return page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    const minimap = document.querySelector<HTMLCanvasElement>('[data-testid="minimap"]');
+    const context = minimap?.getContext('2d');
+    if (!context) throw new Error('既存minimap Canvasを観測できません。');
+    const originalFillRect = context.fillRect.bind(context);
+    const originalStrokeRect = context.strokeRect.bind(context);
+    const originalLineTo = context.lineTo.bind(context);
+    const originalSave = context.save.bind(context);
+    const originalRestore = context.restore.bind(context);
+    let activeLayer = -1;
+    let nextLayer = 0;
+    let normalFillRectCount = 0;
+    let debugDrawCallCount = 0;
+    context.save = (): void => {
+      originalSave();
+      activeLayer = nextLayer;
+      nextLayer += 1;
+    };
+    context.restore = (): void => {
+      originalRestore();
+      activeLayer = -1;
+    };
+    context.fillRect = (x, y, width, height): void => {
+      if (activeLayer === 0)
+        normalFillRectCount += 1;
+      if (activeLayer === 1)
+        debugDrawCallCount += 1;
+      originalFillRect(x, y, width, height);
+    };
+    context.strokeRect = (x, y, width, height): void => {
+      if (activeLayer === 1)
+        debugDrawCallCount += 1;
+      originalStrokeRect(x, y, width, height);
+    };
+    context.lineTo = (x, y): void => {
+      if (activeLayer === 1)
+        debugDrawCallCount += 1;
+      originalLineTo(x, y);
+    };
+    try {
+      scene.updateMinimap();
+    } finally {
+      context.fillRect = originalFillRect;
+      context.strokeRect = originalStrokeRect;
+      context.lineTo = originalLineTo;
+      context.save = originalSave;
+      context.restore = originalRestore;
+    }
+    return {
+      activeWaveCount: scene.activeSoundWaves.length,
+      viewCount: scene.soundWaveViews.length,
+      worldCommandCount: scene.soundWaveGraphics.commandBuffer.length,
+      normalFillRectCount,
+      debugDrawCallCount,
+    };
+  });
 }
 
 async function currentAmmo(page: import('@playwright/test').Page): Promise<number> {
@@ -1106,6 +1191,197 @@ test('Issue #102: 成功射撃はnode音響snapshotをworldとminimapへ同じvi
       views: scene.soundWaveViews.length,
     };
   })).toEqual({ active: 0, views: 0 });
+});
+
+test('Issue #102: 音響デバッグmodeはlogical波を保持し、normal capとdebug graphをworld/minimapへ共有する', async ({ page }) => {
+  await page.goto(devStartUrl('/?enemyInitialCount=0&enemyStaggerIntervalMs=5000'));
+  await expect(page.locator('#game canvas')).toBeVisible();
+  const mode = page.getByTestId('sound-wave-mode');
+  await expect(mode).toHaveValue('normal');
+  const ammoBeforeControl = await currentAmmo(page);
+  await mode.click();
+  await page.keyboard.press('Escape');
+  expect(await currentAmmo(page)).toBe(ammoBeforeControl);
+
+  await mode.selectOption('off');
+  await aimPlayer(page, { x: 1, y: 0 });
+  const emitted = await page.evaluate((waveCount) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    const arena = scene as unknown as { tryFire: () => void };
+    const ammoBefore = scene.state.inventory.quickSlots[0]?.magazine;
+    if (ammoBefore === undefined)
+      throw new Error('normal cap観測には初期ライフルの弾倉が必要です。');
+    for (let index = 0; index < waveCount; index += 1) {
+      const weapon = scene.state.inventory.quickSlots[0];
+      if (!weapon)
+        throw new Error('normal cap観測には初期ライフルが必要です。');
+      weapon.nextFireAt = scene.time.now;
+      arena.tryFire();
+    }
+    return {
+      ammoBefore,
+      ammoAfter: scene.state.inventory.quickSlots[0]?.magazine,
+      active: scene.activeSoundWaves.length,
+      normalAdmitted: scene.activeSoundWaves.filter(wave => wave.normalAdmitted).length,
+    };
+  }, MAX_NORMAL_SOUND_WAVE_VIEWS + 1);
+  expect(emitted.ammoAfter).toBe(emitted.ammoBefore - (MAX_NORMAL_SOUND_WAVE_VIEWS + 1));
+  expect(emitted.active).toBe(MAX_NORMAL_SOUND_WAVE_VIEWS + 1);
+  expect(emitted.normalAdmitted).toBe(MAX_NORMAL_SOUND_WAVE_VIEWS);
+  const hiddenRendering = await soundWaveModeRendering(page);
+  expect(hiddenRendering).toEqual({
+    activeWaveCount: MAX_NORMAL_SOUND_WAVE_VIEWS + 1,
+    viewCount: MAX_NORMAL_SOUND_WAVE_VIEWS,
+    worldCommandCount: 0,
+    normalFillRectCount: 0,
+    debugDrawCallCount: 0,
+  });
+
+  await mode.selectOption('normal');
+  const normalRendering = await soundWaveModeRendering(page);
+  expect(normalRendering.activeWaveCount).toBe(MAX_NORMAL_SOUND_WAVE_VIEWS + 1);
+  expect(normalRendering.viewCount).toBe(MAX_NORMAL_SOUND_WAVE_VIEWS);
+  expect(normalRendering.worldCommandCount).toBeGreaterThan(0);
+  expect(normalRendering.normalFillRectCount).toBeGreaterThan(0);
+  expect(normalRendering.debugDrawCallCount).toBe(0);
+
+  await mode.focus();
+  await page.keyboard.press('Space');
+  await page.keyboard.press('Shift');
+  const focusedMode = await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    return {
+      dashActive: scene.playerDash !== undefined,
+      inventoryOpen: document.querySelector<HTMLElement>('[data-testid="inventory-detail"]')?.dataset.open,
+    };
+  });
+  expect(focusedMode.dashActive).toBe(false);
+  expect(focusedMode.inventoryOpen).toBe('false');
+
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Tab');
+  expect(await page.evaluate(() => document.activeElement?.matches('[data-testid="sound-wave-mode"]') === true)).toBe(false);
+  await expect(page.getByTestId('inventory-detail')).toHaveAttribute('data-open', 'false');
+
+  await mode.selectOption('debug');
+  const debugShot = await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    const arena = scene as unknown as { tryFire: () => void };
+    const sourceNode = scene.areaGraph.nodes
+      .filter(node => node.neighborIds.length > 0 && node.tiles.length > 0)
+      .sort((left, right) => left.tiles.length - right.tiles.length || left.id.localeCompare(right.id))[0];
+    const source = sourceNode?.tiles[0];
+    if (!source)
+      throw new Error('音響debugの前駆edge観測には隣接nodeを持つfloor nodeが必要です。');
+    scene.debugMovePlayerTo(source);
+    const weapon = scene.state.inventory.quickSlots[0];
+    if (!weapon)
+      throw new Error('音響debugの最新eventには初期ライフルが必要です。');
+    weapon.nextFireAt = scene.time.now;
+    arena.tryFire();
+    scene.updateMinimap();
+    const latest = scene.activeSoundWaves.at(-1);
+    if (!latest)
+      throw new Error('音響debugの成功射撃がlogical waveを作成しませんでした。');
+    const arrivalMs = latest.snapshot.nodes
+      .filter(node => node.predecessorNodeId !== undefined)
+      .map(node => node.arrivalCost * latest.profile.costTravelMs)
+      .sort((left, right) => left - right)[0];
+    return {
+      hasLogicalPredecessor: arrivalMs !== undefined,
+      arrivalMs,
+      futurePredecessorCount: scene.acousticDebugView?.edges.filter(edge => edge.predecessor).length ?? 0,
+    };
+  });
+  expect(debugShot.hasLogicalPredecessor).toBe(true);
+  expect(debugShot.arrivalMs).toBeGreaterThan(0);
+  expect(debugShot.futurePredecessorCount).toBe(0);
+  await page.waitForTimeout(Math.ceil(debugShot.arrivalMs ?? 0) + 1);
+  await expect.poll(async () => page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.updateMinimap();
+    return scene.acousticDebugView?.edges.filter(edge => edge.predecessor).length ?? 0;
+  })).toBeGreaterThan(0);
+  const debugRendering = await soundWaveModeRendering(page);
+  expect(debugRendering.activeWaveCount).toBeGreaterThan(0);
+  expect(debugRendering.viewCount).toBeLessThanOrEqual(MAX_NORMAL_SOUND_WAVE_VIEWS);
+  expect(debugRendering.worldCommandCount).toBeGreaterThan(0);
+  expect(debugRendering.normalFillRectCount).toBe(0);
+  expect(debugRendering.debugDrawCallCount).toBeGreaterThan(0);
+  const debug = await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    const latest = scene.activeSoundWaves.at(-1);
+    const view = scene.acousticDebugView;
+    if (!latest || !view)
+      throw new Error('音響debugには最新のlogical waveとviewが必要です。');
+    const unrevealedGraphNode = scene.areaGraph.nodes.find(node =>
+      node.tiles.some(tile => scene.observedTiles.get(`${tile.x},${tile.y}`) === undefined));
+    return {
+      topologyRevision: scene.topology.revision,
+      graphRevision: scene.areaGraph.revision,
+      debugRevision: view.revision,
+      source: view.source,
+      latestSource: latest.snapshot.source,
+      roomCount: view.rooms.length,
+      graphNodeCount: scene.areaGraph.nodes.length,
+      debugNodeCount: view.nodes.length,
+      graphEdgeCount: scene.areaGraph.edges.length,
+      debugEdgeCount: view.edges.length,
+      sourceArrived: view.nodes.some(node => node.source && node.arrived),
+      predecessorCount: view.edges.filter(edge => edge.predecessor).length,
+      unrevealedGraphNodeId: unrevealedGraphNode?.id,
+      debugContainsUnrevealedNode: unrevealedGraphNode
+        ? view.nodes.some(node => node.id === unrevealedGraphNode.id)
+        : false,
+    };
+  });
+  expect(debug.debugRevision).toBe(debug.topologyRevision);
+  expect(debug.graphRevision).toBe(debug.topologyRevision);
+  expect(debug.source).toEqual(debug.latestSource);
+  expect(debug.roomCount).toBeGreaterThan(0);
+  expect(debug.debugNodeCount).toBe(debug.graphNodeCount);
+  expect(debug.debugEdgeCount).toBe(debug.graphEdgeCount);
+  expect(debug.sourceArrived).toBe(true);
+  expect(debug.predecessorCount).toBeGreaterThan(0);
+  expect(debug.unrevealedGraphNodeId).toBeDefined();
+  expect(debug.debugContainsUnrevealedNode).toBe(true);
+
+  const mapSeed = Number(await page.getByTestId('map-seed').textContent());
+  const { wall } = findRuntimeWallOpening(generateArenaMap(mapSeed));
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugOpenWall(tile);
+    scene.updateMinimap();
+  }, wall);
+  await expect.poll(() => soundWaveModeRendering(page)).toMatchObject({
+    activeWaveCount: 0,
+    viewCount: 0,
+    debugDrawCallCount: expect.any(Number),
+  });
+  await expect(mode).toHaveValue('debug');
+  await expect.poll(async () => page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    return scene.acousticDebugView?.source;
+  })).toBeUndefined();
+
+  await page.getByTestId('retry').dispatchEvent('click');
+  await expect(mode).toHaveValue('debug');
+  await expect.poll(async () => page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    return {
+      active: scene.activeSoundWaves.length,
+      views: scene.soundWaveViews.length,
+      source: scene.acousticDebugView?.source,
+    };
+  })).toEqual({ active: 0, views: 0, source: undefined });
 });
 
 test('Issue #102: dashは実移動を確認した時だけ一度だけ音を発生させる', async ({ page }) => {

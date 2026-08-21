@@ -9,6 +9,10 @@ specification: SPEC-COMBAT-CHOICE
 
 [DESIGN-BASIC-AMMO-MATERIAL-V1](ammo-material-v1.md) は、WeaponId別shared ammo、5武器表、shared nextFireAtとreload、retry時の旧ammo初期化を supersede する。現行は7 WeaponModel、3マテリアル、WeaponInstanceごとのmagazineとnextFireAtを使う。既存の移動、敵、wall、map、入力、bullet pool、collider、range、hit、effect設計は維持する。
 
+## 現行map・音響への限定supersede
+
+[standard-arena-map-v2 基本設計](standard-arena-map-v2.md) は、本書に残る旧map寸法、幅可変通路、部屋内ランダム障害物、fallback配置だけを履歴化する。現行生成は2tile幅の通常/fallback通路、中央予約の2layer annulus、空の`obstacles`を使う。current topologyの3×3 area / 2×2 corridor分類は[runtime-area-graph-v1 基本設計](runtime-area-graph-v1.md)、音響の三modeとworld/minimap debug表示は[acoustic-graph-v1 基本設計](acoustic-graph-v1.md)が所有する。map形状の追加調整は[Issue #104](https://github.com/WFrog2511/2d-coop-survival/issues/104)まで保留し、本書の戦闘統合設計を変更しない。
+
 > [Issue #71](https://github.com/WFrog2511/2d-coop-survival/issues/71)は、旧二武器・第三武器対象外・固定weapon種slotと、閲覧専用inventoryの設計を履歴とする。`WeaponModel`をquick slot 3件とbackpack 10件へ非stack格納し、handgun、revolver、compact-pistolを既存handgunの`WeaponId`とshared ammo stateへ解決する。詳細inventoryはnative HTML5 drag/dropでmove/swapと近傍world dropを扱う。その他のcombat-choice-v1設計は維持する。
 
 ## 責務

@@ -9,6 +9,10 @@ requirements: REQ-COMBAT-CHOICE
 
 [SPEC-AMMO-MATERIAL-V1](ammo-material-v1.md) は、WeaponId別shared ammo、5武器表、shared nextFireAtとreload、retry時の旧ammo表現だけを supersede する。現行は7 WeaponModel、3マテリアル、WeaponInstanceごとのmagazineとnextFireAtを使う。移動、敵、wall、map、照準、入力、既存bullet/collider/range/hit/effectの規則は維持する。
 
+## 現行map・音響への限定supersede
+
+[SPEC-STANDARD-ARENA-MAP-V2](standard-arena-map-v2.md) は、本書の旧map寸法、通路幅、部屋内ランダム障害物、fallback地形だけを履歴化する。現行の通常/fallback通路は2tile幅、中央予約の外側は2layer annulus、`ArenaMap.obstacles`は空配列である。runtime分類は[SPEC-RUNTIME-AREA-GRAPH-V1](runtime-area-graph-v1.md)、三modeの音響表示とdebugの開示境界は[SPEC-ACOUSTIC-GRAPH-V1](acoustic-graph-v1.md)を参照する。形状の追加調整は[Issue #104](https://github.com/WFrog2511/2d-coop-survival/issues/104)の範囲であり、本書の武器・敵・戦闘stateの履歴仕様は変更しない。
+
 > [Issue #38](https://github.com/WFrog2511/2d-coop-survival/issues/38) follow-upにより、敵HP、ドローン耐性、death再出現delayは本書の初版値から更新された。
 >
 > [Issue #71](https://github.com/WFrog2511/2d-coop-survival/issues/71)は、本書の旧二武器・第三武器対象外・固定weapon種slotの記述を履歴とする。ハンドガン、リボルバー、コンパクトピストルは`WeaponId`のhandgunとshared ammo stateを使い、`1`〜`3`はクイックスロットを選択する。

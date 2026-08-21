@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { generateArenaMap } from '../src/arena-map';
 import { createRuntimeTopology, type RuntimeTopology } from '../src/runtime-topology';
-import { createRuntimeAreaGraph, runtimeAreaNeighbors, runtimeAreaNodeAt } from '../src/runtime-area-graph';
+import { MIN_AREA_OPEN_SIZE_TILES, createRuntimeAreaGraph, runtimeAreaNeighbors, runtimeAreaNodeAt } from '../src/runtime-area-graph';
 
 function topology(rows: readonly string[], revision = 0): RuntimeTopology {
   const width = rows[0]?.length;
@@ -17,23 +17,40 @@ function topology(rows: readonly string[], revision = 0): RuntimeTopology {
 }
 
 describe('runtime area graph', () => {
-  test('2x2 floor参加tileをareaとして同じ4近傍componentへまとめる', () => {
+  test('3x3 floor参加tileをareaとして同じ4近傍componentへまとめる', () => {
+    const interior = '.'.repeat(MIN_AREA_OPEN_SIZE_TILES);
+    const wall = '#'.repeat(MIN_AREA_OPEN_SIZE_TILES + 4);
     const graph = createRuntimeAreaGraph(topology([
-      '#######',
-      '#...###',
-      '#...###',
-      '#######',
+      wall,
+      ...Array.from({ length: MIN_AREA_OPEN_SIZE_TILES }, () => `#${interior}###`),
+      wall,
     ], 4));
 
-    const node = runtimeAreaNodeAt(graph, { x: 2, y: 1 });
+    const node = runtimeAreaNodeAt(graph, { x: 1, y: 1 });
 
     expect(graph.revision).toBe(4);
     expect(node).toMatchObject({ id: 'area-1', kind: 'area' });
-    expect(node?.tiles).toEqual([
-      { x: 1, y: 1 }, { x: 2, y: 1 }, { x: 3, y: 1 },
-      { x: 1, y: 2 }, { x: 2, y: 2 }, { x: 3, y: 2 },
-    ]);
+    expect(node?.tiles).toEqual(Array.from({ length: MIN_AREA_OPEN_SIZE_TILES }, (_, y) =>
+      Array.from({ length: MIN_AREA_OPEN_SIZE_TILES }, (_, x) => ({ x: x + 1, y: y + 1 })),
+    ).flat());
     expect(runtimeAreaNodeAt(graph, { x: 0, y: 0 })).toBeUndefined();
+  });
+
+  test('3x3未満の2-wide bandはdegreeが3でもcorridorのままにする', () => {
+    const bandWidth = MIN_AREA_OPEN_SIZE_TILES - 1;
+    const bandLength = MIN_AREA_OPEN_SIZE_TILES + 1;
+    const wall = '#'.repeat(bandLength + 2);
+    const row = `#${'.'.repeat(bandLength)}#`;
+    const graph = createRuntimeAreaGraph(topology([
+      wall,
+      ...Array.from({ length: bandWidth }, () => row),
+      wall,
+    ]));
+
+    expect(graph.nodes).toHaveLength(1);
+    expect(graph.nodes[0]).toMatchObject({ id: 'corridor-1', kind: 'corridor' });
+    expect(graph.nodes[0]?.tiles).toHaveLength(bandWidth * bandLength);
+    expect(graph.nodes.some(node => node.kind === 'junction')).toBe(false);
   });
 
   test('細い交差はjunctionと分離したcorridorをedgeで接続する', () => {

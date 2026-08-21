@@ -2,6 +2,7 @@ export const TILE_SIZE = 40;
 export const ARENA_WIDTH_TILES = 113;
 export const ARENA_HEIGHT_TILES = 71;
 export const CENTRAL_RESERVE_SIZE_TILES = 13;
+export const STANDARD_PATH_WIDTH_TILES = 2;
 export const AMMO_BOX_COUNT = 4;
 export const SPAWN_PHASE_MS = 60_000;
 export const WORLD_WEAPON_DROP_MAX_PATH_DISTANCE = 2;
@@ -619,22 +620,13 @@ function generateCandidate(seed: number, generationSeed: number, fallback: boole
     : rooms.slice(1).map((room, index) => ({
         from: roomCenter(rooms[index]),
         to: roomCenter(room),
-        width: random.integer(1, 3),
+        width: STANDARD_PATH_WIDTH_TILES,
         horizontalFirst: random.integer(0, 1) === 0,
       }));
   corridors.forEach(corridor => carveCorridor(tiles, corridor, centralReserve.bounds));
   carveReserveApproachRing(tiles, centralReserve.bounds);
   fillReserveWithWalls(tiles, centralReserve.bounds);
   const start = roomCenter(rooms[0]);
-  const protectedTiles = new Set<string>([
-    positionKey(start),
-    ...centralReserveRingTiles(centralReserve.bounds).map(positionKey),
-    ...corridors.flatMap(corridor => corridorTiles(corridor).map(positionKey)),
-  ]);
-  const obstacles = fallback ? [] : placeObstacles(tiles, rooms, protectedTiles, random);
-  obstacles.forEach((position) => {
-    tiles[position.y][position.x] = 'wall';
-  });
   return {
     seed,
     width: ARENA_WIDTH_TILES,
@@ -643,7 +635,7 @@ function generateCandidate(seed: number, generationSeed: number, fallback: boole
     tiles,
     rooms,
     corridors,
-    obstacles,
+    obstacles: [],
     start,
     centralReserve,
   };
@@ -718,7 +710,7 @@ function fallbackCorridors(rooms: readonly Room[]): Corridor[] {
   return connections.map(([fromIndex, toIndex, horizontalFirst]) => ({
     from: roomCenter(rooms[fromIndex]),
     to: roomCenter(rooms[toIndex]),
-    width: 2,
+    width: STANDARD_PATH_WIDTH_TILES,
     horizontalFirst,
   }));
 }
@@ -751,14 +743,10 @@ function insideTileRect(position: TilePosition, bounds: TileRect): boolean {
 
 function centralReserveRingTiles(bounds: TileRect): TilePosition[] {
   const tiles: TilePosition[] = [];
-  for (let x = bounds.left - 1; x <= bounds.right + 1; x += 1) {
-    tiles.push({ x, y: bounds.top - 1 });
-    tiles.push({ x, y: bounds.bottom + 1 });
-  }
-  for (let y = bounds.top; y <= bounds.bottom; y += 1) {
-    tiles.push({ x: bounds.left - 1, y });
-    tiles.push({ x: bounds.right + 1, y });
-  }
+  for (let y = bounds.top - STANDARD_PATH_WIDTH_TILES; y <= bounds.bottom + STANDARD_PATH_WIDTH_TILES; y += 1)
+    for (let x = bounds.left - STANDARD_PATH_WIDTH_TILES; x <= bounds.right + STANDARD_PATH_WIDTH_TILES; x += 1)
+      if (!insideTileRect({ x, y }, bounds))
+        tiles.push({ x, y });
   return tiles;
 }
 
@@ -829,46 +817,6 @@ function carveSegment(
       }
     }
   }
-}
-
-function placeObstacles(
-  tiles: Tile[][],
-  rooms: readonly Room[],
-  protectedTiles: Set<string>,
-  random: SeededRandom,
-): TilePosition[] {
-  const obstacles: TilePosition[] = [];
-  rooms.slice(1).forEach((room) => {
-    if (random.integer(0, 1) === 0) return;
-    const candidates: TilePosition[] = [];
-    for (let y = room.y + 1; y < room.y + room.height - 1; y += 1) {
-      for (let x = room.x + 1; x < room.x + room.width - 1; x += 1) {
-        const position = { x, y };
-        if (tiles[y][x] === 'floor' && !protectedTiles.has(positionKey(position))) candidates.push(position);
-      }
-    }
-    if (candidates.length > 0) obstacles.push(candidates[random.integer(0, candidates.length - 1)]);
-  });
-  return obstacles;
-}
-
-function corridorTiles(corridor: Corridor): TilePosition[] {
-  const points: TilePosition[] = [];
-  const corner = corridor.horizontalFirst
-    ? { x: corridor.to.x, y: corridor.from.y }
-    : { x: corridor.from.x, y: corridor.to.y };
-  [
-    [corridor.from, corner],
-    [corner, corridor.to],
-  ].forEach(([from, to]) => {
-    const horizontal = from.y === to.y;
-    const start = horizontal ? Math.min(from.x, to.x) : Math.min(from.y, to.y);
-    const end = horizontal ? Math.max(from.x, to.x) : Math.max(from.y, to.y);
-    for (let value = start; value <= end; value += 1) {
-      points.push(horizontal ? { x: value, y: from.y } : { x: from.x, y: value });
-    }
-  });
-  return points;
 }
 
 function floorTiles(map: ArenaTerrain): TilePosition[] {

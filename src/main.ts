@@ -1,9 +1,9 @@
 import Phaser from 'phaser';
 import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, TILE_SIZE, basicApproachRoleFor, enemyVisibility, findPath, hasLineOfSight, type CentralReserve, type EnemyVisibility, generateArenaMap, generateNextArenaMap, hiddenRecycleThresholdFor, nextSeed, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, selectEnemySpawnTile, selectInitialWeaponPickupTiles, selectSpawnTile, selectWorldWeaponDropTile, spawnDirectionForSlot, spawnPhaseAt, type ArenaMap, type Tile, type TilePosition, viewportTileRect } from './arena-map';
-import { ACOUSTIC_PROPAGATION_COSTS, MAX_ACTIVE_SOUND_WAVES, PLAYER_DASH_SOUND, PLAYER_MOVEMENT_SOUND, PLAYER_MOVEMENT_SOUND_INTERVAL_MS, PLAYER_PICKUP_SOUND, WEAPON_SOUND_WAVES, type SoundActionProfile } from './acoustic-data';
+import { ACOUSTIC_PROPAGATION_COSTS, MAX_NORMAL_SOUND_WAVE_VIEWS, PLAYER_DASH_SOUND, PLAYER_MOVEMENT_SOUND, PLAYER_MOVEMENT_SOUND_INTERVAL_MS, PLAYER_PICKUP_SOUND, WEAPON_SOUND_WAVES, type SoundActionProfile } from './acoustic-data';
 import { EnemyActor } from './arena/enemy-actor';
 import { ArenaEffects } from './arena/effects';
-import { ArenaHud, type InventoryDragSource, type InventoryDropTarget, type MinimapMarker, type MinimapSoundWave } from './arena/hud';
+import { ArenaHud, type AcousticDebugView, type InventoryDragSource, type InventoryDropTarget, type MinimapMarker, type MinimapSoundWave } from './arena/hud';
 import { createSoundPropagationRenderSnapshot, createSoundPropagationSnapshot, soundWaveLifetimeMs, soundWaveTilesAt, type SoundPropagationRenderSnapshot, type SoundPropagationSnapshot, type SoundWaveTile } from './runtime-acoustic-graph';
 import { createRuntimeAreaGraph, type RuntimeAreaGraph } from './runtime-area-graph';
 import { applyRuntimeTopologyMutations, createRuntimeTopology, type RuntimeTopology, type RuntimeTopologyMutation } from './runtime-topology';
@@ -159,11 +159,13 @@ type ActiveSoundWave = {
   snapshot: SoundPropagationSnapshot;
   renderSnapshot: SoundPropagationRenderSnapshot;
   profile: SoundActionProfile;
+  normalAdmitted: boolean;
 };
 type SoundWaveRenderView = {
   tiles: readonly SoundWaveTile[];
   profile: SoundActionProfile;
 };
+type SoundWaveDisplayMode = 'off' | 'normal' | 'debug';
 type Controls = Phaser.Types.Input.Keyboard.CursorKeys & {
   w: Phaser.Input.Keyboard.Key;
   a: Phaser.Input.Keyboard.Key;
@@ -235,6 +237,43 @@ function formatRunSchedule(schedule: RunSchedule): string {
 const ENEMY_SPAWN_CONFIG = resolveEnemySpawnConfig();
 const RUN_SCHEDULE = resolveRunSchedule();
 const arenaHud = new ArenaHud(formatEnemySpawnConfig(ENEMY_SPAWN_CONFIG), formatRunSchedule(RUN_SCHEDULE));
+const soundWaveMode = document.querySelector<HTMLSelectElement>('[data-testid="sound-wave-mode"]');
+
+if (!soundWaveMode)
+  throw new Error('音響表示modeのnative selectが見つかりません。');
+
+const soundWaveModeElement = soundWaveMode;
+const soundWaveModeControl = soundWaveModeElement.closest<HTMLElement>('.sound-wave-mode');
+
+if (!soundWaveModeControl)
+  throw new Error('音響表示modeのnative selectの親要素が見つかりません。');
+
+['pointerdown', 'mousedown', 'touchstart'].forEach((eventName) => {
+  soundWaveModeControl.addEventListener(eventName, event => event.stopPropagation());
+});
+const stopSoundWaveModeGameplayKey = (event: KeyboardEvent): void => {
+  if (event.code === 'Space' || event.code === 'Shift')
+    event.stopPropagation();
+};
+soundWaveModeElement.addEventListener('keydown', stopSoundWaveModeGameplayKey);
+soundWaveModeElement.addEventListener('keyup', stopSoundWaveModeGameplayKey);
+
+function soundWaveDisplayMode(): SoundWaveDisplayMode {
+  const value = soundWaveModeElement.value;
+  return value === 'off' || value === 'debug' ? value : 'normal';
+}
+
+function isSoundWaveModeFocused(): boolean {
+  return document.activeElement === soundWaveModeElement;
+}
+
+function isSoundWaveDisplayEnabled(): boolean {
+  return soundWaveDisplayMode() === 'normal';
+}
+
+function isSoundWaveDebugEnabled(): boolean {
+  return soundWaveDisplayMode() === 'debug';
+}
 
 function sameTile(left: TilePosition, right: TilePosition): boolean {
   return left.x === right.x && left.y === right.y;
@@ -242,6 +281,12 @@ function sameTile(left: TilePosition, right: TilePosition): boolean {
 
 function tileKey(tile: TilePosition): string {
   return `${tile.x},${tile.y}`;
+}
+
+/** nodeを結ぶdebug線のため、node内tile群の中心を座標化する。 */
+function nodeCenter(tiles: readonly TilePosition[]): { x: number; y: number } {
+  const total = tiles.reduce((sum, tile) => ({ x: sum.x + tile.x, y: sum.y + tile.y }), { x: 0, y: 0 });
+  return { x: total.x / tiles.length, y: total.y / tiles.length };
 }
 
 let resetArena: (() => void) | undefined;
@@ -278,6 +323,8 @@ class Arena extends Phaser.Scene {
   private areaGraph!: RuntimeAreaGraph;
   private activeSoundWaves: ActiveSoundWave[] = [];
   private soundWaveViews: readonly SoundWaveRenderView[] = [];
+  private acousticDebugView: AcousticDebugView | undefined;
+  private acousticDebugViewAt = Number.NaN;
   private nextMovementSoundAt = 0;
   private mapSeed = Date.now() >>> 0;
   private generation = 0;
@@ -305,7 +352,7 @@ class Arena extends Phaser.Scene {
   private droppedWeaponSequence = 0;
   private droppedAmmoSequence = 0;
   private readonly onTabKeyDown = (event: KeyboardEvent): void => {
-    if (event.code !== 'Tab')
+    if (event.code !== 'Tab' || isSoundWaveModeFocused())
       return;
     event.preventDefault();
     this.toggleInventory();
@@ -346,20 +393,35 @@ class Arena extends Phaser.Scene {
     this.bullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Sprite, maxSize: BULLET_POOL_SIZE });
     this.physics.add.collider(this.bullets, this.walls, first => this.disableBullet(first as Phaser.Physics.Arcade.Sprite));
     ENEMY_IDS.forEach(id => this.physics.add.overlap(this.bullets, this.enemyActors[id].sprite, (first, second) => this.hitEnemy(first, second, id)));
-    this.keys = this.input.keyboard!.addKeys({ w: 'W', a: 'A', s: 'S', d: 'D', r: 'R', e: 'E', space: 'SPACE', shift: 'SHIFT', up: 'UP', down: 'DOWN', left: 'LEFT', right: 'RIGHT' }) as Controls;
-    this.input.keyboard?.on('keydown-ONE', () => this.changeQuickSlot(0));
-    this.input.keyboard?.on('keydown-TWO', () => this.changeQuickSlot(1));
-    this.input.keyboard?.on('keydown-THREE', () => this.changeQuickSlot(2));
+    this.keys = this.input.keyboard!.addKeys({ w: 'W', a: 'A', s: 'S', d: 'D', r: 'R', e: 'E', space: 'SPACE', shift: 'SHIFT', up: 'UP', down: 'DOWN', left: 'LEFT', right: 'RIGHT' }, false) as Controls;
+    this.input.keyboard?.on('keydown-ONE', () => {
+      if (!isSoundWaveModeFocused()) this.changeQuickSlot(0);
+    });
+    this.input.keyboard?.on('keydown-TWO', () => {
+      if (!isSoundWaveModeFocused()) this.changeQuickSlot(1);
+    });
+    this.input.keyboard?.on('keydown-THREE', () => {
+      if (!isSoundWaveModeFocused()) this.changeQuickSlot(2);
+    });
     window.addEventListener('keydown', this.onTabKeyDown, true);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       window.removeEventListener('keydown', this.onTabKeyDown, true);
       arenaHud.clearInventoryDrag(true);
       arenaHud.setInventoryDropListener(undefined);
     });
-    this.input.keyboard?.on('keydown-R', () => this.reload());
-    this.input.keyboard?.on('keydown-E', () => this.collectNearbyPickup());
-    this.input.keyboard?.on('keydown-SPACE', () => this.tryDash());
-    this.input.keyboard?.on('keydown-SHIFT', () => this.tryDash());
+    this.input.keyboard?.on('keydown-R', () => {
+      if (!isSoundWaveModeFocused()) this.reload();
+    });
+    this.input.keyboard?.on('keydown-E', () => {
+      if (!isSoundWaveModeFocused()) this.collectNearbyPickup();
+    });
+    this.input.keyboard?.on('keydown-SPACE', () => {
+      if (!isSoundWaveModeFocused())
+        this.tryDash();
+    });
+    this.input.keyboard?.on('keydown-SHIFT', () => {
+      if (!isSoundWaveModeFocused()) this.tryDash();
+    });
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => this.updateAimDirection(pointer));
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       this.updateAimDirection(pointer);
@@ -367,7 +429,7 @@ class Arena extends Phaser.Scene {
       if (weapon && !WEAPONS[weapon.model].automatic)
         this.tryFire();
     });
-    this.input.keyboard?.addCapture(['W', 'A', 'S', 'D', 'R', 'E', 'TAB', 'SPACE', 'SHIFT', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'ONE', 'TWO', 'THREE']);
+    this.input.keyboard?.addCapture(['W', 'A', 'S', 'D', 'R', 'E', 'SPACE', 'SHIFT', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'ONE', 'TWO', 'THREE']);
     this.reset(true);
   }
 
@@ -392,7 +454,7 @@ class Arena extends Phaser.Scene {
       this.player.rotation = Phaser.Math.Angle.Between(this.player.x, this.player.y, aim.x, aim.y);
     }
     const weapon = activeWeapon(this.state);
-    if (weapon && WEAPONS[weapon.model].automatic && this.input.activePointer.isDown)
+    if (weapon && WEAPONS[weapon.model].automatic && this.input.activePointer.isDown && !isSoundWaveModeFocused())
       this.tryFire();
     this.bullets.getChildren().forEach((child) => {
       const bullet = child as Phaser.Physics.Arcade.Sprite;
@@ -406,6 +468,10 @@ class Arena extends Phaser.Scene {
     this.expireGunslingerCombo();
     const speedMultiplier = this.gunslingerSpeedMultiplier();
     arenaHud.updateGunslinger(this.gunslingerCombo, speedMultiplier, this.playerRole.id === 'gunslinger');
+    if (isSoundWaveModeFocused()) {
+      this.player.setVelocity(0, 0);
+      return;
+    }
     const dash = this.playerDash;
     if (dash) {
       this.tryPlayPlayerDashSound(dash);
@@ -1379,11 +1445,14 @@ class Arena extends Phaser.Scene {
       terrainChanged: this.minimapTerrainChanged,
       playerTile: this.tile(this.player),
       markers,
-      soundWaves: this.soundWaveViews.map((wave): MinimapSoundWave => ({
-        tiles: wave.tiles,
-        color: wave.profile.minimapColor,
-        alpha: wave.profile.minimapAlpha,
-      })),
+      soundWaves: isSoundWaveDisplayEnabled()
+        ? this.soundWaveViews.map((wave): MinimapSoundWave => ({
+            tiles: wave.tiles,
+            color: wave.profile.minimapColor,
+            alpha: wave.profile.minimapAlpha,
+          }))
+        : [],
+      acousticDebug: isSoundWaveDebugEnabled() ? this.acousticDebugView : undefined,
     });
     this.minimapTerrainChanged = false;
   }
@@ -1407,15 +1476,14 @@ class Arena extends Phaser.Scene {
       snapshot,
       renderSnapshot,
       profile,
+      normalAdmitted: this.activeSoundWaves.filter(wave =>
+        wave.normalAdmitted && wave.expiresAt > this.time.now,
+      ).length < MAX_NORMAL_SOUND_WAVE_VIEWS,
     });
-    while (this.activeSoundWaves.length > MAX_ACTIVE_SOUND_WAVES)
-      this.activeSoundWaves.shift();
   }
 
   /** 有効な同一revisionの音波からworldとminimap共有の描画viewを作る。 */
   private updateSoundWaveViews(): void {
-    if (this.activeSoundWaves.length === 0 && this.soundWaveViews.length === 0)
-      return;
     const now = this.time.now;
     const active: ActiveSoundWave[] = [];
     const views: SoundWaveRenderView[] = [];
@@ -1427,19 +1495,31 @@ class Arena extends Phaser.Scene {
         || now >= wave.expiresAt
       )
         return;
-      const tiles = soundWaveTilesAt(wave.renderSnapshot, now - wave.emittedAt, wave.profile);
       active.push(wave);
+      if (!wave.normalAdmitted)
+        return;
+      const tiles = soundWaveTilesAt(wave.renderSnapshot, now - wave.emittedAt, wave.profile);
       if (tiles.length > 0)
         views.push({ tiles, profile: wave.profile });
     });
     this.activeSoundWaves = active;
     this.soundWaveViews = views;
+    this.updateAcousticDebugView(now);
     this.drawSoundWaveViews();
   }
 
   /** visibility maskの下へ、current sound wave viewだけを重ねて描画する。 */
   private drawSoundWaveViews(): void {
     this.soundWaveGraphics.clear();
+    if (soundWaveDisplayMode() === 'off')
+      return;
+    if (isSoundWaveDebugEnabled()) {
+      this.soundWaveGraphics.setDepth(2.5);
+      if (this.acousticDebugView)
+        this.drawAcousticDebugWorld(this.acousticDebugView);
+      return;
+    }
+    this.soundWaveGraphics.setDepth(1.5);
     const tileSize = this.topology.tileSize;
     const inset = tileSize * 0.13;
     this.soundWaveViews.forEach((wave) => {
@@ -1456,10 +1536,131 @@ class Arena extends Phaser.Scene {
     });
   }
 
+  /** current graphと最新の論理音波だけから、debugで共有するnode単位viewを一度導出する。 */
+  private updateAcousticDebugView(now: number): void {
+    if (!isSoundWaveDebugEnabled()) {
+      this.acousticDebugView = undefined;
+      this.acousticDebugViewAt = Number.NaN;
+      return;
+    }
+    if (this.acousticDebugViewAt === now)
+      return;
+    const latest = this.activeSoundWaves.at(-1);
+    const snapshot = latest?.snapshot.revision === this.areaGraph.revision ? latest.snapshot : undefined;
+    const propagationByNodeId = new Map(snapshot?.nodes.map(node => [node.nodeId, node]));
+    const elapsed = latest ? now - latest.emittedAt : 0;
+    const arrivedPropagationByNodeId = new Map(snapshot?.nodes
+      .filter(node => latest && elapsed >= node.arrivalCost * latest.profile.costTravelMs)
+      .map(node => [node.nodeId, node]));
+    const nodes = this.areaGraph.nodes.map((node) => {
+      const propagation = propagationByNodeId.get(node.id);
+      return {
+        id: node.id,
+        kind: node.kind,
+        tiles: node.tiles,
+        center: nodeCenter(node.tiles),
+        arrived: arrivedPropagationByNodeId.has(node.id),
+        source: snapshot?.sourceNodeId === node.id,
+        arrivalCost: propagation?.arrivalCost,
+      };
+    });
+    const nodeById = new Map(nodes.map(node => [node.id, node]));
+    const edges = this.areaGraph.edges.map((edge) => {
+      const from = nodeById.get(edge.from);
+      const to = nodeById.get(edge.to);
+      const fromPropagation = arrivedPropagationByNodeId.get(edge.from);
+      const toPropagation = arrivedPropagationByNodeId.get(edge.to);
+      const predecessor = toPropagation?.predecessorNodeId === edge.from
+        || fromPropagation?.predecessorNodeId === edge.to;
+      const arrivalCost = toPropagation?.predecessorNodeId === edge.from
+        ? toPropagation.arrivalCost
+        : fromPropagation?.predecessorNodeId === edge.to
+          ? fromPropagation.arrivalCost
+          : undefined;
+      if (!from || !to)
+        throw new Error('音響debugのRuntime Area Graph edgeが未知nodeを参照しています。');
+      return { from: from.center, to: to.center, predecessor, arrivalCost };
+    });
+    this.acousticDebugView = {
+      revision: this.areaGraph.revision,
+      rooms: this.map.rooms,
+      source: snapshot?.source,
+      nodes,
+      edges,
+    };
+    this.acousticDebugViewAt = now;
+  }
+
+  /** 音響debugのnode情報をworldへ描き、通常波と異なり未踏地形も隠さない。 */
+  private drawAcousticDebugWorld(debug: AcousticDebugView): void {
+    const colors = { area: 0x74c8ff, junction: 0xffcf70, corridor: 0xc79dff } as const;
+    const tileSize = this.topology.tileSize;
+    this.soundWaveGraphics.lineStyle(Math.max(1, tileSize * 0.07), 0xf2c4ff, 0.8);
+    debug.rooms.forEach((room) => {
+      this.soundWaveGraphics.strokeRect(
+        room.x * tileSize,
+        room.y * tileSize,
+        room.width * tileSize,
+        room.height * tileSize,
+      );
+    });
+    debug.nodes.forEach((node) => {
+      this.soundWaveGraphics.fillStyle(colors[node.kind], node.arrived ? 0.28 : 0.13);
+      node.tiles.forEach((tile) => {
+        this.soundWaveGraphics.fillRect(tile.x * tileSize, tile.y * tileSize, tileSize, tileSize);
+      });
+    });
+    this.soundWaveGraphics.lineStyle(Math.max(1, tileSize * 0.055), 0xbed2de, 0.7);
+    debug.edges.forEach((edge) => {
+      this.soundWaveGraphics.lineBetween(
+        (edge.from.x + 0.5) * tileSize,
+        (edge.from.y + 0.5) * tileSize,
+        (edge.to.x + 0.5) * tileSize,
+        (edge.to.y + 0.5) * tileSize,
+      );
+    });
+    const predecessorEdges = debug.edges
+      .filter(edge => edge.predecessor)
+      .sort((left, right) => (left.arrivalCost ?? Number.POSITIVE_INFINITY) - (right.arrivalCost ?? Number.POSITIVE_INFINITY));
+    const maximumArrivalCost = predecessorEdges.at(-1)?.arrivalCost ?? 0;
+    predecessorEdges.forEach((edge) => {
+      const alpha = maximumArrivalCost > 0 && edge.arrivalCost !== undefined
+        ? 0.45 + 0.55 * (1 - edge.arrivalCost / maximumArrivalCost)
+        : 1;
+      this.soundWaveGraphics.lineStyle(Math.max(1, tileSize * 0.09), 0xfff18a, alpha);
+      this.soundWaveGraphics.lineBetween(
+        (edge.from.x + 0.5) * tileSize,
+        (edge.from.y + 0.5) * tileSize,
+        (edge.to.x + 0.5) * tileSize,
+        (edge.to.y + 0.5) * tileSize,
+      );
+    });
+    this.soundWaveGraphics.lineStyle(Math.max(1, tileSize * 0.055), 0xffffff, 1);
+    debug.nodes.forEach((node) => {
+      if (!node.arrived)
+        return;
+      node.tiles.forEach((tile) => {
+        this.soundWaveGraphics.strokeRect(tile.x * tileSize, tile.y * tileSize, tileSize, tileSize);
+      });
+    });
+    if (debug.source) {
+      const inset = tileSize * 0.2;
+      this.soundWaveGraphics.fillStyle(0xffffff, 1);
+      this.soundWaveGraphics.fillRect(
+        debug.source.x * tileSize + inset,
+        debug.source.y * tileSize + inset,
+        tileSize - inset * 2,
+        tileSize - inset * 2,
+      );
+    }
+  }
+
   /** retry、terminal、terrain revision変更時に旧音波を残さない。 */
   private clearSoundWaves(): void {
     this.activeSoundWaves = [];
     this.soundWaveViews = [];
+    this.acousticDebugView = undefined;
+    this.acousticDebugViewAt = Number.NaN;
     this.soundWaveGraphics?.clear();
   }
 

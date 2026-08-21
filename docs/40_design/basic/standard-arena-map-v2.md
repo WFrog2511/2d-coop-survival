@@ -13,7 +13,7 @@ implementation_issue: https://github.com/WFrog2511/2d-coop-survival/issues/64
 
 | 境界 | 責務 |
 | --- | --- |
-| `src/arena-map.ts` | 標準mapの決定的生成、中央予約metadata、予約領域を避ける部屋・通路、BFS、instance寸法でのviewport clamp |
+| `src/arena-map.ts` | 標準mapの決定的生成、2tile幅の通常/fallback通路、2layer中央予約annulus、空のobstacles、予約領域を避ける部屋・通路、BFS、instance寸法でのviewport clamp |
 | `src/main.ts` | Phaserの描画・wall collider・camera / physics bounds、中央予約の最小表示、既存LOSからの観測状態、retry reset |
 | `src/arena/hud.ts` | DOM上の最小Canvasミニマップと、既知地形・現在視界・可視markerの描画 |
 | `index.html` / `style.css` | 入力を持たない右上ミニマップと、その直下のrun panelのレイアウト |
@@ -22,7 +22,7 @@ implementation_issue: https://github.com/WFrog2511/2d-coop-survival/issues/64
 
 ## データと流れ
 
-`ArenaMap` は生成時のtile配列とrun固有の幅・高さ・tileSizeを正本とする。標準生成では `CentralReserve` を追加し、中央のsealed矩形と4方向approachを提供する。current terrainの描画・物理化・UI入力は後続の`RuntimeTopology`を使い、seedとmetadataはstable mapに残す。
+`ArenaMap` は生成時のtile配列とrun固有の幅・高さ・tileSizeを正本とする。標準生成では `CentralReserve` を追加し、中央のsealed矩形、2layer floor annulus、その内側layerの4方向approachを提供する。通常/fallbackのL字通路は2tile幅へそろえ、現行生成では部屋内障害物を置かず`obstacles`を空にする。current terrainの描画・物理化・UI入力は後続の`RuntimeTopology`を使い、seedとmetadataはstable mapに残す。
 
 ~~~mermaid
 flowchart LR
@@ -45,6 +45,6 @@ retry / new runは既存のgenerationとtimer停止の境界を維持する。�
 
 ## Ponytailの境界
 
-既存のPhaser Graphics、Canvas 2D、DOM HUD、BFS、LOSを再利用する。限定的なterrain mutationは後続の[runtime-topology-v1 基本設計](runtime-topology-v1.md)へ移した。room graph、team視界、network、tactical UI、汎用minimap abstractionはこの1実装しか持たない段階では導入しない。
+既存のPhaser Graphics、Canvas 2D、DOM HUD、BFS、LOSを再利用する。限定的なterrain mutationは後続の[runtime-topology-v1 基本設計](runtime-topology-v1.md)へ移した。room graph、team視界、network、tactical UI、汎用minimap abstractionはこの1実装しか持たない段階では導入しない。current topologyの3×3 area分類と音響debugは別設計へ分離し、生成の見た目やloopの追加調整は[Issue #104](https://github.com/WFrog2511/2d-coop-survival/issues/104)まで広げない。
 
 `ponytail: 単独プレイヤーの最後に見たterrainと現在可視markerだけをCanvasへ描く。team / drone / ping /地形変化が同時に必要になった時に、観測状態の共有境界を再検討する。`

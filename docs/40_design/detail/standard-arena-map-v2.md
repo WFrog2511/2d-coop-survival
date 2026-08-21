@@ -12,11 +12,11 @@ specification: SPEC-STANDARD-ARENA-MAP-V2
 
 | 項目 | 内容 |
 | --- | --- |
-| 対象機能 | 標準113×71 map、中央13×13予約領域、instance bounds、最小ミニマップ |
+| 対象機能 | 標準113×71 map、2tile幅通路、中央13×13予約領域と2layer annulus、instance bounds、最小ミニマップ |
 | 対応する基本設計 | [DESIGN-BASIC-STANDARD-ARENA-MAP-V2](../basic/standard-arena-map-v2.md) |
 | 対応する要件 | [REQ-STANDARD-ARENA-MAP-V2](../../20_requirements/standard-arena-map-v2.md) |
 | 対応する仕様 | [SPEC-STANDARD-ARENA-MAP-V2](../../30_specs/standard-arena-map-v2.md) |
-| 関連Issue | [Issue #64](https://github.com/WFrog2511/2d-coop-survival/issues/64)、[Issue #83](https://github.com/WFrog2511/2d-coop-survival/issues/83)、[Issue #74](https://github.com/WFrog2511/2d-coop-survival/issues/74) |
+| 関連Issue | [Issue #64](https://github.com/WFrog2511/2d-coop-survival/issues/64)、[Issue #83](https://github.com/WFrog2511/2d-coop-survival/issues/83)、[Issue #74](https://github.com/WFrog2511/2d-coop-survival/issues/74)、[Issue #104](https://github.com/WFrog2511/2d-coop-survival/issues/104) |
 | ステータス | Prototype standard の試遊後安定化 |
 | 同期方法 | TypeScriptのため手動review。自動生成ブロックと新規transformは置かず、[Issue #31](https://github.com/WFrog2511/2d-coop-survival/issues/31) でTypeScript対応を扱う |
 
@@ -28,14 +28,15 @@ specification: SPEC-STANDARD-ARENA-MAP-V2
 
 | 対象 | 内容 |
 | --- | --- |
-| map生成 | 奇数113×71、中心13×13 sealed reserve、4方向approach、通常/fallbackの決定性 |
+| map生成 | 奇数113×71、2tile幅の通常/fallback通路、中心13×13 sealed reserve、2layer annulus内側の4方向approach、空obstacles、通常/fallbackの決定性 |
 | runtime | map instanceを基準にしたworld / camera / physics /描画 /viewport bounds |
 | 画面 | 中央予約の最小Graphics、右上のpointer-eventsなしCanvasミニマップ |
 | 観測 | 最後に見たterrain、現在可視terrain、player、現在可視dynamic marker、retry reset |
 
 | 対象外 | 理由 |
 | --- | --- |
-| RuntimeTopology、限定的なterrain mutation | [runtime-topology-v1 詳細設計](runtime-topology-v1.md)で扱う。room graph、loop、Acoustic Graphは引き続き後続判断 |
+| RuntimeTopology、限定的なterrain mutation | [runtime-topology-v1 詳細設計](runtime-topology-v1.md)で扱う。current topologyのroom相当分類と音響debugは別設計で扱う |
+| map形状・room配置・loopの追加調整 | [Issue #104](https://github.com/WFrog2511/2d-coop-survival/issues/104)で試遊後に扱う。現行sliceは2tile幅と障害物なしへ固定する |
 | boss、map resize | 現在の生成・試遊契約を超える |
 | team / drone / down / network / tactical / ping /正式UI | 単独プレイヤーの最小表示だけを先に確認する |
 
@@ -45,6 +46,7 @@ specification: SPEC-STANDARD-ARENA-MAP-V2
 | --- | --- | --- |
 | `ArenaMap` | `src/arena-map.ts` | run固有の幅・高さ・tileSize、生成時tile配列、start、生成済み標準mapの`centralReserve`。current tilesは後続`RuntimeTopology`へ分離する |
 | `CentralReserve` | `src/arena-map.ts` | inclusive boundsと`up/right/down/left`のapproaches。予約内部はwall、approachは到達可能floor |
+| `ArenaMap.corridors` / `obstacles` | `src/arena-map.ts` | 通常/fallbackとも2tile幅のL字通路。`obstacles`は互換性のため残す空配列で、部屋内ランダムblockを生成しない |
 | `observedTiles` | `src/main.ts` | `Map<string, Tile>`。可視になった時点のterrainを最後に見た値として保存する |
 | `visibleTileKeys` | `src/main.ts` | 現在のLOS結果だけを持ち、visibility更新ごとに再構築する |
 | `MinimapView` | `src/arena/hud.ts` | map、観測snapshot、現在視界、`terrainChanged`、player、現在可視markerをCanvas描画へ渡す |
@@ -57,7 +59,7 @@ TypeScript sourceは現行DOCGEN transformの対象外である。この文書�
 ~~~mermaid
 flowchart TD
   reset[run開始またはretry] --> generate[seedからArenaMapを生成]
-  generate --> reserve[予約内部をwall、外周ringをfloorにする]
+  generate --> reserve[予約内部をwall、外側2layer annulusをfloorにする]
   reserve --> validate[全floorと4approachをBFSで確認]
   validate --> build[Graphics・wall collider・boundsをmap寸法から構築]
   build --> visible[既存LOSでvisibleTileKeysを更新]
@@ -67,7 +69,7 @@ flowchart TD
   play --> reset
 ~~~
 
-通常生成が失敗した場合は、既存のfallback生成を使う。ただしfallbackも同じ予約metadata、wall、approach、BFS契約を満たす。retryは既存の次seed選択を使い、古いgenerationのtimerを停止した後に観測状態をclearする。
+通常生成が失敗した場合は、既存のfallback生成を使う。ただしfallbackも同じ2tile幅通路、予約metadata、2layer annulus、wall、approach、BFS契約を満たす。retryは既存の次seed選択を使い、古いgenerationのtimerを停止した後に観測状態をclearする。
 
 ## 5. ミニマップ描画と入力
 
@@ -93,7 +95,7 @@ flowchart TD
 
 | レベル | 観点 | 期待結果 |
 | --- | --- | --- |
-| unit | map寸法、中心予約、全予約wall、4approach、BFS、viewport instance clamp | 部屋数や絶対座標に依存せず構造契約を満たす |
+| unit | map寸法、2tile通路、空obstacles、中心予約、2layer annulus、全予約wall、4approach、BFS、viewport instance clamp | 部屋数や絶対座標に依存せず構造契約を満たす |
 | E2E | run開始、minimapの寸法・探索数・現在可視marker | 現在のLOSだけがdynamic markerを表示する |
 | E2E | retryとkeyboard入力 | 前runの観測を残さず、ミニマップが入力を妨げない |
 | 手動試遊 | 113×71の探索量、中央表示、ミニマップの読みやすさ | 数値・見た目を調整する必要があるか判断する |
@@ -104,3 +106,4 @@ flowchart TD
 | --- | --- | --- |
 | 2026-08-18 | 初版作成 | Issue #64の試遊後に、標準mapと最小ミニマップの現在契約を固定 |
 | 2026-08-18 | terrain cacheと`terrainChanged`を追記 | 大きな標準mapでも毎frameのterrain再描画を避ける |
+| 2026-08-21 | 通路幅、予約annulus、障害物なしを同期 | 2tile幅の移動経路とroom相当分類を安定させ、部屋内blockによる不要な分断を避ける |

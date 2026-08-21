@@ -51,14 +51,26 @@ candidate = current.arrivalCost
 
 ## Arena接続
 
-`Arena.emitSoundWave()`は成功action後にcurrent `areaGraph`からnode snapshotとrender snapshotを一度ずつ作る。active waveは両snapshotとaction profileを保持する。描画更新はrevisionがcurrent topology/graphと一致するwaveだけを`SoundWaveTile`へ変換し、同じviewをworld `Graphics`と`ArenaHud.updateMinimap()`へ渡す。
+`Arena.emitSoundWave()`は成功action後にcurrent `areaGraph`からnode snapshotとrender snapshotを一度ずつ作る。active waveは両snapshotとaction profile、発生時に固定した通常表示への採用可否を保持する。描画更新はrevisionがcurrent topology/graphと一致する採用済みwaveだけを`SoundWaveTile`へ変換し、`通常`modeでは同じviewをworld `Graphics`と`ArenaHud.updateMinimap()`へ渡す。
 
 `src/acoustic-data.ts`の`SoundActionProfile`は`strength`、`costTravelMs`、`tileTravelMs`、`trailMs`、world/minimap色とalpha、WebAudio profileを持つ。`ACOUSTIC_PROPAGATION_COSTS`はnode Dijkstra用の共通costを持つ。数値自体は試遊調整値であり、自動testの固定期待値にしない。
 
-成功fire、通常移動、成功pickupと、開始位置から最初の実変位を確認した成功dashの既存発生条件は維持する。dash stateは開始位置と未発生flagを持ち、その実変位時にwaveと実音を一度だけ発生させる。壁密着など移動量0のdashは発生させない。active waveは上限を超えると古いものから外し、retry/new run/terminal/terrain revision交換でclearする。
+成功fire、通常移動、成功pickupと、開始位置から最初の実変位を確認した成功dashの既存発生条件は維持する。dash stateは開始位置と未発生flagを持ち、その実変位時にwaveと実音を一度だけ発生させる。壁密着など移動量0のdashは発生させない。通常表示への採用数が描画上限へ達した後のwaveも論理snapshotとして自然expiryまで保持し、既に採用済みのwaveを古い順に削除しない。retry/new run/terminal/terrain revision交換では全wave/viewをclearする。
+
+## 表示modeとdebug view
+
+ページ上のnative selectは`off`、`normal`、`debug`を持ち、初期値は`normal`である。modeはDOMだけの一時UI状態であり、pure API、保存、通信、URL parameter、production向けdebug APIにはしない。
+
+| mode | world / minimapの描画契約 |
+| --- | --- |
+| `off` | 音響のworld `Graphics`とミニマップの音波描画を行わない。論理waveの生成・expiryは継続する。 |
+| `normal` | 発生時に採用されたrender waveだけを、既存visibility maskと既観測terrainの制約の下でworld/minimapへ共有する。 |
+| `debug` | 通常tile波を描かず、生成時`ArenaMap.rooms`、current `RuntimeAreaGraph`の全node/edge、最新の同revision logical waveのsource・到達node・predecessor edgeを`AcousticDebugView`としてworld/minimapへ共有する。到達時刻は`arrivalCost * costTravelMs`で決め、tile BFSの距離を用いない。調査用として未踏地を含む全graphを意図的に開示する。 |
+
+debugは通常表示へ採用されなかった最新logical waveも扱える。logical waveがない、またはcurrent graphとrevisionが異なるときは、roomsとcurrent graphだけを描き、source/reached/predecessorを表示しない。native controlのpointer操作はCanvasへ渡さず、focus中のkeyboard操作はゲーム入力として扱わない。retry/new runとterrain mutation後も選択modeは維持するが、論理waveとdebug eventはclearする。ページ再読込時は`normal`へ戻る。
 
 ## DEV観測と検証
 
-DEV buildの既存`window.__arenaScene`だけをE2E観測に使う。新しいproduction API、HUD attribute、debug command、URL parameterは追加しない。E2Eは成功射撃のnode snapshot、predecessor、render node subset、既存Canvasのminimap描画、観測済みtile、retry clearと、実移動dash一回・壁密着dash無発生を確認する。
+DEV buildの既存`window.__arenaScene`だけをE2E観測に使う。新しいproduction API、HUD attribute、debug command、URL parameterは追加しない。E2Eは成功射撃のnode snapshot、predecessor、render node subset、三modeの描画分離、通常表示上限とlogical retentionの分離、debugにおける最新logical event・world/minimap共有・未観測nodeの開示、retry/mutation clear、mode focus中の入力隔離と、実移動dash一回・壁密着dash無発生を確認する。
 
 敵AI・ヘイト・聴覚への接続は[Issue #76](https://github.com/WFrog2511/2d-coop-survival/issues/76)まで対象外である。
