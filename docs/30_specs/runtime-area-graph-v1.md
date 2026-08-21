@@ -19,7 +19,7 @@ requirements: REQ-RUNTIME-AREA-GRAPH-V1
 | `runtimeAreaNodeAt(graph, tile)` | floorならnode、wall・範囲外なら`undefined` |
 | `runtimeAreaNeighbors(graph, nodeId)` | node順の隣接node。未知IDは空配列 |
 
-分類は元topologyだけを参照し、一つのtileの分類中に他tileの分類結果を利用しない。`area`はtile自身を含む4通りの2×2候補のいずれかが全floorなら成立する。`area`でないfloorだけがjunction判定へ進み、4近傍のfloor数が3以上ならjunction、そうでなければcorridorとする。
+分類は元topologyだけを参照し、一つのtileの分類中に他tileの分類結果を利用しない。`area`はtile自身を含む全floorの3×3候補のいずれかが成立するときだけ成立する。`area`でないfloorが全floorの2×2候補へ参加するときは`corridor`とする。残る細いfloorだけがjunction判定へ進み、4近傍のfloor数が3以上なら`junction`、そうでなければ`corridor`とする。この`area`は生成時`ArenaMap.rooms`と同名のmetadataではなく、current topologyから導くruntime分類である。
 
 ## 決定性
 
@@ -29,9 +29,9 @@ row-majorで最初に到達したtileからcomponentを探索する。各kindの
 
 `Arena`はstable `ArenaMap`、current `RuntimeTopology`、current `RuntimeAreaGraph`を別fieldとして持つ。`reset()`は`createRuntimeTopology()`直後に`createRuntimeAreaGraph()`を一度呼ぶ。`applyTopologyMutations()`はatomic mutationが新snapshotを返した場合だけtopologyを交換し、その直後にgraphを再構築して既存terrain rebuildへ進む。rejected/no-opの時点ではgraph、描画、cacheを更新しない。
 
-DEV buildだけが既存の`window.__arenaScene`を公開する。E2Eはこの既存入口で`areaGraph`を観測するが、新しいdebug method、URL query、HUD/data attributeは追加しない。productionではSceneもgraphも`window`へ公開しない。
+DEV buildだけが既存の`window.__arenaScene`を公開する。E2Eはこの既存入口で`areaGraph`を観測する。音響表示のnative mode selectは[acoustic-graph-v1 仕様](acoustic-graph-v1.md)が所有する描画controlであり、graphのdebug command、URL query、HUD data attribute、production global APIを追加しない。productionではSceneもgraphも`window`へ公開しない。
 
 ## 検証契約
 
-- unit: classification、同kind 4近傍component、異node edge、tile/neighbor query、同一入力の決定性、入力topology不変。
+- unit: 3×3 area、area外の2×2 corridor、細いjunction、同kind 4近傍component、異node edge、tile/neighbor query、同一入力の決定性、入力topology不変。
 - E2E: 既存の通常wall→floor操作でgraph snapshotが交換され、graph/topology revisionが一致し、新floor nodeが存在する。retry後は両revisionが0。

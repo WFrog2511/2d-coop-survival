@@ -10,6 +10,7 @@ import {
   CENTRAL_RESERVE_SIZE_TILES,
   SPAWN_DIRECTIONS,
   SPAWN_PHASE_MS,
+  STANDARD_PATH_WIDTH_TILES,
   TILE_SIZE,
   WORLD_WEAPON_DROP_MAX_PATH_DISTANCE,
   basicApproachRoleFor,
@@ -71,6 +72,7 @@ function expectStandardArenaInvariants(map: ArenaMap): void {
   expect(map.height % 2).toBe(1);
   expect(map.tiles).toHaveLength(map.height);
   expect(map.tiles.every(row => row.length === map.width)).toBe(true);
+  expect(map.obstacles).toEqual([]);
 
   const center = { x: Math.floor(map.width / 2), y: Math.floor(map.height / 2) };
   const halfReserveSize = Math.floor(CENTRAL_RESERVE_SIZE_TILES / 2);
@@ -92,6 +94,13 @@ function expectStandardArenaInvariants(map: ArenaMap): void {
     for (let x = bounds.left; x <= bounds.right; x += 1)
       expect(map.tiles[y][x]).toBe('wall');
 
+  const reserveRingTiles: TilePosition[] = [];
+  for (let y = bounds.top - STANDARD_PATH_WIDTH_TILES; y <= bounds.bottom + STANDARD_PATH_WIDTH_TILES; y += 1)
+    for (let x = bounds.left - STANDARD_PATH_WIDTH_TILES; x <= bounds.right + STANDARD_PATH_WIDTH_TILES; x += 1)
+      if (x < bounds.left || x > bounds.right || y < bounds.top || y > bounds.bottom)
+        reserveRingTiles.push({ x, y });
+  expect(reserveRingTiles.every(tile => map.tiles[tile.y][tile.x] === 'floor')).toBe(true);
+
   const expectedApproaches: Record<SpawnDirection, TilePosition> = {
     up: { x: center.x, y: bounds.top - 1 },
     right: { x: bounds.right + 1, y: center.y },
@@ -99,10 +108,19 @@ function expectStandardArenaInvariants(map: ArenaMap): void {
     left: { x: bounds.left - 1, y: center.y },
   };
   expect(reserve.approaches).toEqual(expectedApproaches);
+  expect(map.corridors.every(corridor => corridor.width === STANDARD_PATH_WIDTH_TILES)).toBe(true);
   SPAWN_DIRECTIONS.forEach((direction) => {
     const approach = reserve.approaches[direction];
     expect(map.tiles[approach.y][approach.x]).toBe('floor');
     expect(findPath(map, map.start, approach).length).toBeGreaterThan(0);
+    const outward = direction === 'up'
+      ? { x: approach.x, y: approach.y - (STANDARD_PATH_WIDTH_TILES - 1) }
+      : direction === 'right'
+        ? { x: approach.x + (STANDARD_PATH_WIDTH_TILES - 1), y: approach.y }
+        : direction === 'down'
+          ? { x: approach.x, y: approach.y + (STANDARD_PATH_WIDTH_TILES - 1) }
+          : { x: approach.x - (STANDARD_PATH_WIDTH_TILES - 1), y: approach.y };
+    expect(map.tiles[outward.y][outward.x]).toBe('floor');
   });
   expect(map.tiles[map.start.y][map.start.x]).toBe('floor');
   expect(allFloorsReachable(map)).toBe(true);

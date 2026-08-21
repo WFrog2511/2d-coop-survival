@@ -162,16 +162,6 @@ export const WEAPON_FIRE_SHAKE: Record<WeaponModel, CameraShakeProfile> = {
   'flamethrower': { duration: 60, intensity: 0.0018 },
 };
 
-export const FIRE_SOUND: Record<WeaponModel, SoundEffectProfile> = {
-  'rifle': { duration: 65, startFrequency: 360, endFrequency: 120, volume: 0.08, waveform: 'sawtooth', noiseVolume: 0.035, noiseFrequency: 3000 },
-  'shotgun': { duration: 95, startFrequency: 190, endFrequency: 70, volume: 0.13, waveform: 'square', noiseVolume: 0.08, noiseFrequency: 1800 },
-  'handgun': { duration: 65, startFrequency: 360, endFrequency: 120, volume: 0.08, waveform: 'sawtooth', noiseVolume: 0.035, noiseFrequency: 3000 },
-  'revolver': { duration: 80, startFrequency: 260, endFrequency: 90, volume: 0.1, waveform: 'square', noiseVolume: 0.045, noiseFrequency: 2400 },
-  'compact-pistol': { duration: 55, startFrequency: 420, endFrequency: 130, volume: 0.07, waveform: 'sawtooth', noiseVolume: 0.03, noiseFrequency: 3300 },
-  'repeating-crossbow': { duration: 75, startFrequency: 520, endFrequency: 180, volume: 0.065, waveform: 'triangle', noiseVolume: 0.01, noiseFrequency: 1700 },
-  'flamethrower': { duration: 55, startFrequency: 140, endFrequency: 90, volume: 0.055, waveform: 'sawtooth', noiseVolume: 0.05, noiseFrequency: 900 },
-};
-
 export const ENEMY_DEFEAT_SOUND: Record<EnemyKind, SoundEffectProfile> = {
   basic: { duration: 180, startFrequency: 300, endFrequency: 90, volume: 0.1, waveform: 'triangle', noiseVolume: 0, noiseFrequency: 1600 },
   drone: { duration: 220, startFrequency: 500, endFrequency: 110, volume: 0.12, waveform: 'sawtooth', noiseVolume: 0.015, noiseFrequency: 2400 },

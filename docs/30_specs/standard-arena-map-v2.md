@@ -13,7 +13,9 @@ requirements: REQ-STANDARD-ARENA-MAP-V2
 - 中心は `{ x: floor(width / 2), y: floor(height / 2) }` とする。`CENTRAL_RESERVE_SIZE_TILES=13` の半幅を `6` とし、`centralReserve.bounds` は中心から各方向へ半幅ぶん広げたinclusiveな矩形である。
 - 現行Standard設定では中心はzero-basedで`(56,35)`、予約矩形は`x=50..62`、`y=29..41`となる。
 - 生成済み標準mapの `centralReserve` は必須であり、`approaches` は `up`、`right`、`down`、`left` の4件を持つ。位置はそれぞれ予約矩形の上、右、下、左へ1tile隣接した中心線上とする。
-- 予約矩形の全tileは `wall` である。部屋、通路、障害物の処理後に予約矩形をwallへ戻し、予約矩形の外周ringをfloorとして残す。各approachはfloorであり、`findPath(map, map.start, approach)` は空配列ではない。
+- 通常生成とfallback生成の`corridors`は全て`STANDARD_PATH_WIDTH_TILES`の2tile幅である。L字segmentの幅もこの値にそろえ、生成ごとに幅を変えない。
+- 予約矩形の全tileは `wall` である。部屋と通路の処理後に予約矩形をwallへ戻し、予約矩形の外側2layerをfloor annulusとして残す。各approachはannulusの内側layerにあるfloorであり、`findPath(map, map.start, approach)` は空配列ではない。
+- `ArenaMap.obstacles`は互換性のため配列型を維持するが、現行の通常/fallback生成は常に空配列を返す。部屋内のランダム1tile障害物は置かない。
 - seed、rooms、corridors、obstacles、tile配列、`centralReserve` は同じ入力seedで決定的に再現する。`generateNextArenaMap` の既存の異なるtile配置選択規則は維持する。
 
 ## runtime境界
@@ -26,7 +28,7 @@ requirements: REQ-STANDARD-ARENA-MAP-V2
 
 - `Arena.updateVisibilityMask()` は既存の `hasLineOfSight()` による一回のtile走査で `visibleTileKeys` を再構築する。同じ更新で、可視tileの `Tile` 値を `observedTiles: Map<string, Tile>` へ保存する。
 - `observedTiles` は最後に視認した地形のスナップショットである。ミニマップの非可視部分はこの値だけを描き、現在の `map.tiles` を読み直さない。可視部分だけは現在の `map.tiles` を明るく重ね描きする。
-- `ArenaHud.updateMinimap()` はmap寸法からCanvas上の1tileの幅と高さを算出する。未観測領域は背景色のままとし、観測済み地形は暗色、現在視界は明色で描く。
+- `ArenaHud.updateMinimap()` はmap寸法からCanvas上の1tileの幅と高さを算出する。通常表示では未観測領域は背景色のままとし、観測済み地形は暗色、現在視界は明色で描く。[acoustic-graph-v1 仕様](acoustic-graph-v1.md)の`debug`modeだけは、調査目的でこの通常の未踏地非開示を越えてcurrent graphを重ねる。
 - `markers` はplayer以外に `enemy`、`weapon`、`ammo`、`scrap` を取り得る。activeで、通常enemyまたはworld item / ammo boxであり、かつ現在可視tileにあるものだけを渡す。視界外やterminal中は渡さない。
 - ミニマップCanvasは `data-testid="minimap"` を持ち、`data-width`、`data-height`、`data-observed-tiles`、`data-visible-tiles`、`data-player-tile`、`data-visible-markers` を非balanceなE2E観測値として更新する。
 
@@ -37,5 +39,5 @@ requirements: REQ-STANDARD-ARENA-MAP-V2
 
 ## 検証契約
 
-- `tests/arena-map.test.ts` は固定した部屋数や絶対座標ではなく、map設定・`centralReserve` metadata・BFSから導く寸法、予約wall、4接近候補、連結性、instance viewport clampを検査する。
+- `tests/arena-map.test.ts` は固定した部屋数や絶対座標ではなく、map設定・2tile幅の通路・空のobstacles・`centralReserve` metadata・BFSから導く寸法、予約wall、2layer annulus、4接近候補、連結性、instance viewport clampを検査する。
 - `e2e/prototype.spec.ts` は右上ミニマップのmap寸法、探索で増える観測数、現在可視world marker、retry後の新run観測、および入力非干渉を代表経路として検査する。
