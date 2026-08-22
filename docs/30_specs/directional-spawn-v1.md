@@ -12,9 +12,9 @@ requirements: REQ-DIRECTIONAL-SPAWN
 - 合意済み要件は[REQ-DIRECTIONAL-SPAWN](../20_requirements/directional-spawn-v1.md)を参照する。
 - 本仕様はTypeScript実装と手動で同期する。現行DOCGENはPython sourceだけを対象とするため、DOCGEN検査のPASSを本仕様とTypeScriptの同期確認へ読み替えない。
 
-## Issue #58の時間契約移行
+## Issue #78の時間契約移行
 
-[SPEC-WAVE-PROGRESSION](wave-progression-v1.md)（Issue #71条件変更後）は、Issue #34由来の180000ms（03:00）期限だけでなく、本書の`run開始`をphase epochおよびinitial/stagger開始点とする記述・検証期待値も限定的にsupersedeする。既定はenemy-free初回準備60000ms、3 combat wave各150000ms、wave 1/2後のrest各60000ms、総630000msである。本書内の3分勝利・180000ms terminalと旧run開始時initial/stagger記述は#71前の履歴として残し、現在の時間・phase残り・victory境界はSPEC-WAVE-PROGRESSIONを正本とする。60000ms spawn phaseは初回combat開始をepochとし、`status=playing && elapsedMs >= restDurationMs`を満たす最初のupdateでcurrent phaseにかかわらず一度だけlifecycleを開始する。方向計算、strict spawn、terminal/retryのgeneration guard、ammo box契約は変更しない。
+[SPEC-WAVE-PROGRESSION](wave-progression-v1.md)は、本書の旧3分期限、630000ms自動勝利、preparation/combat/rest進行、run開始時のenemy epochをsupersedeする。現在は8 phaseであり、Night 1開始時だけinitial/staggerとdirectional spawn epochを開始する。Boss Nightは時間でvictoryにならない。本書の60秒directional spawn phase、方向計算、strict spawn、terminal/retry generation guard、ammo box契約は維持する。
 
 ## phaseと主方向
 

@@ -35,9 +35,9 @@ basic_design: DESIGN-BASIC-DIRECTIONAL-SPAWN
 
 基本敵はID固定でdirect/left/right各3体、stable seedのBFS tie-break、`TILE_SIZE`内の局所分離を使う。ドローンは既存直接経路と横移動を維持する。timerはCanvas上部中央、HP数値/progressは左下、ammoは右下へDOM overlayし、pointerを遮らない。stagger/retry/death/recycle TimerEventはgeneration/terminal guardを持ち、stop/reset/terminalですべてclearする。
 
-### Issue #58の時間契約移行
+### Issue #78の時間契約移行
 
-[DESIGN-DETAIL-WAVE-PROGRESSION](wave-progression-v1.md)（Issue #71条件変更後）は、Issue #34由来の180000ms（3分）生存期限だけでなく、本書の`run開始`をdirectional spawn epochおよびinitial/stagger開始点とする旧規則も限定的にsupersedeする。既定はenemy-free初回準備60000ms、3 combat wave各150000ms、wave 1/2後のrest各60000ms、総630000msである。本書の180000ms terminal、3分勝利、下記の`startedAt`/run開始時initial/staggerを前提にする業務ルール、処理フロー、状態、受け入れ候補は#71前の履歴である。現在のrun時間・phase残り・victory境界とenemy lifecycleはDESIGN-DETAIL-WAVE-PROGRESSIONを正本とする。60000ms spawn phaseは初回combat開始をepochとし、`status=playing && elapsedMs >= restDurationMs`を満たす最初のupdateでcurrent phaseにかかわらず一度だけinitial/staggerを開始する。主方向/反対方向の割り当て、strict spawn、terminal/retryのgeneration guard、ammo box respawn契約は維持する。
+[DESIGN-DETAIL-WAVE-PROGRESSION](wave-progression-v1.md)は、旧3分期限、630000ms自動勝利、preparation/combat/rest設計、run開始時のenemy epochをsupersedeする。8 phaseのNight 1開始時だけinitial/staggerとdirectional spawn lifecycleを開始し、Boss Nightは明示Boss撃破までplayingを維持する。主方向/反対方向、60秒spawn phase、strict spawn、terminal/retry generation guard、ammo box respawn契約は維持する。
 
 ## 2. 対象範囲
 

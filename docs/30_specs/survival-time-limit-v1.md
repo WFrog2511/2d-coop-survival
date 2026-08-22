@@ -21,9 +21,9 @@ now が startedAt + 180000 以上となる境界を含めてvictoryへ遷移す�
 
 retryCombatはvictory=false、defeated=false、HP100、武器別ammo/reserve、発射待ち、リロード、敵12個体を初期値として返す。敵の個体数と方向契約は[SPEC-DIRECTIONAL-SPAWN](directional-spawn-v1.md)が旧4個体の契約をsupersedeする。
 
-## Issue #58の限定移行
+## Issue #78の限定移行
 
-[SPEC-WAVE-PROGRESSION](wave-progression-v1.md)は、本仕様の180000ms期限と各60000ms waveをdynamic RunState scheduleへsupersedeする。既定はenemy-free初回準備60000ms、3 combat wave各150000ms、wave 1/2後のrest各60000ms、総630000msである。この文書内の旧時間式、03:00 HUD、180000ms境界の期待値、状態遷移、検証は#71前の履歴であり、現在の時間・phase・HUD仕様はSPEC-WAVE-PROGRESSIONを正本とする。victory state、terminal guard、retryCombat、ammo box規則は維持し、combat開始後のphase境界でenemy配置、HP、directional spawn metadataを変更しない。
+[SPEC-WAVE-PROGRESSION](wave-progression-v1.md)は、本仕様の180000ms期限、各60000ms wave、630000ms自動勝利を、Day 1から無期限Boss Nightまでの8 phaseへsupersedeする。現在の時間、phase、HUD、victory境界は同仕様を正本とし、Boss NightはBoss撃破eventだけで勝利する。terminal guard、retryCombat、ammo box規則とphase境界でenemy配置・HP・metadataを変更しない契約は維持する。
 
 ## #21/#35既存契約との境界
 

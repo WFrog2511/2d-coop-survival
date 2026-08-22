@@ -4,5 +4,5 @@
 
 ## Index
 
-- [wave-progression-v1 基本設計](basic/wave-progression-v1.md): RunState schedule、既存Phaser adapter、combat/rest描画の責務境界。
-- [wave-progression-v1 詳細設計](detail/wave-progression-v1.md): 手動同期するschedule遷移、失敗時動作、テスト観点。
+- [wave-progression-v1 基本設計](basic/wave-progression-v1.md): 8 phase RunState、既存Phaser adapter、Boss Night境界の責務分離。
+- [wave-progression-v1 詳細設計](detail/wave-progression-v1.md): 手動同期する昼夜schedule、Boss撃破、失敗時動作、テスト観点。

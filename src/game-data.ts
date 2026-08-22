@@ -109,21 +109,6 @@ export const INITIAL_WORLD_WEAPON_MODELS: readonly WeaponModel[] = [
   'flamethrower',
 ];
 
-/** スクラップの見た目を切り替える数量境界。 */
-export const SCRAP_VISUAL_TIER_THRESHOLDS = { medium: 3, large: 6 } as const;
-
-/** スクラップ山の表示用段階。 */
-export type ScrapVisualTier = 'small' | 'medium' | 'large';
-
-/** 集約済みスクラップ数量から表示段階を決める。 */
-export function scrapVisualTierFor(quantity: number): ScrapVisualTier {
-  if (quantity >= SCRAP_VISUAL_TIER_THRESHOLDS.large)
-    return 'large';
-  if (quantity >= SCRAP_VISUAL_TIER_THRESHOLDS.medium)
-    return 'medium';
-  return 'small';
-}
-
 export const ENEMY_HIT_STOP_MS: Record<WeaponModel, number> = {
   'rifle': 12,
   'shotgun': 35,
@@ -145,8 +130,6 @@ export const ENEMY_DEFEAT_HIT_STOP_MS: Record<WeaponModel, number> = {
 };
 
 export const PLAYER_HIT_STOP_MS: Record<EnemyKind, number> = { basic: 30, drone: 45 };
-
-export const SCRAP_DROP_AMOUNTS: Record<EnemyKind, number> = { basic: 1, drone: 1 };
 
 export const CAMERA_SHAKE_COOLDOWN_MS = 70;
 

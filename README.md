@@ -1,6 +1,6 @@
 # 2D協力メカサバイバル
 
-ブラウザから1〜4人で参加し、視界と情報を共有しながら暴走機械群に対処して全員生還を目指す、見下ろし型2D協力サバイバルゲームです。現在のローカル1人用prototypeは、enemy-freeの1分準備、各2分30秒の3 combat waveとその間の各1分rest（既定10:30 run）、finite typed ammo、combat開始からの60秒directional spawnに加え、初期8体から12体への段階投入、死角recycle、基本敵の分散経路、ショットガン・3種を混在させた8件のsidearm・スクラップpickup、下部quickbarと3クイックスロット・10バックパックのdrag & drop inventory、Tab詳細画面からworldへ置ける弾薬ポーチを実装しています。
+ブラウザから1〜4人で参加し、視界と情報を共有しながら暴走機械群に対処して全員生還を目指す、見下ろし型2D協力サバイバルゲームです。現在のローカル1人用prototypeは、Day 1から3回の昼夜、Final Day、Boss Nightへ進むrun、finite typed ammo、Night 1からの60秒directional spawnに加え、初期8体から12体への段階投入、死角recycle、基本敵の分散経路、ショットガン・3種を混在させた8件のsidearm・スクラップpickup、下部quickbarと3クイックスロット・10バックパックのdrag & drop inventory、Tab詳細画面からworldへ置ける弾薬ポーチを実装しています。Boss Nightは時間で勝利せず、Boss本体の接続は後続Issueで扱います。
 
 合意済みの範囲は[Definition of Delivery Issue #12](https://github.com/WFrog2511/2d-coop-survival/issues/12)、[combat-choice-v1要件](docs/20_requirements/combat-choice-v1.md)、[Issue #22 DOD comment](https://github.com/WFrog2511/2d-coop-survival/issues/22#issuecomment-5222574276)、[directional-spawn-v1要件](docs/20_requirements/directional-spawn-v1.md)、[wave-progression-v1要件](docs/20_requirements/wave-progression-v1.md)、[inventory-v1要件](docs/20_requirements/inventory-v1.md)を参照してください。[docs/企画書.md](docs/企画書.md)は企画入力であり、完了判断の正本ではありません。
 
@@ -86,7 +86,7 @@ pnpm exec playwright install chromium
 pnpm test:e2e
 ```
 
-実際のブラウザ操作を表示する場合はheadedモードを使います。代表E2Eは、enemy-free初回準備、combat開始時の初期8体と3/6/9/12秒の段階投入、strict hidden spawn、combat epochからの60秒directional spawn phase、preparation/combat/rest境界と敵のcurrent phase respawn、時間/HP/quick slot/ammo overlayとpouchを観測しながら、visibility、移動、Tab中の射撃抑止、有限typed ammo、リロード、種類別弾薬箱respawn、weapon model・スクラップ・world弾薬pickup、inventory move/swapとworld drop、10:30既定runの勝利、敗北、retryを確認します。
+実際のブラウザ操作を表示する場合はheadedモードを使います。代表E2Eは、enemy-freeのDay 1、Night 1開始時の初期8体と3/6/9/12秒の段階投入、strict hidden spawn、Night 1 epochからの60秒directional spawn phase、3回の昼夜・Final Day・Boss Night境界を観測しながら、visibility、移動、Tab中の射撃抑止、有限typed ammo、リロード、種類別弾薬箱respawn、weapon model・スクラップ・world弾薬pickup、inventory move/swapとworld drop、Boss撃破後の勝利、敗北、retryを確認します。
 
 ```powershell
 pnpm test:e2e --headed --workers=1

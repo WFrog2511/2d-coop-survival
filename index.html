@@ -25,14 +25,14 @@
           </aside>
           <aside id="survival-panel" class="game-overlay" aria-label="waveとフェーズ残り時間">
             <span>Wave <output data-testid="wave" data-state="playing">1</output></span>
-            <span><output data-testid="run-phase" data-phase="preparation">昼（準備）</output> 残り <output data-testid="phase-remaining">01:00</output></span>
-            <output class="survival-time" data-testid="survival-time" hidden>10:30</output>
+            <span><output data-testid="run-phase" data-phase="day" data-phase-id="day-1">昼1（探索）</output> 残り <output data-testid="phase-remaining" data-timed="true">02:30</output></span>
+            <output class="survival-time" data-testid="survival-time" hidden>14:30</output>
             <output data-testid="wave-remaining" hidden>00:00</output>
           </aside>
           <aside id="minimap-panel" class="game-overlay" aria-label="ミニマップ">
             <canvas data-testid="minimap" width="226" height="142"></canvas>
           </aside>
-          <aside id="run-panel" class="game-overlay" data-testid="run-panel" data-phase="preparation" aria-label="撃破数">
+          <aside id="run-panel" class="game-overlay" data-testid="run-panel" data-phase="day" data-phase-id="day-1" aria-label="撃破数">
             <span>撃破 <output data-testid="kills">0</output></span>
             <span class="gunslinger-combo" data-testid="gunslinger-combo-panel" hidden>コンボ <output data-testid="gunslinger-combo" data-active="false" data-speed-multiplier="1">0</output></span>
             <div hidden>
@@ -47,6 +47,8 @@
               <output class="carry-weight" data-testid="carry-weight" data-weight="0">重量 0.0</output>
             </span>
             <progress data-testid="hp-bar" max="100" value="100" aria-label="プレイヤーHP"></progress>
+            <span class="armor-resource">ARMOR <output data-testid="armor" data-count="0">0</output></span>
+            <progress class="armor-bar" data-testid="armor-bar" max="100" value="0" aria-label="スクラップアーマー"></progress>
             <span class="scrap-resource">SCRAP <output data-testid="scrap" data-count="0">0</output></span>
             <progress class="scrap-bar" data-testid="scrap-bar" max="1" value="0" aria-label="スクラップ"></progress>
           </aside>
@@ -98,6 +100,10 @@
             <section aria-label="循環資源">
               <span class="inventory-panel-caption">循環資源</span>
               <output class="inventory-scrap" data-testid="inventory-scrap" data-material="scrap" data-quantity="0" data-drop-quantity="0" data-drag-kind="material" draggable="false">◆ スクラップ 0（0個を置く）</output>
+              <div class="scrap-armor-craft">
+                <span>アーマー <output data-testid="inventory-armor">0/100</output></span>
+                <button data-testid="scrap-armor-craft" type="button" disabled>アーマー作成</button>
+              </div>
             </section>
           </aside>
           <aside id="ammo-pouch" class="game-overlay" data-testid="ammo-pouch" data-open="false" hidden aria-label="弾薬ポーチ">

@@ -14,7 +14,7 @@ specification: SPEC-SURVIVAL-TIME-LIMIT
 
 既存のCombatState、Phaser SceneのTimerEvent、generation、respawns、flashes、reloadTimer、ammoBoxes、DOM HUDを再利用する。新しいゲーム基盤や依存は導入しない。TypeScript設計は手動同期とし、新しいDOCGEN transformは追加しない。
 
-[DESIGN-BASIC-WAVE-PROGRESSION](wave-progression-v1.md)は、ここで扱う180000ms生存timerと各60000ms waveを、enemy-free初回準備60000ms、3 combat wave各150000ms、wave 1/2後のrest各60000ms、dynamicな630000ms既定scheduleへsupersedeする。この文書の旧時間値、利用者導線、状態遷移、検証は#71前の履歴であり、現在の時間・phase・HUD設計はDESIGN-BASIC-WAVE-PROGRESSIONを正本とする。terminal停止、retry、ammo box respawn、combat開始後のphase境界でenemy配置を変更しない経路は維持する。
+[DESIGN-BASIC-WAVE-PROGRESSION](wave-progression-v1.md)は、ここで扱う180000ms timer、各60000ms wave、630000ms自動勝利を、Day 1から無期限Boss Nightまでの8 phaseへsupersedeする。現在の時間、phase、HUD、Boss撃破victoryは同設計を正本とする。terminal停止、retry、ammo box respawn、phase境界でenemy配置を変更しない経路は維持する。
 
 | 責務 | 実装経路 |
 | --- | --- |

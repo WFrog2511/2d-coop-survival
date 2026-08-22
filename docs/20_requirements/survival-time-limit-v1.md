@@ -25,9 +25,9 @@ Issue #34 の comment 5220638729で確定したfollow-up/PR #36のDODは#71前�
 
 実行環境は既存のPhaser/Viteブラウザプロトタイプとし、通信・永続化・外部サービスは使用しない。技術検証と顧客またはプロジェクトオーナーの受け入れ確認は別に扱う。
 
-## Issue #58の限定移行
+## Issue #78の限定移行
 
-[REQ-WAVE-PROGRESSION](wave-progression-v1.md)は、本要件の180000ms（03:00）生存期限と各60000ms wave時間を、enemy-free初回準備60000ms、3 combat wave各150000ms、wave 1/2後のrest各60000ms、既定630000ms（10:30）へsupersedeする。この文書内の旧時間値、旧HUD、受け入れ条件、検証は#71前の履歴であり、現在の時間・phase・HUD契約はREQ-WAVE-PROGRESSIONを正本とする。victory/defeatのterminal停止、retry、ammo box respawn、有限ammoの導線は維持する。wave固有の新敵、quota、報酬、dropは引き続き対象外とする。
+[REQ-WAVE-PROGRESSION](wave-progression-v1.md)は、本要件の180000ms期限、各60000ms wave、630000ms自動勝利を、Day 1から無期限Boss Nightまでの8 phaseへsupersedeする。現在の時間、phase、HUD、victory境界は同要件を正本とし、Boss NightはBoss撃破eventだけで勝利する。victory/defeat terminal、retry、ammo box respawn、有限ammoの導線は維持する。
 
 ## #21/#35既存契約との境界
 

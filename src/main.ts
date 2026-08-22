@@ -7,7 +7,7 @@ import { ArenaHud, type AcousticDebugView, type InventoryDragSource, type Invent
 import { createSoundPropagationRenderSnapshot, createSoundPropagationSnapshot, soundWaveLifetimeMs, soundWaveTilesAt, type SoundPropagationRenderSnapshot, type SoundPropagationSnapshot, type SoundWaveTile } from './runtime-acoustic-graph';
 import { createRuntimeAreaGraph, type RuntimeAreaGraph } from './runtime-area-graph';
 import { applyRuntimeTopologyMutations, createRuntimeTopology, type RuntimeTopology, type RuntimeTopologyMutation } from './runtime-topology';
-import { ENEMIES, ENEMY_DEFEAT_HIT_STOP_MS, ENEMY_HIT_STOP_MS, ENEMY_IDS, ENEMY_LABELS, ENEMY_SPAWN_ORDER, INITIAL_ENEMY_IDS, INITIAL_WORLD_WEAPON_MODELS, PLAYER_HIT_STOP_MS, SCRAP_DROP_AMOUNTS, STAGGERED_ENEMIES, scrapVisualTierFor, type ScrapVisualTier } from './game-data';
+import { ENEMIES, ENEMY_DEFEAT_HIT_STOP_MS, ENEMY_HIT_STOP_MS, ENEMY_IDS, ENEMY_LABELS, ENEMY_SPAWN_ORDER, INITIAL_ENEMY_IDS, INITIAL_WORLD_WEAPON_MODELS, PLAYER_HIT_STOP_MS, STAGGERED_ENEMIES } from './game-data';
 import { GUNSLINGER_BOOT_KNIFE_DAMAGE, GUNSLINGER_COMBO_TIMEOUT_MS, PLAYER_DASH_DURATION_MS, PLAYER_ROLES, canDashAt, canFireWhileDashing, dashCooldownUntil, dashDirectionFor, dashSpeedFor, gunslingerComboAfterEvent, gunslingerSpeedBuffUntil, gunslingerSpeedMultiplierAt, reloadDurationForWorldWeapon, type DashDirection, type PlayerRole } from './player-data';
 import { selectNearbyPickup } from './pickups';
 import {
@@ -15,17 +15,16 @@ import {
   AMMO_MATERIAL_BOX_CYCLE,
   AMMO_MATERIAL_ORDER,
   AMMO_MATERIALS,
-  COMBAT_WAVE_DURATION_MS,
-  REST_DURATION_MS,
   WEAPONS,
   WEAPON_MODEL_ORDER,
   activeWeapon,
   advanceRunState,
-  advanceSurvivalState,
   cancelReload,
+  completeCombatVictory,
   collectMaterialAmount,
   collectWeapon,
   completeReload,
+  craftScrapArmor,
   createRunSchedule,
   createWeaponInstance,
   currentRunPhase,
@@ -44,6 +43,7 @@ import {
   isEnemyDefeated,
   moveInventoryWeapon,
   recordEnemyDefeated,
+  recordBossDefeated,
   recordEnemyRecycled,
   recordEnemySpawned,
   remainingSurvivalMs,
@@ -52,6 +52,7 @@ import {
   respawnEnemy,
   retryCombat,
   retryRun,
+  runPhaseStartMs,
   runDurationMs,
   selectQuickSlot,
   startReload,
@@ -68,6 +69,20 @@ import {
   type WeaponInstance,
   type WeaponModel,
 } from './rules';
+import { DEFAULT_RUN_PHASE_DURATIONS_MS } from './run-data';
+import {
+  SCRAP_DROP_AMOUNTS,
+  SCRAP_PLAYER_DROP_QUANTITY,
+  addScrapToPile,
+  createScrapOriginQuantities,
+  enemyOriginScrapQuantity,
+  scrapPileQuantity,
+  scrapVisualTierFor,
+  takeScrapFromPile,
+  type ScrapOrigin,
+  type ScrapOriginQuantities,
+  type ScrapVisualTier,
+} from './scrap-data';
 import { MATERIAL_CARRY, weightedMoveSpeed } from './weight-data';
 
 const WIDTH = 800;
@@ -80,10 +95,8 @@ const DEFAULT_ENEMY_SPAWN_CANDIDATE_POOL = 10;
 const MIN_ENEMY_STAGGER_INTERVAL_MS = 500;
 const MAX_ENEMY_STAGGER_INTERVAL_MS = 5000;
 const MAX_ENEMY_SPAWN_CANDIDATE_POOL = ARENA_WIDTH_TILES * ARENA_HEIGHT_TILES;
-const MIN_COMBAT_WAVE_DURATION_MS = 1000;
-const MAX_COMBAT_WAVE_DURATION_MS = 300000;
-const MIN_REST_DURATION_MS = 500;
-const MAX_REST_DURATION_MS = 120000;
+const MIN_RUN_PHASE_DURATION_MS = 500;
+const MAX_RUN_PHASE_DURATION_MS = 300000;
 const MAP_PALETTE_FADE_MS = 450;
 const VISIBILITY_MASK_TEXTURE_KEY = 'visibility-mask';
 type EnemySpawnReason = 'initial' | 'stagger' | 'death' | 'recycle' | 'debug';
@@ -131,6 +144,7 @@ type MaterialWorldItem = {
   tile: TilePosition;
   quantity: number;
   material: MaterialId;
+  origins: ScrapOriginQuantities;
   visualTier: ScrapVisualTier;
   sprite: Phaser.Physics.Arcade.Image;
 };
@@ -199,13 +213,31 @@ function resolveEnemySpawnConfig(): EnemySpawnConfig {
   };
 }
 
-/** DEV用combat/rest queryを安全な既定値へ正規化し、本番では読み取らない。 */
+/** DEV用phase queryを安全な既定値へ正規化し、本番では読み取らない。 */
 function resolveRunSchedule(): RunSchedule {
   const query = IS_DEV ? new URLSearchParams(window.location.search) : new URLSearchParams();
-  return createRunSchedule(
-    readDevIntegerQuery(query, 'combatWaveDurationMs', COMBAT_WAVE_DURATION_MS, MIN_COMBAT_WAVE_DURATION_MS, MAX_COMBAT_WAVE_DURATION_MS),
-    readDevIntegerQuery(query, 'restDurationMs', REST_DURATION_MS, MIN_REST_DURATION_MS, MAX_REST_DURATION_MS),
+  const legacyNightDurationMs = query.has('combatWaveDurationMs')
+    ? readDevIntegerQuery(query, 'combatWaveDurationMs', DEFAULT_RUN_PHASE_DURATIONS_MS.night1DurationMs, MIN_RUN_PHASE_DURATION_MS, MAX_RUN_PHASE_DURATION_MS)
+    : undefined;
+  const legacyDayDurationMs = query.has('restDurationMs')
+    ? readDevIntegerQuery(query, 'restDurationMs', DEFAULT_RUN_PHASE_DURATIONS_MS.day1DurationMs, MIN_RUN_PHASE_DURATION_MS, MAX_RUN_PHASE_DURATION_MS)
+    : undefined;
+  const duration = (key: keyof RunSchedule, fallback: number): number => readDevIntegerQuery(
+    query,
+    key,
+    fallback,
+    MIN_RUN_PHASE_DURATION_MS,
+    MAX_RUN_PHASE_DURATION_MS,
   );
+  return createRunSchedule({
+    day1DurationMs: duration('day1DurationMs', legacyDayDurationMs ?? DEFAULT_RUN_PHASE_DURATIONS_MS.day1DurationMs),
+    night1DurationMs: duration('night1DurationMs', legacyNightDurationMs ?? DEFAULT_RUN_PHASE_DURATIONS_MS.night1DurationMs),
+    day2DurationMs: duration('day2DurationMs', legacyDayDurationMs ?? DEFAULT_RUN_PHASE_DURATIONS_MS.day2DurationMs),
+    night2DurationMs: duration('night2DurationMs', legacyNightDurationMs ?? DEFAULT_RUN_PHASE_DURATIONS_MS.night2DurationMs),
+    day3DurationMs: duration('day3DurationMs', legacyDayDurationMs ?? DEFAULT_RUN_PHASE_DURATIONS_MS.day3DurationMs),
+    night3DurationMs: duration('night3DurationMs', legacyNightDurationMs ?? DEFAULT_RUN_PHASE_DURATIONS_MS.night3DurationMs),
+    finalDayDurationMs: duration('finalDayDurationMs', legacyDayDurationMs ?? DEFAULT_RUN_PHASE_DURATIONS_MS.finalDayDurationMs),
+  });
 }
 
 function readDevIntegerQuery(
@@ -235,7 +267,7 @@ function formatEnemySpawnConfig(config: EnemySpawnConfig): string {
 }
 
 function formatRunSchedule(schedule: RunSchedule): string {
-  return `combatWaveDurationMs=${schedule.combatWaveDurationMs};restDurationMs=${schedule.restDurationMs}`;
+  return Object.entries(schedule).map(([key, value]) => `${key}=${value}`).join(';');
 }
 
 const ENEMY_SPAWN_CONFIG = resolveEnemySpawnConfig();
@@ -373,6 +405,7 @@ class Arena extends Phaser.Scene {
   create(): void {
     resetArena = () => this.reset();
     arenaHud.setInventoryDropListener((source, target) => this.handleInventoryDrop(source, target));
+    arenaHud.setScrapArmorCraftListener(() => this.craftInventoryScrapArmor());
     this.createTextures();
     this.effects = new ArenaEffects(this, arenaHud.playerHitVignette, this.playerRole.tint);
     this.soundWaveGraphics = this.add.graphics().setDepth(1.5);
@@ -421,6 +454,7 @@ class Arena extends Phaser.Scene {
       window.removeEventListener('keydown', this.onTabKeyDown, true);
       arenaHud.clearInventoryDrag(true);
       arenaHud.setInventoryDropListener(undefined);
+      arenaHud.setScrapArmorCraftListener(undefined);
     });
     this.input.keyboard?.on('keydown-R', () => {
       if (!isSoundWaveModeFocused()) this.reload();
@@ -641,6 +675,15 @@ class Arena extends Phaser.Scene {
     if (!IS_DEV)
       throw new Error('debugSetPlayerInvulnerableはDEV環境だけで使用できます。');
     this.debugPlayerInvulnerable = enabled;
+  }
+
+  /** DEV用にBoss撃破eventを発生させ、Boss Nightの勝利境界を検証する。 */
+  public debugDefeatBoss(): void {
+    if (!IS_DEV)
+      throw new Error('debugDefeatBossはDEV環境だけで使用できます。');
+    if (recordBossDefeated(this.runState) === this.runState)
+      throw new Error('Boss Night以外ではBoss撃破を記録できません。');
+    this.enterTerminal('victory');
   }
 
   public debugMovePlayerTo(tile: TilePosition): void {
@@ -890,7 +933,7 @@ class Arena extends Phaser.Scene {
     const wallArt = this.add.graphics().setDepth(-1);
     const world = this.mapWorldSize();
     const tileSize = this.topology.tileSize;
-    const palette = phase === 'combat'
+    const palette = phase !== 'day'
       ? { ground: 0x101827, grid: 0x31516b, wall: 0x26374a, wallEdge: 0x55728b }
       : { ground: 0x6b573b, grid: 0xae8a58, wall: 0x79573a, wallEdge: 0xe2bb78 };
     ground.fillStyle(palette.ground, 1).fillRect(0, 0, world.width, world.height).lineStyle(1, palette.grid, 0.55);
@@ -909,7 +952,7 @@ class Arena extends Phaser.Scene {
       const y = reserve.bounds.top * tileSize;
       const width = (reserve.bounds.right - reserve.bounds.left + 1) * tileSize;
       const height = (reserve.bounds.bottom - reserve.bounds.top + 1) * tileSize;
-      const marker = phase === 'combat' ? 0xc58cff : 0x6d3b0b;
+      const marker = phase !== 'day' ? 0xc58cff : 0x6d3b0b;
       wallArt.fillStyle(marker, 0.22).fillRect(x, y, width, height).lineStyle(3, marker, 1).strokeRect(x + 1.5, y + 1.5, width - 3, height - 3);
       Object.values(reserve.approaches).forEach((approach) => {
         wallArt.fillStyle(marker, 1).fillCircle(
@@ -997,36 +1040,53 @@ class Arena extends Phaser.Scene {
     });
   }
 
-  private dropScrap(tile: TilePosition, quantity: number): void {
+  private syncScrapWorldItem(item: MaterialWorldItem): void {
+    item.quantity = scrapPileQuantity(item.origins);
+    item.visualTier = scrapVisualTierFor(item.quantity);
+    item.sprite.setData('quantity', item.quantity);
+    item.sprite.setData('visualTier', item.visualTier);
+    item.sprite.setData('originEnemy', item.origins.enemy);
+    item.sprite.setData('originPlayer', item.origins.player);
+    item.sprite.setData('originWreck', item.origins.wreck);
+    item.sprite.setData('enemyThreat', enemyOriginScrapQuantity(item.origins));
+    item.sprite.setTexture(`material-scrap-${item.visualTier}`);
+  }
+
+  private dropScrap(tile: TilePosition, quantity: number, origin: ScrapOrigin): number {
     if (!Number.isSafeInteger(quantity) || quantity <= 0)
-      return;
+      return 0;
     const id = `material-scrap-${tileKey(tile)}`;
     const current = this.worldItemStates.get(id);
     if (current?.kind === 'material') {
-      current.quantity += quantity;
-      current.visualTier = scrapVisualTierFor(current.quantity);
-      current.sprite.setData('quantity', current.quantity);
-      current.sprite.setData('visualTier', current.visualTier);
-      current.sprite.setTexture(`material-scrap-${current.visualTier}`);
-      return;
+      const result = addScrapToPile(current.origins, origin, quantity);
+      if (result.added === 0)
+        return 0;
+      current.origins = result.origins;
+      this.syncScrapWorldItem(current);
+      return result.added;
     }
+    const result = addScrapToPile(createScrapOriginQuantities(), origin, quantity);
+    if (result.added === 0)
+      return 0;
     const point = this.world(tile);
-    const visualTier = scrapVisualTierFor(quantity);
+    const visualTier = scrapVisualTierFor(result.added);
     const sprite = this.physics.add.staticImage(point.x, point.y, `material-scrap-${visualTier}`).setDepth(1);
     sprite.setData('worldItemId', id);
     sprite.setData('tile', { ...tile });
-    sprite.setData('quantity', quantity);
-    sprite.setData('visualTier', visualTier);
     this.worldItems.add(sprite);
-    this.worldItemStates.set(id, {
+    const item: MaterialWorldItem = {
       id,
       kind: 'material',
       tile: { ...tile },
-      quantity,
+      quantity: result.added,
       material: 'scrap',
+      origins: result.origins,
       visualTier,
       sprite,
-    });
+    };
+    this.worldItemStates.set(id, item);
+    this.syncScrapWorldItem(item);
+    return result.added;
   }
 
   private spawnAmmoBox(boxId: string, tile: TilePosition): void {
@@ -1099,7 +1159,9 @@ class Arena extends Phaser.Scene {
         const visualTier = item.kind === 'material' ? item.visualTier : '';
         const worldColor = item.kind === 'ammo-material' ? item.worldColor : '';
         const texture = item.kind === 'ammo-material' ? item.texture : '';
-        return `${item.id}:${item.kind}:${itemType}:${tileKey(item.tile)}:${item.quantity}:${visualTier}:${worldColor}:${texture}`;
+        const origins = item.kind === 'material' ? item.origins : createScrapOriginQuantities();
+        const enemyThreat = item.kind === 'material' ? enemyOriginScrapQuantity(origins) : 0;
+        return `${item.id}:${item.kind}:${itemType}:${tileKey(item.tile)}:${item.quantity}:${visualTier}:${worldColor}:${texture}:${origins.enemy}:${origins.player}:${origins.wreck}:${enemyThreat}`;
       });
   }
 
@@ -1255,8 +1317,8 @@ class Arena extends Phaser.Scene {
 
   /** InventoryのScrapを設定単位以下で、配置成功時だけworldへ移す。 */
   private dropInventoryScrap(): void {
-    const result = dropScrapMaterial(this.state);
-    if (result.dropped === 0)
+    const requested = Math.min(this.state.inventory.materials.scrap, SCRAP_PLAYER_DROP_QUANTITY);
+    if (requested === 0)
       return;
     const tile = selectWorldWeaponDropTile(this.topology, this.tile(this.player), [
       ...this.activeWorldItemTiles(),
@@ -1267,7 +1329,10 @@ class Arena extends Phaser.Scene {
       arenaHud.setInventoryDragMessage('置ける場所がありません');
       return;
     }
-    this.dropScrap(tile, result.dropped);
+    const accepted = this.dropScrap(tile, requested, 'player');
+    const result = dropScrapMaterial(this.state, accepted);
+    if (result.dropped === 0)
+      return;
     this.applyInventoryState(result.state);
     arenaHud.setFeedback(`スクラップを${result.dropped}個置きました`);
     this.updatePickupPrompt();
@@ -1317,24 +1382,11 @@ class Arena extends Phaser.Scene {
 
   private updateSurvival(): void {
     const elapsedMs = this.time.now - this.survivalStartedAt;
-    const nextRunState = advanceRunState(this.runState, elapsedMs);
-    this.runState = nextRunState;
+    this.runState = advanceRunState(this.runState, elapsedMs);
     this.updateMapPalette();
     if (this.hasReachedInitialCombat(elapsedMs))
       this.startEnemyLifecycle();
     this.updateSurvivalHud();
-    if (nextRunState.status !== 'victory')
-      return;
-    const nextCombatState = advanceSurvivalState(
-      this.state,
-      this.survivalStartedAt,
-      this.time.now,
-      runDurationMs(nextRunState.schedule),
-    );
-    if (nextCombatState === this.state)
-      return;
-    this.state = nextCombatState;
-    this.enterTerminal('victory');
   }
 
   private updateSurvivalHud(): void {
@@ -1360,7 +1412,7 @@ class Arena extends Phaser.Scene {
       || !this.hasReachedInitialCombat()
     ) return;
     this.enemyLifecycleStarted = true;
-    this.combatStartedAt = this.survivalStartedAt + this.runState.schedule.restDurationMs;
+    this.combatStartedAt = this.survivalStartedAt + runPhaseStartMs(this.runState.schedule, 'night-1');
     initialEnemyIdsFor(ENEMY_SPAWN_CONFIG).forEach((id) => {
       if (!this.spawnEnemy(id, 'initial'))
         this.scheduleEnemySpawn(id, 'initial', 1000);
@@ -1374,7 +1426,7 @@ class Arena extends Phaser.Scene {
 
   private hasReachedInitialCombat(elapsedMs = this.time.now - this.survivalStartedAt): boolean {
     return this.runState.status === 'playing'
-      && elapsedMs >= this.runState.schedule.restDurationMs;
+      && elapsedMs >= runPhaseStartMs(this.runState.schedule, 'night-1');
   }
 
   private currentSpawnPhase(): number {
@@ -2113,7 +2165,7 @@ class Arena extends Phaser.Scene {
     delete this.paths[id];
     delete this.visibilityTiles[id];
     this.respawnCount[id] += 1;
-    this.dropScrap(tile, SCRAP_DROP_AMOUNTS[ENEMIES[id].kind]);
+    this.dropScrap(tile, SCRAP_DROP_AMOUNTS[ENEMIES[id].kind], 'enemy');
     const delay = respawnDelayFor(ENEMIES[id].kind, id, this.respawnCount[id], this.map.seed);
     this.scheduleEnemySpawn(id, 'death', delay);
     if (actor.showDefeatedHitStop(this.time.now))
@@ -2163,8 +2215,9 @@ class Arena extends Phaser.Scene {
     this.contactAt[id] = this.time.now;
     this.startPlayerImpact(ENEMIES[id].kind);
     const previousPlayerHp = this.state.playerHp;
+    const previousPlayerArmor = this.state.playerArmor;
     this.state = damagePlayer(this.state, ENEMIES[id].damage);
-    if (this.state.playerHp < previousPlayerHp)
+    if (this.state.playerHp < previousPlayerHp || this.state.playerArmor < previousPlayerArmor)
       this.resetGunslingerCombo();
     if (!this.state.defeated) {
       this.refreshHud();
@@ -2187,11 +2240,16 @@ class Arena extends Phaser.Scene {
   }
 
   private enterTerminal(result: 'defeat' | 'victory'): void {
-    this.runState = result === 'defeat'
+    const nextRunState = result === 'defeat'
       ? defeatRun(this.runState)
-      : advanceRunState(this.runState, runDurationMs(this.runState.schedule));
+      : recordBossDefeated(this.runState);
+    if (result === 'victory' && nextRunState === this.runState)
+      return;
+    this.runState = nextRunState;
     this.stopRunTimers();
-    this.state = cancelReload(this.state);
+    this.state = result === 'victory'
+      ? completeCombatVictory(this.state)
+      : cancelReload(this.state);
     this.resetGunslingerState();
     this.clearSoundWaves();
     this.player.setVelocity(0, 0);
@@ -2306,12 +2364,11 @@ class Arena extends Phaser.Scene {
       return;
     this.state = next;
     if (item.kind === 'material' && materialResult) {
-      item.quantity -= materialResult.collected;
+      const pile = takeScrapFromPile(item.origins, materialResult.collected);
+      item.origins = pile.origins;
+      item.quantity = scrapPileQuantity(item.origins);
       if (item.quantity > 0) {
-        item.visualTier = scrapVisualTierFor(item.quantity);
-        item.sprite.setData('quantity', item.quantity);
-        item.sprite.setData('visualTier', item.visualTier);
-        item.sprite.setTexture(`material-scrap-${item.visualTier}`);
+        this.syncScrapWorldItem(item);
       } else {
         this.worldItems.remove(item.sprite, true, true);
         this.worldItemStates.delete(item.id);
@@ -2326,6 +2383,17 @@ class Arena extends Phaser.Scene {
       : `スクラップを${materialResult?.collected ?? 0}取得しました`);
     this.refreshHud();
     this.updatePickupPrompt();
+  }
+
+  /** 詳細Inventoryから一回分の共通Scrap Armorを作成する。 */
+  private craftInventoryScrapArmor(): void {
+    if (!this.inventoryOpen || this.state.defeated || this.state.victory)
+      return;
+    const result = craftScrapArmor(this.state);
+    if (!result.crafted)
+      return;
+    this.applyInventoryState(result.state);
+    arenaHud.setFeedback(`スクラップ${result.spent}個でアーマーを${result.armorAdded}作成しました`);
   }
 
   private collectNearbyPickup(): void {
