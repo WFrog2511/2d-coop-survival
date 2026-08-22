@@ -5,6 +5,8 @@ import {
   type DamageType,
   type WeaponModel,
 } from './ammo-data';
+import type { PlayerRoleId } from './player-data';
+import { MATERIAL_CARRY, SCRAP_PLAYER_DROP_QUANTITY, WEAPON_WEIGHTS, type WeightedMaterialId } from './weight-data';
 
 export {
   AMMO_MATERIAL_BOX_CYCLE,
@@ -22,26 +24,63 @@ export type {
   WeaponModel,
 } from './ammo-data';
 
-export const QUICK_SLOT_COUNT = 3;
+export const STANDARD_HOTBAR_SLOT_COUNT = 4;
+export const QUARTERMASTER_HOTBAR_SLOT_COUNT = 6;
+export const QUICK_SLOT_COUNT = STANDARD_HOTBAR_SLOT_COUNT;
 export const BACKPACK_SLOT_COUNT = 10;
 
 /** 最小インベントリで扱う素材の識別子。 */
-export type MaterialId = 'scrap' | AmmoMaterial;
+export type MaterialId = WeightedMaterialId;
 
 /** 個別の弾倉と射撃待ちを持つ武器の恒久識別子。 */
 export type WeaponInstanceId = string;
 
 /** world、クイックスロット、バックパック間を同じまま移動する武器状態。 */
 export type WeaponInstance = {
+  kind: 'weapon';
   id: WeaponInstanceId;
   model: WeaponModel;
   magazine: number;
   nextFireAt: number;
+  slotSpan: 1 | 2;
+  hotbarOnly: boolean;
+  droppable: boolean;
 };
 
-/** 個別武器モデルと素材数だけを保持する最小インベントリ状態。 */
+/** world武器生成時に必要な携行制約だけを上書きする。 */
+export type WeaponCarryOptions = {
+  slotSpan?: 1 | 2;
+  hotbarOnly?: boolean;
+  droppable?: boolean;
+};
+
+/** 手動固定装備をHotbarへ置くための共通状態。 */
+export type FixedEquipmentInstance = {
+  kind: 'fixed-equipment';
+  id: string;
+  label: string;
+  slotSpan: 1;
+  hotbarOnly: true;
+  droppable: false;
+  weight: number;
+};
+
+/** Hotbarへ配置できる武器または固定装備。 */
+export type HotbarItem = WeaponInstance | FixedEquipmentInstance;
+
+/** 2slot itemの2枠目から先頭枠を参照するmarker。 */
+export type HotbarContinuation = {
+  kind: 'continuation';
+  itemId: string;
+  anchorIndex: number;
+};
+
+/** Hotbarの空き、item本体、2枠目markerを表す。 */
+export type HotbarSlot = HotbarItem | HotbarContinuation | null;
+
+/** 個別武器、固定装備、素材数を保持する共通インベントリ状態。 */
 export type InventoryState = {
-  quickSlots: Array<WeaponInstance | null>;
+  quickSlots: HotbarSlot[];
   backpackSlots: Array<WeaponInstance | null>;
   selectedQuickSlot: number;
   materials: Record<MaterialId, number>;
@@ -139,6 +178,12 @@ export type MaterialDropResult = {
   dropped: number;
 };
 
+/** 素材上限内で実際に取得した個数を返す。 */
+export type MaterialCollectResult = {
+  state: CombatState;
+  collected: number;
+};
+
 /** 発射可否と更新後の状態。 */
 export type FireResult = {
   state: CombatState;
@@ -194,6 +239,7 @@ const INITIAL_ENEMIES = createInitialEnemies();
  * @param model 設定を参照する武器モデル。
  * @param magazine 初期弾倉数。
  * @param nextFireAt 次回発射可能な時刻。
+ * @param carry Hotbar占有数とdrop制約。
  * @returns 正規化済みの個別武器状態。
  */
 export function createWeaponInstance(
@@ -201,15 +247,40 @@ export function createWeaponInstance(
   model: WeaponModel,
   magazine = WEAPONS[model].magazineSize,
   nextFireAt = 0,
+  carry: WeaponCarryOptions = {},
 ): WeaponInstance {
   const definition = WEAPONS[model];
   return {
+    kind: 'weapon',
     id,
     model,
     magazine: Number.isSafeInteger(magazine)
       ? Math.min(definition.magazineSize, Math.max(0, magazine))
       : definition.magazineSize,
     nextFireAt: Number.isFinite(nextFireAt) ? nextFireAt : 0,
+    slotSpan: carry.slotSpan ?? 1,
+    hotbarOnly: carry.hotbarOnly ?? false,
+    droppable: carry.droppable ?? true,
+  };
+}
+
+/**
+ * Hotbar内だけで並べ替えられる手動固定装備を作る。
+ *
+ * @param id 固定装備の安定ID。
+ * @param label HUDに表示する装備名。
+ * @param weight 装備固有の重量。
+ * @returns drop不可の1slot固定装備。
+ */
+export function createFixedEquipmentInstance(id: string, label: string, weight = 0): FixedEquipmentInstance {
+  return {
+    kind: 'fixed-equipment',
+    id,
+    label,
+    slotSpan: 1,
+    hotbarOnly: true,
+    droppable: false,
+    weight: Number.isFinite(weight) ? Math.max(0, weight) : 0,
   };
 }
 
@@ -222,34 +293,41 @@ function createInitialMaterials(): Record<MaterialId, number> {
   } as Record<MaterialId, number>;
 }
 
-const INITIAL_INVENTORY: InventoryState = {
-  quickSlots: [createWeaponInstance('starter-rifle', 'rifle'), null, null],
-  backpackSlots: Array<WeaponInstance | null>(BACKPACK_SLOT_COUNT).fill(null),
-  selectedQuickSlot: 0,
-  materials: createInitialMaterials(),
-};
-
-export const INITIAL_STATE: CombatState = {
-  playerHp: 100,
-  defeated: false,
-  victory: false,
-  inventory: INITIAL_INVENTORY,
-  reloading: null,
-  enemies: INITIAL_ENEMIES,
-};
-
-function cloneWeaponInstance(weapon: WeaponInstance | null): WeaponInstance | null {
-  return weapon ? { ...weapon } : null;
+/**
+ * Roleが利用できるHotbar枠数を返す。
+ *
+ * @param roleId 現在のRole ID。
+ * @returns 通常Roleは4枠、QMは6枠。
+ */
+export function hotbarSlotCountForRole(roleId: PlayerRoleId): number {
+  return roleId === 'quartermaster' ? QUARTERMASTER_HOTBAR_SLOT_COUNT : STANDARD_HOTBAR_SLOT_COUNT;
 }
 
-function cloneInventory(inventory: InventoryState): InventoryState {
+/**
+ * RoleごとのHotbar枠数を反映した新規戦闘状態を作る。
+ *
+ * @param roleId 開始時のRole ID。
+ * @returns 独立した初期戦闘状態。
+ */
+export function createInitialCombatState(roleId: PlayerRoleId = 'gunner'): CombatState {
+  const quickSlots = Array<HotbarSlot>(hotbarSlotCountForRole(roleId)).fill(null);
+  quickSlots[0] = createWeaponInstance('starter-rifle', 'rifle');
   return {
-    quickSlots: inventory.quickSlots.map(cloneWeaponInstance),
-    backpackSlots: inventory.backpackSlots.map(cloneWeaponInstance),
-    selectedQuickSlot: inventory.selectedQuickSlot,
-    materials: { ...inventory.materials },
+    playerHp: 100,
+    defeated: false,
+    victory: false,
+    inventory: {
+      quickSlots,
+      backpackSlots: Array<WeaponInstance | null>(BACKPACK_SLOT_COUNT).fill(null),
+      selectedQuickSlot: 0,
+      materials: createInitialMaterials(),
+    },
+    reloading: null,
+    enemies: cloneEnemies(INITIAL_ENEMIES),
   };
 }
+
+export const INITIAL_STATE: CombatState = createInitialCombatState();
 
 function cloneEnemies(enemies: Record<EnemyInstanceId, EnemyState>): Record<EnemyInstanceId, EnemyState> {
   return Object.fromEntries(ENEMY_INSTANCE_IDS.map(id => [id, { ...enemies[id] }])) as Record<EnemyInstanceId, EnemyState>;
@@ -571,36 +649,129 @@ export function damagePlayer(state: CombatState, amount: number): CombatState {
   return { ...state, playerHp, defeated: playerHp === 0, reloading: playerHp === 0 ? null : state.reloading };
 }
 
-function isInventorySlotRef(slot: InventorySlotRef): boolean {
+function isInventorySlotRef(inventory: InventoryState, slot: InventorySlotRef): boolean {
   if (slot.container !== 'quick' && slot.container !== 'backpack') return false;
-  const count = slot.container === 'quick' ? QUICK_SLOT_COUNT : BACKPACK_SLOT_COUNT;
+  const count = slot.container === 'quick' ? inventory.quickSlots.length : inventory.backpackSlots.length;
   return Number.isInteger(slot.index) && slot.index >= 0 && slot.index < count;
 }
 
-function weaponInstanceAt(inventory: InventoryState, slot: InventorySlotRef): WeaponInstance | null {
-  if (!isInventorySlotRef(slot)) return null;
+/**
+ * Hotbarの継続枠を本体へ解決し、配置itemを返す。
+ *
+ * @param inventory 対象Inventory。
+ * @param index 確認するHotbar位置。
+ * @returns 対応item。空きまたは無効位置ならnull。
+ */
+export function hotbarItemAt(inventory: InventoryState, index: number): HotbarItem | null {
+  if (!Number.isInteger(index) || index < 0 || index >= inventory.quickSlots.length)
+    return null;
+  const slot = inventory.quickSlots[index];
+  if (!slot)
+    return null;
+  if (slot.kind !== 'continuation')
+    return slot;
+  const anchor = inventory.quickSlots[slot.anchorIndex];
+  return anchor && anchor.kind !== 'continuation' && anchor.id === slot.itemId ? anchor : null;
+}
+
+/**
+ * Hotbarの表示枠が2slot itemの継続枠なら真を返す。
+ *
+ * @param slot 判定するHotbar枠。
+ * @returns 2slot itemの継続枠ならtrue。
+ */
+export function isHotbarContinuation(slot: HotbarSlot): slot is HotbarContinuation {
+  return slot?.kind === 'continuation';
+}
+
+function inventoryItemAt(inventory: InventoryState, slot: InventorySlotRef): HotbarItem | null {
+  if (!isInventorySlotRef(inventory, slot))
+    return null;
   return slot.container === 'quick'
-    ? inventory.quickSlots[slot.index] ?? null
+    ? hotbarItemAt(inventory, slot.index)
     : inventory.backpackSlots[slot.index] ?? null;
 }
 
-function inventoryWithWeaponAt(
+function normalizedInventorySlot(inventory: InventoryState, slot: InventorySlotRef): InventorySlotRef | null {
+  if (!isInventorySlotRef(inventory, slot))
+    return null;
+  if (slot.container === 'backpack')
+    return slot;
+  const value = inventory.quickSlots[slot.index];
+  return value?.kind === 'continuation'
+    ? { container: 'quick', index: value.anchorIndex }
+    : slot;
+}
+
+function clearInventoryItem(inventory: InventoryState, slot: InventorySlotRef): InventoryState {
+  const normalized = normalizedInventorySlot(inventory, slot);
+  const item = normalized ? inventoryItemAt(inventory, normalized) : null;
+  if (!normalized || !item)
+    return inventory;
+  if (normalized.container === 'backpack') {
+    const backpackSlots = [...inventory.backpackSlots];
+    backpackSlots[normalized.index] = null;
+    return { ...inventory, backpackSlots };
+  }
+  const quickSlots = [...inventory.quickSlots];
+  for (let offset = 0; offset < item.slotSpan; offset += 1) {
+    const occupied = quickSlots[normalized.index + offset];
+    if (offset === 0 || (occupied?.kind === 'continuation' && occupied.itemId === item.id))
+      quickSlots[normalized.index + offset] = null;
+  }
+  return { ...inventory, quickSlots };
+}
+
+function canPlaceInventoryItem(inventory: InventoryState, slot: InventorySlotRef, item: HotbarItem): boolean {
+  if (!isInventorySlotRef(inventory, slot))
+    return false;
+  if (slot.container === 'backpack')
+    return item.kind === 'weapon'
+      && item.slotSpan === 1
+      && !item.hotbarOnly
+      && inventory.backpackSlots[slot.index] === null;
+  if (slot.index + item.slotSpan > inventory.quickSlots.length)
+    return false;
+  return inventory.quickSlots.slice(slot.index, slot.index + item.slotSpan).every(value => value === null);
+}
+
+function placeInventoryItem(
   inventory: InventoryState,
   slot: InventorySlotRef,
-  weapon: WeaponInstance | null,
-): InventoryState {
-  if (slot.container === 'quick') {
-    const quickSlots = [...inventory.quickSlots];
-    quickSlots[slot.index] = weapon;
-    return { ...inventory, quickSlots };
+  item: HotbarItem,
+): InventoryState | undefined {
+  if (!canPlaceInventoryItem(inventory, slot, item))
+    return undefined;
+  if (slot.container === 'backpack') {
+    if (item.kind !== 'weapon')
+      return undefined;
+    const backpackSlots = [...inventory.backpackSlots];
+    backpackSlots[slot.index] = { ...item };
+    return { ...inventory, backpackSlots };
   }
-  const backpackSlots = [...inventory.backpackSlots];
-  backpackSlots[slot.index] = weapon;
-  return { ...inventory, backpackSlots };
+  const quickSlots = [...inventory.quickSlots];
+  quickSlots[slot.index] = { ...item };
+  for (let offset = 1; offset < item.slotSpan; offset += 1) {
+    quickSlots[slot.index + offset] = {
+      kind: 'continuation',
+      itemId: item.id,
+      anchorIndex: slot.index,
+    };
+  }
+  return { ...inventory, quickSlots };
+}
+
+function replaceHotbarItem(inventory: InventoryState, selectedIndex: number, item: HotbarItem): InventoryState {
+  const anchor = normalizedInventorySlot(inventory, { container: 'quick', index: selectedIndex });
+  if (!anchor || anchor.container !== 'quick')
+    return inventory;
+  const cleared = clearInventoryItem(inventory, anchor);
+  return placeInventoryItem(cleared, anchor, item) ?? inventory;
 }
 
 function activeWeaponForInventory(inventory: InventoryState): WeaponInstance | null {
-  return inventory.quickSlots[inventory.selectedQuickSlot] ?? null;
+  const item = hotbarItemAt(inventory, inventory.selectedQuickSlot);
+  return item?.kind === 'weapon' ? item : null;
 }
 
 function withInventory(state: CombatState, inventory: InventoryState): CombatState {
@@ -632,7 +803,8 @@ export function activeWeapon(state: CombatState): WeaponInstance | null {
  * @returns 枠内の武器個体。無効または空きならnull。
  */
 export function inventoryWeaponAt(state: CombatState, slot: InventorySlotRef): WeaponInstance | null {
-  return weaponInstanceAt(state.inventory, slot);
+  const item = inventoryItemAt(state.inventory, slot);
+  return item?.kind === 'weapon' ? item : null;
 }
 
 /**
@@ -651,15 +823,27 @@ export function moveInventoryWeapon(
   if (
     state.defeated
     || state.victory
-    || !isInventorySlotRef(source)
-    || !isInventorySlotRef(target)
-    || (source.container === target.container && source.index === target.index)
+    || !isInventorySlotRef(state.inventory, source)
+    || !isInventorySlotRef(state.inventory, target)
   ) return state;
-  const sourceWeapon = weaponInstanceAt(state.inventory, source);
-  if (!sourceWeapon) return state;
-  const targetWeapon = weaponInstanceAt(state.inventory, target);
-  const emptied = inventoryWithWeaponAt(state.inventory, source, targetWeapon);
-  return withInventory(state, inventoryWithWeaponAt(emptied, target, sourceWeapon));
+  const normalizedSource = normalizedInventorySlot(state.inventory, source);
+  const normalizedTarget = normalizedInventorySlot(state.inventory, target);
+  if (!normalizedSource || !normalizedTarget || (
+    normalizedSource.container === normalizedTarget.container
+    && normalizedSource.index === normalizedTarget.index
+  )) return state;
+  const sourceItem = inventoryItemAt(state.inventory, normalizedSource);
+  if (!sourceItem)
+    return state;
+  const targetItem = inventoryItemAt(state.inventory, normalizedTarget);
+  let inventory = clearInventoryItem(state.inventory, normalizedSource);
+  if (targetItem)
+    inventory = clearInventoryItem(inventory, normalizedTarget);
+  const withSource = placeInventoryItem(inventory, normalizedTarget, sourceItem);
+  if (!withSource)
+    return state;
+  const swapped = targetItem ? placeInventoryItem(withSource, normalizedSource, targetItem) : withSource;
+  return swapped ? withInventory(state, swapped) : state;
 }
 
 /**
@@ -670,9 +854,10 @@ export function moveInventoryWeapon(
  * @returns 成功時だけ選択武器を同期した状態。
  */
 export function removeInventoryWeapon(state: CombatState, source: InventorySlotRef): CombatState {
-  if (state.defeated || state.victory || !isInventorySlotRef(source) || !weaponInstanceAt(state.inventory, source))
+  const item = inventoryItemAt(state.inventory, source);
+  if (state.defeated || state.victory || !item || item.kind !== 'weapon' || !item.droppable)
     return state;
-  return withInventory(state, inventoryWithWeaponAt(state.inventory, source, null));
+  return withInventory(state, clearInventoryItem(state.inventory, source));
 }
 
 /**
@@ -683,10 +868,10 @@ export function removeInventoryWeapon(state: CombatState, source: InventorySlotR
  * @returns 武器選択と必要なリロード中断を反映した戦闘状態。
  */
 export function selectQuickSlot(state: CombatState, slot: number): CombatState {
-  if (state.defeated || state.victory || !Number.isInteger(slot) || slot < 0 || slot >= QUICK_SLOT_COUNT)
+  if (state.defeated || state.victory || !Number.isInteger(slot) || slot < 0 || slot >= state.inventory.quickSlots.length)
     return state;
-  const weapon = state.inventory.quickSlots[slot];
-  if (!weapon || state.inventory.selectedQuickSlot === slot)
+  const item = hotbarItemAt(state.inventory, slot);
+  if (!item || state.inventory.selectedQuickSlot === slot)
     return state;
   return withInventory(state, { ...state.inventory, selectedQuickSlot: slot });
 }
@@ -699,8 +884,32 @@ export function selectQuickSlot(state: CombatState, slot: number): CombatState {
  * @returns 対応するクイックスロットを選択した状態。
  */
 export function selectWeapon(state: CombatState, model: WeaponModel): CombatState {
-  const slot = state.inventory.quickSlots.findIndex(weapon => weapon?.model === model);
+  const slot = state.inventory.quickSlots.findIndex(item => item?.kind === 'weapon' && item.model === model);
   return slot < 0 ? state : selectQuickSlot(state, slot);
+}
+
+/**
+ * Hotbar itemを連続枠へ格納し、1slot武器だけは満杯時にバックパックへ回す。
+ *
+ * @param state 現在の戦闘状態。
+ * @param item 取得する武器または固定装備。
+ * @returns 原子的に全枠を確保できた場合だけ更新した状態。
+ */
+export function collectHotbarItem(state: CombatState, item: HotbarItem): CombatState {
+  if (state.defeated || state.victory)
+    return state;
+  for (let index = 0; index < state.inventory.quickSlots.length; index += 1) {
+    const placed = placeInventoryItem(state.inventory, { container: 'quick', index }, item);
+    if (placed)
+      return withInventory(state, placed);
+  }
+  if (item.kind !== 'weapon' || item.slotSpan !== 1 || item.hotbarOnly)
+    return state;
+  const backpackSlot = state.inventory.backpackSlots.indexOf(null);
+  if (backpackSlot < 0)
+    return state;
+  const placed = placeInventoryItem(state.inventory, { container: 'backpack', index: backpackSlot }, item);
+  return placed ? withInventory(state, placed) : state;
 }
 
 /**
@@ -711,36 +920,70 @@ export function selectWeapon(state: CombatState, model: WeaponModel): CombatStat
  * @returns 格納結果を反映した戦闘状態。満杯またはterminalなら元の状態。
  */
 export function collectWeapon(state: CombatState, weapon: WeaponInstance): CombatState {
-  if (state.defeated || state.victory)
-    return state;
-  const quickSlot = state.inventory.quickSlots.indexOf(null);
-  if (quickSlot >= 0) {
-    return withInventory(state, inventoryWithWeaponAt(state.inventory, { container: 'quick', index: quickSlot }, { ...weapon }));
-  }
-  const backpackSlot = state.inventory.backpackSlots.indexOf(null);
-  if (backpackSlot < 0)
-    return state;
-  return withInventory(state, inventoryWithWeaponAt(state.inventory, { container: 'backpack', index: backpackSlot }, { ...weapon }));
+  return collectHotbarItem(state, weapon);
 }
 
 /**
- * 指定素材を正の個数だけ所持品へ加算する。
+ * 指定素材を携行上限まで取得し、worldに残す個数を呼出し側へ返す。
  *
  * @param state 現在の戦闘状態。
  * @param material 加算する素材。
  * @param amount 加算する正の安全な整数。
- * @returns 素材数を反映した戦闘状態。
+ * @returns 状態と実際に取得した個数。
  */
-export function collectMaterial(state: CombatState, material: MaterialId, amount: number): CombatState {
+export function collectMaterialAmount(state: CombatState, material: MaterialId, amount: number): MaterialCollectResult {
   if (state.defeated || state.victory || !Number.isSafeInteger(amount) || amount <= 0)
-    return state;
+    return { state, collected: 0 };
+  const current = state.inventory.materials[material];
+  const collected = Math.min(amount, Math.max(0, MATERIAL_CARRY[material].capacity - current));
+  if (collected <= 0)
+    return { state, collected: 0 };
   return {
-    ...state,
-    inventory: {
-      ...state.inventory,
-      materials: { ...state.inventory.materials, [material]: state.inventory.materials[material] + amount },
+    collected,
+    state: {
+      ...state,
+      inventory: {
+        ...state.inventory,
+        materials: { ...state.inventory.materials, [material]: current + collected },
+      },
     },
   };
+}
+
+/**
+ * 指定素材を携行上限まで加算する互換入口。
+ *
+ * @param state 現在の戦闘状態。
+ * @param material 加算する素材。
+ * @param amount world側が渡す取得候補数。
+ * @returns 実際に取得できた個数を反映した状態。
+ */
+export function collectMaterial(state: CombatState, material: MaterialId, amount: number): CombatState {
+  return collectMaterialAmount(state, material, amount).state;
+}
+
+/**
+ * Inventory、素材、将来Cargoの重量を一度だけ合算する。
+ *
+ * @param inventory 対象Inventory。
+ * @param cargoWeight 将来Cargo側から渡す追加重量。
+ * @returns 非負の総重量。
+ */
+export function inventoryWeight(inventory: InventoryState, cargoWeight = 0): number {
+  let weight = Number.isFinite(cargoWeight) ? Math.max(0, cargoWeight) : 0;
+  inventory.quickSlots.forEach((slot) => {
+    if (!slot || slot.kind === 'continuation')
+      return;
+    weight += slot.kind === 'weapon' ? WEAPON_WEIGHTS[slot.model] : slot.weight;
+  });
+  inventory.backpackSlots.forEach((weapon) => {
+    if (weapon)
+      weight += WEAPON_WEIGHTS[weapon.model];
+  });
+  (Object.keys(inventory.materials) as MaterialId[]).forEach((material) => {
+    weight += inventory.materials[material] * MATERIAL_CARRY[material].unitWeight;
+  });
+  return weight;
 }
 
 /**
@@ -761,7 +1004,7 @@ export function canFireAt(state: CombatState, now: number): boolean {
 }
 
 function inventoryWithActiveWeapon(inventory: InventoryState, weapon: WeaponInstance): InventoryState {
-  return inventoryWithWeaponAt(inventory, { container: 'quick', index: inventory.selectedQuickSlot }, weapon);
+  return replaceHotbarItem(inventory, inventory.selectedQuickSlot, weapon);
 }
 
 /**
@@ -881,6 +1124,32 @@ export function dropAmmoMaterial(state: CombatState, material: AmmoMaterial): Ma
 }
 
 /**
+ * Inventory内のScrapを設定単位以下でworld配置候補として取り出す。
+ *
+ * 実際のstate反映はworld配置成功後に呼出し側が採用する。
+ *
+ * @param state 現在の戦闘状態。
+ * @returns worldへ出すScrap数と候補state。
+ */
+export function dropScrapMaterial(state: CombatState): MaterialDropResult {
+  if (state.defeated || state.victory)
+    return { state, dropped: 0 };
+  const dropped = Math.min(state.inventory.materials.scrap, SCRAP_PLAYER_DROP_QUANTITY);
+  if (dropped <= 0)
+    return { state, dropped: 0 };
+  return {
+    state: {
+      ...state,
+      inventory: {
+        ...state.inventory,
+        materials: { ...state.inventory.materials, scrap: state.inventory.materials.scrap - dropped },
+      },
+    },
+    dropped,
+  };
+}
+
+/**
  * 指定した敵へダメージを適用する。
  *
  * @param state 現在の戦闘状態。
@@ -930,12 +1199,9 @@ export function respawnEnemy(state: CombatState, enemyId: EnemyInstanceId): Comb
 /**
  * 初期値から独立した再挑戦用の戦闘状態を作る。
  *
- * @returns 可変部分を複製した初期戦闘状態。
+ * @param roleId 再挑戦時に選択中のRole ID。
+ * @returns RoleのHotbar枠数を反映した独立初期状態。
  */
-export function retryCombat(): CombatState {
-  return {
-    ...INITIAL_STATE,
-    inventory: cloneInventory(INITIAL_STATE.inventory),
-    enemies: cloneEnemies(INITIAL_STATE.enemies),
-  };
+export function retryCombat(roleId: PlayerRoleId = 'gunner'): CombatState {
+  return createInitialCombatState(roleId);
 }

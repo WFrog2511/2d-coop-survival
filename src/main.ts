@@ -23,7 +23,7 @@ import {
   advanceRunState,
   advanceSurvivalState,
   cancelReload,
-  collectMaterial,
+  collectMaterialAmount,
   collectWeapon,
   completeReload,
   createRunSchedule,
@@ -33,10 +33,13 @@ import {
   damagePlayer,
   defeatRun,
   dropAmmoMaterial,
+  dropScrapMaterial,
   droneLateralSpeedAt,
   enemySpeedMultiplierForPhase,
   fireWeapon,
   hiddenRecyclePathDistanceForPhase,
+  hotbarItemAt,
+  inventoryWeight,
   inventoryWeaponAt,
   isEnemyDefeated,
   moveInventoryWeapon,
@@ -65,6 +68,7 @@ import {
   type WeaponInstance,
   type WeaponModel,
 } from './rules';
+import { MATERIAL_CARRY, weightedMoveSpeed } from './weight-data';
 
 const WIDTH = 800;
 const HEIGHT = 500;
@@ -403,6 +407,15 @@ class Arena extends Phaser.Scene {
     this.input.keyboard?.on('keydown-THREE', () => {
       if (!isSoundWaveModeFocused()) this.changeQuickSlot(2);
     });
+    this.input.keyboard?.on('keydown-FOUR', () => {
+      if (!isSoundWaveModeFocused()) this.changeQuickSlot(3);
+    });
+    this.input.keyboard?.on('keydown-FIVE', () => {
+      if (!isSoundWaveModeFocused()) this.changeQuickSlot(4);
+    });
+    this.input.keyboard?.on('keydown-SIX', () => {
+      if (!isSoundWaveModeFocused()) this.changeQuickSlot(5);
+    });
     window.addEventListener('keydown', this.onTabKeyDown, true);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       window.removeEventListener('keydown', this.onTabKeyDown, true);
@@ -429,7 +442,7 @@ class Arena extends Phaser.Scene {
       if (weapon && !WEAPONS[weapon.model].automatic)
         this.tryFire();
     });
-    this.input.keyboard?.addCapture(['W', 'A', 'S', 'D', 'R', 'E', 'SPACE', 'SHIFT', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'ONE', 'TWO', 'THREE']);
+    this.input.keyboard?.addCapture(['W', 'A', 'S', 'D', 'R', 'E', 'SPACE', 'SHIFT', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX']);
     this.reset(true);
   }
 
@@ -496,7 +509,8 @@ class Arena extends Phaser.Scene {
       return;
     }
     const length = Math.hypot(x, y) || 1;
-    this.player.setVelocity((x / length) * 210 * speedMultiplier, (y / length) * 210 * speedMultiplier);
+    const moveSpeed = weightedMoveSpeed(this.playerRole.id, inventoryWeight(this.state.inventory));
+    this.player.setVelocity((x / length) * moveSpeed * speedMultiplier, (y / length) * moveSpeed * speedMultiplier);
     this.tryPlayPlayerMovementSound();
   }
 
@@ -694,7 +708,7 @@ class Arena extends Phaser.Scene {
     this.generation += 1;
     this.stopRunTimers();
     this.physics.resume();
-    this.state = retryCombat();
+    this.state = retryCombat(this.playerRole.id);
     this.runState = retryRun(RUN_SCHEDULE);
     this.inventoryOpen = false;
     arenaHud.setInventoryOpen(false);
@@ -1108,11 +1122,13 @@ class Arena extends Phaser.Scene {
       const id = box.getData('boxId') as string | undefined;
       const tile = box.getData('tile') as TilePosition | undefined;
       const state = id ? this.ammoBoxStates.get(id) : undefined;
-      if (state && state.quantity > 0 && id && tile)
+      if (state && state.quantity > 0 && this.state.inventory.materials[state.material] < MATERIAL_CARRY[state.material].capacity && id && tile)
         candidates.push({ id: `0:${id}`, tile, kind: 'ammo', box });
     });
     this.worldItemStates.forEach((item) => {
       if (!item.sprite.active)
+        return;
+      if (item.kind !== 'weapon' && this.state.inventory.materials[item.material] >= MATERIAL_CARRY[item.material].capacity)
         return;
       const priority = item.kind === 'weapon' ? '1' : item.kind === 'material' ? '2' : '0';
       candidates.push({ id: `${priority}:${item.id}`, tile: item.tile, kind: 'world', item });
@@ -1176,8 +1192,12 @@ class Arena extends Phaser.Scene {
     if (this.state.defeated || this.state.victory)
       return;
     if (source.kind === 'material') {
-      if (target === 'world')
-        this.dropInventoryAmmoMaterial(source.material);
+      if (target === 'world') {
+        if (source.material === 'scrap')
+          this.dropInventoryScrap();
+        else
+          this.dropInventoryAmmoMaterial(source.material);
+      }
       return;
     }
     if (target === 'world') {
@@ -1230,6 +1250,26 @@ class Arena extends Phaser.Scene {
     this.spawnAmmoMaterialWorldItem(id, material, result.dropped, tile);
     this.applyInventoryState(result.state);
     arenaHud.setFeedback(`${AMMO_MATERIALS[material].label}を${result.dropped}個置きました`);
+    this.updatePickupPrompt();
+  }
+
+  /** InventoryのScrapを設定単位以下で、配置成功時だけworldへ移す。 */
+  private dropInventoryScrap(): void {
+    const result = dropScrapMaterial(this.state);
+    if (result.dropped === 0)
+      return;
+    const tile = selectWorldWeaponDropTile(this.topology, this.tile(this.player), [
+      ...this.activeWorldItemTiles(),
+      ...this.activeAmmoBoxTiles(),
+      ...this.activeEnemyTiles(),
+    ], this.map.seed);
+    if (!tile) {
+      arenaHud.setInventoryDragMessage('置ける場所がありません');
+      return;
+    }
+    this.dropScrap(tile, result.dropped);
+    this.applyInventoryState(result.state);
+    arenaHud.setFeedback(`スクラップを${result.dropped}個置きました`);
     this.updatePickupPrompt();
   }
 
@@ -1924,14 +1964,15 @@ class Arena extends Phaser.Scene {
   private changeQuickSlot(slot: number): void {
     if (this.state.defeated || this.state.victory || this.state.inventory.selectedQuickSlot === slot)
       return;
-    const weapon = this.state.inventory.quickSlots[slot];
-    if (!weapon)
+    const item = hotbarItemAt(this.state.inventory, slot);
+    if (!item)
       return;
     const next = selectQuickSlot(this.state, slot);
     const interrupted = this.state.reloading !== null && next.reloading === null;
     if (interrupted) this.clearReloadTimer();
     this.state = next;
-    arenaHud.setFeedback(interrupted ? `リロード中断: ${WEAPONS[weapon.model].label}` : `武器: ${WEAPONS[weapon.model].label}`);
+    const label = item.kind === 'weapon' ? WEAPONS[item.model].label : item.label;
+    arenaHud.setFeedback(interrupted ? `リロード中断: ${label}` : `選択: ${label}`);
     this.refreshHud();
   }
 
@@ -2216,16 +2257,20 @@ class Arena extends Phaser.Scene {
     const state = boxId ? this.ammoBoxStates.get(boxId) : undefined;
     if (!boxId || !state || state.currentTile === null || this.ammoBoxRespawns.has(boxId))
       return;
-    const next = collectMaterial(this.state, state.material, state.quantity);
-    if (next === this.state)
+    const result = collectMaterialAmount(this.state, state.material, state.quantity);
+    if (result.collected === 0)
       return;
-    this.state = next;
-    this.ammoBoxes.remove(box, true, true);
-    state.currentTile = null;
-    state.quantity = 0;
+    this.state = result.state;
+    state.quantity -= result.collected;
+    if (state.quantity === 0) {
+      this.ammoBoxes.remove(box, true, true);
+      state.currentTile = null;
+      this.scheduleAmmoBoxRespawn(boxId);
+    } else {
+      box.setData('quantity', state.quantity);
+    }
     this.playSuccessfulPickupSound();
-    this.scheduleAmmoBoxRespawn(boxId);
-    arenaHud.setFeedback(`${AMMO_MATERIALS[state.material].label}を取得しました`);
+    arenaHud.setFeedback(`${AMMO_MATERIALS[state.material].label}を${result.collected}個取得しました`);
     this.refreshHud();
     this.updatePickupPrompt();
   }
@@ -2234,30 +2279,51 @@ class Arena extends Phaser.Scene {
     if (this.state.defeated || this.state.victory || !item.sprite.active || this.worldItemStates.get(item.id) !== item)
       return;
     if (item.kind === 'ammo-material') {
-      const next = collectMaterial(this.state, item.material, item.quantity);
-      if (next === this.state)
+      const result = collectMaterialAmount(this.state, item.material, item.quantity);
+      if (result.collected === 0)
         return;
-      this.state = next;
-      this.worldItems.remove(item.sprite, true, true);
-      this.worldItemStates.delete(item.id);
+      this.state = result.state;
+      item.quantity -= result.collected;
+      if (item.quantity === 0) {
+        this.worldItems.remove(item.sprite, true, true);
+        this.worldItemStates.delete(item.id);
+      } else {
+        item.sprite.setData('quantity', item.quantity);
+      }
       this.playSuccessfulPickupSound();
-      arenaHud.setFeedback(`${AMMO_MATERIALS[item.material].label}を取得しました`);
+      arenaHud.setFeedback(`${AMMO_MATERIALS[item.material].label}を${result.collected}個取得しました`);
       this.refreshHud();
       this.updatePickupPrompt();
       return;
     }
+    const materialResult = item.kind === 'material'
+      ? collectMaterialAmount(this.state, item.material, item.quantity)
+      : undefined;
     const next = item.kind === 'weapon'
       ? collectWeapon(this.state, item.weapon)
-      : collectMaterial(this.state, item.material, item.quantity);
+      : materialResult?.state ?? this.state;
     if (next === this.state)
       return;
     this.state = next;
-    this.worldItems.remove(item.sprite, true, true);
-    this.worldItemStates.delete(item.id);
+    if (item.kind === 'material' && materialResult) {
+      item.quantity -= materialResult.collected;
+      if (item.quantity > 0) {
+        item.visualTier = scrapVisualTierFor(item.quantity);
+        item.sprite.setData('quantity', item.quantity);
+        item.sprite.setData('visualTier', item.visualTier);
+        item.sprite.setTexture(`material-scrap-${item.visualTier}`);
+      } else {
+        this.worldItems.remove(item.sprite, true, true);
+        this.worldItemStates.delete(item.id);
+      }
+    } else {
+      this.worldItems.remove(item.sprite, true, true);
+      this.worldItemStates.delete(item.id);
+    }
     this.playSuccessfulPickupSound();
     arenaHud.setFeedback(item.kind === 'weapon'
       ? `${WEAPONS[item.weapon.model].label}を取得しました`
-      : `スクラップを${item.quantity}取得しました`);
+      : `スクラップを${materialResult?.collected ?? 0}取得しました`);
     this.refreshHud();
     this.updatePickupPrompt();
   }

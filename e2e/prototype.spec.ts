@@ -5,6 +5,7 @@ import { formatSurvivalTime } from '../src/arena/hud';
 import { INITIAL_WORLD_WEAPON_MODELS, SCRAP_DROP_AMOUNTS, SCRAP_VISUAL_TIER_THRESHOLDS, WORLD_SIDEARM_MODELS, scrapVisualTierFor } from '../src/game-data';
 import { GUNSLINGER_BOOT_KNIFE_DAMAGE, GUNSLINGER_COMBO_PER_EVENT, GUNSLINGER_COMBO_TIMEOUT_MS, PLAYER_DASH_DURATION_MS } from '../src/player-data';
 import { AMMO_BOX_RESPAWN_MS, AMMO_MATERIAL_BOX_CYCLE, AMMO_MATERIAL_ORDER, AMMO_MATERIALS, COMBAT_WAVE_DURATION_MS, ENEMY_INSTANCE_IDS, WEAPON_MODELS, WEAPONS, createRunSchedule, runDurationMs, type AmmoMaterial, type WeaponModel } from '../src/rules';
+import { MATERIAL_CARRY, SCRAP_PLAYER_DROP_QUANTITY } from '../src/weight-data';
 
 type EnemyId = (typeof ENEMY_INSTANCE_IDS)[number];
 type EnemyPresentation = 'normal' | 'boundary' | 'hidden';
@@ -51,6 +52,7 @@ type EnemySpawnMetadata = {
 type ArenaDebugBody = {
   x: number;
   y: number;
+  velocity?: { x: number; y: number };
   active?: boolean;
   enable?: boolean;
   width?: number;
@@ -150,7 +152,7 @@ type ArenaDebugScene = {
   state: {
     inventory: {
       quickSlots: readonly ({ id: string; model: WeaponModel; magazine: number; nextFireAt: number } | null)[];
-      materials: Record<AmmoMaterial, number>;
+      materials: Record<AmmoMaterial | 'scrap', number>;
     };
     enemies: Record<EnemyId, { hp: number; maxHp: number; defeated: boolean }>;
   };
@@ -1562,6 +1564,141 @@ test('開始前のSpace選択を保ち、開始後のキーボード移動を受
   expect(aimedRotation).toBeCloseTo(0, 1);
 });
 
+test('Issue #57: QMの6枠Hotbar、重量、Scrapの分割配置を試遊できる', async ({ page }) => {
+  await page.goto('/?enemyInitialCount=0&enemyStaggerIntervalMs=5000');
+  await page.getByTestId('role-quartermaster').check();
+  await page.getByTestId('start').click();
+  await expect(page.locator('#game canvas')).toBeVisible();
+  for (let index = 1; index <= 6; index += 1)
+    await expect(page.getByTestId(`quick-slot-${index}`)).toBeVisible();
+
+  const [hpBounds, hotbarBounds, ammoBounds] = await Promise.all([
+    page.locator('#hp-panel').boundingBox(),
+    page.getByTestId('inventory-panel').boundingBox(),
+    page.getByTestId('ammo-panel').boundingBox(),
+  ]);
+  if (!hpBounds || !hotbarBounds || !ammoBounds)
+    throw new Error('HUDの配置を観測できません。');
+  expect(hotbarBounds.x).toBeGreaterThanOrEqual(hpBounds.x + hpBounds.width);
+  expect(hotbarBounds.x + hotbarBounds.width).toBeLessThanOrEqual(ammoBounds.x);
+
+  const movementSpeed = async (): Promise<number> => {
+    await page.keyboard.down('d');
+    try {
+      await page.waitForTimeout(100);
+      return await page.evaluate(() => {
+        const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+        const velocity = scene?.player.body?.velocity;
+        if (!scene || !velocity)
+          throw new Error('playerの歩行速度を観測できません。');
+        return Math.hypot(velocity.x, velocity.y);
+      });
+    } finally {
+      await page.keyboard.up('d');
+    }
+  };
+
+  const initialWeight = Number(await page.getByTestId('carry-weight').getAttribute('data-weight'));
+  const initialSpeed = await movementSpeed();
+  const flamethrower = (await activeWorldItems(page)).find(item => item.kind === 'weapon' && item.item === 'flamethrower');
+  if (!flamethrower)
+    throw new Error('重量試遊用の火炎放射器が見つかりません。');
+  await page.evaluate((itemId) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMoveWorldItemTo(itemId, {
+      x: Math.floor(scene.player.x / scene.topology.tileSize),
+      y: Math.floor(scene.player.y / scene.topology.tileSize),
+    });
+  }, flamethrower.id);
+  await page.keyboard.press('e');
+  await expect(page.getByTestId('quick-slot-2')).toHaveAttribute('data-model', 'flamethrower');
+  await expect.poll(async () => (await activeWorldItems(page)).some(item => item.id === flamethrower.id)).toBe(false);
+  const carriedWeight = Number(await page.getByTestId('carry-weight').getAttribute('data-weight'));
+  const carriedSpeed = await movementSpeed();
+  expect(carriedWeight).toBeGreaterThan(initialWeight);
+  expect(carriedSpeed).toBeLessThan(initialSpeed);
+
+  const scrapQuantity = Math.min(MATERIAL_CARRY.scrap.capacity, SCRAP_PLAYER_DROP_QUANTITY + 1);
+  if (scrapQuantity <= SCRAP_PLAYER_DROP_QUANTITY)
+    throw new Error('Scrap配置単位より大きい携行上限が必要です。');
+  await page.evaluate((quantity) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.state.inventory.materials.scrap = quantity;
+    scene.refreshHud();
+  }, scrapQuantity);
+  const scrapHud = page.getByTestId('scrap');
+  await expect(scrapHud).toHaveAttribute('data-count', String(scrapQuantity));
+  await expect(page.getByTestId('scrap-bar')).toHaveAttribute('aria-valuetext', new RegExp(`^${scrapQuantity}/`));
+
+  await page.keyboard.press('Tab');
+  const inventoryScrap = page.getByTestId('inventory-scrap');
+  await expect(inventoryScrap).toBeVisible();
+  await expect(inventoryScrap).toHaveAttribute('draggable', 'true');
+  await expect(inventoryScrap).toHaveAttribute('data-quantity', String(scrapQuantity));
+  await expect(inventoryScrap).toHaveAttribute('data-drop-quantity', String(SCRAP_PLAYER_DROP_QUANTITY));
+  const worldItemsBeforeScrapDrop = await activeWorldItems(page);
+  const canvas = page.locator('#game canvas');
+  const canvasBounds = await canvas.boundingBox();
+  if (!canvasBounds)
+    throw new Error('スクラップを置くためのgame canvas座標が必要です。');
+  const canvasPoint = await findGameCanvasInputPoint(page);
+  await inventoryScrap.dragTo(canvas, {
+    targetPosition: {
+      x: canvasPoint.clientX - canvasBounds.x,
+      y: canvasPoint.clientY - canvasBounds.y,
+    },
+  });
+  const remainingScrap = scrapQuantity - SCRAP_PLAYER_DROP_QUANTITY;
+  await expect(inventoryScrap).toHaveAttribute('data-quantity', String(remainingScrap));
+  await expect(inventoryScrap).toHaveAttribute('data-drop-quantity', String(remainingScrap));
+  await expect(inventoryScrap).toHaveAttribute('draggable', 'true');
+  await expect(scrapHud).toHaveAttribute('data-count', String(remainingScrap));
+  const firstDroppedScrap = (await activeWorldItems(page)).find(item =>
+    item.kind === 'material' && !worldItemsBeforeScrapDrop.some(before => before.id === item.id));
+  if (!firstDroppedScrap)
+    throw new Error('worldへ置いたスクラップが必要です。');
+  expect(firstDroppedScrap.item).toBe('scrap');
+  expect(firstDroppedScrap.quantity).toBe(SCRAP_PLAYER_DROP_QUANTITY);
+  await expect(page.getByTestId('pickup-target')).toHaveText(`スクラップ ${SCRAP_PLAYER_DROP_QUANTITY}個`);
+
+  const worldItemsBeforeRemainderDrop = await activeWorldItems(page);
+  await inventoryScrap.dragTo(canvas, {
+    targetPosition: {
+      x: canvasPoint.clientX - canvasBounds.x,
+      y: canvasPoint.clientY - canvasBounds.y,
+    },
+  });
+  await expect(inventoryScrap).toHaveAttribute('data-quantity', '0');
+  await expect(inventoryScrap).toHaveAttribute('data-drop-quantity', '0');
+  await expect(inventoryScrap).toHaveAttribute('draggable', 'false');
+  await expect(scrapHud).toHaveAttribute('data-count', '0');
+  const remainderDrop = (await activeWorldItems(page)).find(item =>
+    item.kind === 'material' && !worldItemsBeforeRemainderDrop.some(before => before.id === item.id));
+  if (!remainderDrop)
+    throw new Error('10個未満の残りScrapを置いたworld itemが必要です。');
+  expect(remainderDrop.quantity).toBe(remainingScrap);
+
+  await page.keyboard.press('e');
+  await page.keyboard.press('e');
+  await expect(scrapHud).toHaveAttribute('data-count', String(scrapQuantity));
+  await expect.poll(async () => (await activeWorldItems(page)).some(item =>
+    item.id === firstDroppedScrap.id || item.id === remainderDrop.id)).toBe(false);
+  await page.keyboard.press('Tab');
+
+  const cooldownBeforeDash = await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    return scene.playerDashCooldownUntil;
+  });
+  await page.keyboard.press('Space');
+  await expect.poll(async () => page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    return scene?.playerDashCooldownUntil ?? 0;
+  })).toBeGreaterThan(cooldownBeforeDash);
+});
+
 test('通常役職は回避中に発砲しない', async ({ page }) => {
   await page.goto(devStartUrl('/'));
   await expect(page.locator('#game canvas')).toBeVisible();
@@ -1677,7 +1814,7 @@ test('Tab詳細中は単発射撃と空ライフル弾倉の自動reloadを開�
 });
 
 test('モデル別world weapon、クイックスロット、詳細インベントリをEで取得できる', async ({ page }) => {
-  test.setTimeout(45_000);
+  test.setTimeout(60_000);
   const schedule = createRunSchedule(15_000, 1_000);
   await page.clock.install({ time: 15 });
   await page.clock.pauseAt(15);
@@ -1689,11 +1826,13 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
   const quickSlot1 = page.getByTestId('quick-slot-1');
   const quickSlot2 = page.getByTestId('quick-slot-2');
   const quickSlot3 = page.getByTestId('quick-slot-3');
+  const quickSlot4 = page.getByTestId('quick-slot-4');
   const canvasLocator = page.locator('#game canvas');
   await expect(quickSlot1).toHaveAttribute('data-model', 'rifle');
   await expect(quickSlot1).toHaveAttribute('data-selected', 'true');
   await expect(quickSlot2).toHaveAttribute('data-empty', 'true');
   await expect(quickSlot3).toHaveAttribute('data-empty', 'true');
+  await expect(quickSlot4).toHaveAttribute('data-empty', 'true');
   await expect(quickSlot1).toContainText(WEAPON_MODELS.rifle.label);
   const quickbarBounds = await documentBounds(page.getByTestId('inventory-panel'));
   const canvasBounds = await documentBounds(canvasLocator);
@@ -1710,6 +1849,7 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
     page.getByTestId('quick-slot-2'),
     page.getByTestId('inventory-quick-slot-2'),
     page.getByTestId('inventory-quick-slot-3'),
+    page.getByTestId('inventory-quick-slot-4'),
     detail.locator('.inventory-panel-caption').nth(1),
     page.getByTestId('backpack-slot-1'),
     ammoPouch.locator('h2'),
@@ -1828,6 +1968,17 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
   const secondSidearm = sidearms.find(item => item.id !== firstSidearm.id);
   if (!secondSidearm)
     throw new Error('追加取得用の同モデルsidearm pickupが必要です。');
+  const hotbarFiller = weaponPickups.find(item =>
+    item.id !== shotgun.id && item.id !== firstSidearm.id && item.id !== secondSidearm.id);
+  if (!hotbarFiller)
+    throw new Error('通常Roleの4枠目を埋めるworld weapon pickupが必要です。');
+  await page.evaluate((tile) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugMovePlayerTo(tile);
+  }, hotbarFiller.tile);
+  await page.keyboard.press('e');
+  await expect(quickSlot4).toHaveAttribute('data-model', hotbarFiller.item);
   await page.evaluate((tile) => {
     const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
     if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
@@ -2144,7 +2295,7 @@ test('同じtileのスクラップは数量と見た目を集約しEで取得で
   expect((await activeWorldItems(page)).filter(item => item.id === secondScrap.id)).toHaveLength(0);
 });
 
-test('world weaponと弾薬を置けない場合はinventoryとworldを変えずに通知する', async ({ page }) => {
+test('world itemを置けない場合はinventoryとworldを変えずに通知する', async ({ page }) => {
   test.setTimeout(30_000);
   const schedule = createRunSchedule(15_000, 1_000);
   await page.clock.install({ time: 15 });
@@ -2209,6 +2360,23 @@ test('world weaponと弾薬を置けない場合はinventoryとworldを変えず
   await dragInventorySlot(page, `ammo-pouch-${material}`, '#game');
   await expect(page.getByTestId('feedback')).toHaveText('置ける場所がありません');
   await expect(pouchEntry).toHaveAttribute('data-quantity', materialBeforeAmmoDrop ?? '');
+  expect(await activeWorldItems(page)).toEqual(worldItemsBeforeDrop);
+
+  const blockedScrapQuantity = Math.min(MATERIAL_CARRY.scrap.capacity, SCRAP_PLAYER_DROP_QUANTITY + 1);
+  if (blockedScrapQuantity <= SCRAP_PLAYER_DROP_QUANTITY)
+    throw new Error('Scrap配置失敗の確認には配置単位より大きい携行上限が必要です。');
+  await page.evaluate((quantity) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.state.inventory.materials.scrap = quantity;
+    scene.refreshHud();
+  }, blockedScrapQuantity);
+  const inventoryScrap = page.getByTestId('inventory-scrap');
+  await beginInventoryDrag(page, 'inventory-scrap');
+  await expect(page.getByTestId('inventory-detail')).toHaveAttribute('data-drag-source', 'material:scrap');
+  await dragInventorySlot(page, 'inventory-scrap', '#game');
+  await expect(page.getByTestId('feedback')).toHaveText('置ける場所がありません');
+  await expect(inventoryScrap).toHaveAttribute('data-quantity', String(blockedScrapQuantity));
   expect(await activeWorldItems(page)).toEqual(worldItemsBeforeDrop);
 });
 

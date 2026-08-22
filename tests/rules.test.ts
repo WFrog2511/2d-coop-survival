@@ -23,8 +23,12 @@ import {
   advanceSurvivalState,
   canFireAt,
   collectMaterial,
+  collectMaterialAmount,
+  collectHotbarItem,
   collectWeapon,
   completeReload,
+  createFixedEquipmentInstance,
+  createInitialCombatState,
   createRunSchedule,
   createRunState,
   createWeaponInstance,
@@ -34,11 +38,15 @@ import {
   damagePlayer,
   defeatRun,
   dropAmmoMaterial,
+  dropScrapMaterial,
   droneLateralSpeedAt,
   enemySpeedMultiplierForPhase,
   fireWeapon,
   hasReachedSurvivalLimit,
   hiddenRecyclePathDistanceForPhase,
+  hotbarItemAt,
+  hotbarSlotCountForRole,
+  inventoryWeight,
   inventoryWeaponAt,
   isEnemyDefeated,
   moveInventoryWeapon,
@@ -60,6 +68,7 @@ import {
   startReload,
   type CombatState,
 } from '../src/rules';
+import { COMFORTABLE_CARRY_WEIGHT, MATERIAL_CARRY, MIN_WEIGHT_SPEED_MULTIPLIER, SCRAP_PLAYER_DROP_QUANTITY, weightSpeedMultiplier, weightedMoveSpeed } from '../src/weight-data';
 
 describe('戦闘ルール', () => {
   it('スクラップ表示tierは調整用の数量境界から決定する', () => {
@@ -257,6 +266,7 @@ describe('戦闘ルール', () => {
     });
     expect(collectWeapon(victory, createWeaponInstance('victory-shotgun', 'shotgun'))).toBe(victory);
     expect(collectMaterial(victory, 'scrap', 1)).toBe(victory);
+    expect(dropScrapMaterial(victory)).toEqual({ state: victory, dropped: 0 });
   });
 
   it('ライフルは発射時に1発消費し、境界時だけ次弾を許可する', () => {
@@ -362,6 +372,17 @@ describe('戦闘ルール', () => {
       };
       expect(dropAmmoMaterial(empty, material)).toEqual({ state: empty, dropped: 0 });
     });
+
+    for (const withScrap of [
+      collectMaterial(INITIAL_STATE, 'scrap', 1),
+      collectMaterial(INITIAL_STATE, 'scrap', MATERIAL_CARRY.scrap.capacity),
+    ]) {
+      const scrapDrop = dropScrapMaterial(withScrap);
+      const expectedDrop = Math.min(withScrap.inventory.materials.scrap, SCRAP_PLAYER_DROP_QUANTITY);
+      expect(scrapDrop.dropped).toBe(expectedDrop);
+      expect(scrapDrop.state.inventory.materials.scrap).toBe(withScrap.inventory.materials.scrap - expectedDrop);
+    }
+    expect(dropScrapMaterial(INITIAL_STATE)).toEqual({ state: INITIAL_STATE, dropped: 0 });
   });
 
   it('武器切替はリロードを中断し、残弾を保持する', () => {
@@ -425,9 +446,11 @@ describe('戦闘ルール', () => {
     const shotgun = collectWeapon(INITIAL_STATE, createWeaponInstance('inventory-shotgun', 'shotgun'));
     const revolver = collectWeapon(shotgun, createWeaponInstance('inventory-revolver-a', 'revolver'));
     const duplicateRevolver = collectWeapon(revolver, createWeaponInstance('inventory-revolver-b', 'revolver'));
-    expect(revolver.inventory.quickSlots.map(weapon => weapon?.model)).toEqual(['rifle', 'shotgun', 'revolver']);
-    expect(duplicateRevolver.inventory.backpackSlots[0]).toMatchObject({ id: 'inventory-revolver-b', model: 'revolver' });
-    const selected = selectQuickSlot(duplicateRevolver, 2);
+    const backpackWeapon = collectWeapon(duplicateRevolver, createWeaponInstance('inventory-compact', 'compact-pistol'));
+    expect(revolver.inventory.quickSlots.map(item => item?.kind === 'weapon' ? item.model : null)).toEqual(['rifle', 'shotgun', 'revolver', null]);
+    expect(duplicateRevolver.inventory.quickSlots[3]).toMatchObject({ id: 'inventory-revolver-b', model: 'revolver' });
+    expect(backpackWeapon.inventory.backpackSlots[0]).toMatchObject({ id: 'inventory-compact', model: 'compact-pistol' });
+    const selected = selectQuickSlot(backpackWeapon, 2);
     expect(activeWeapon(selected)).toMatchObject({ model: 'revolver' });
     expect(selected.inventory.selectedQuickSlot).toBe(2);
     expect(selectWeapon(selected, 'shotgun').inventory.selectedQuickSlot).toBe(1);
@@ -451,6 +474,65 @@ describe('戦闘ルール', () => {
     const second = collectMaterial(first, 'scrap', 1);
     expect(second.inventory.materials.scrap).toBeGreaterThan(first.inventory.materials.scrap);
     expect(collectMaterial(second, 'scrap', 0)).toBe(second);
+  });
+
+  it('通常Roleは4枠、QMは6枠を持ち、固定装備と2slot武器を原子的に扱う', () => {
+    const normal = createInitialCombatState('gunner');
+    const quartermaster = createInitialCombatState('quartermaster');
+    expect(normal.inventory.quickSlots).toHaveLength(hotbarSlotCountForRole('gunner'));
+    expect(quartermaster.inventory.quickSlots).toHaveLength(hotbarSlotCountForRole('quartermaster'));
+    expect(quartermaster.inventory.quickSlots.length).toBeGreaterThan(normal.inventory.quickSlots.length);
+
+    const fixed = createFixedEquipmentInstance('manual-fixed', '手動固定装備');
+    const withFixed = collectHotbarItem(normal, fixed);
+    expect(hotbarItemAt(withFixed.inventory, 1)).toMatchObject({ id: fixed.id, kind: 'fixed-equipment' });
+    expect(moveInventoryWeapon(withFixed, { container: 'quick', index: 1 }, { container: 'backpack', index: 0 })).toBe(withFixed);
+    expect(removeInventoryWeapon(withFixed, { container: 'quick', index: 1 })).toBe(withFixed);
+
+    const nightWeapon = createWeaponInstance('night-weapon', 'flamethrower', undefined, undefined, {
+      slotSpan: 2,
+      hotbarOnly: true,
+    });
+    const withNightWeapon = collectWeapon(quartermaster, nightWeapon);
+    expect(hotbarItemAt(withNightWeapon.inventory, 1)).toMatchObject({ id: nightWeapon.id, slotSpan: 2 });
+    expect(hotbarItemAt(withNightWeapon.inventory, 2)).toMatchObject({ id: nightWeapon.id, slotSpan: 2 });
+    const moved = moveInventoryWeapon(withNightWeapon, { container: 'quick', index: 2 }, { container: 'quick', index: 4 });
+    expect(hotbarItemAt(moved.inventory, 1)).toBeNull();
+    expect(hotbarItemAt(moved.inventory, 4)).toMatchObject({ id: nightWeapon.id });
+    expect(hotbarItemAt(moved.inventory, 5)).toMatchObject({ id: nightWeapon.id });
+    expect(moveInventoryWeapon(moved, { container: 'quick', index: 4 }, { container: 'backpack', index: 0 })).toBe(moved);
+  });
+
+  it('重量はitem本体だけを数え、素材取得は設定上限で部分取得する', () => {
+    const oneSlot = collectWeapon(INITIAL_STATE, createWeaponInstance('weight-one', 'flamethrower'));
+    const twoSlots = collectWeapon(INITIAL_STATE, createWeaponInstance('weight-two', 'flamethrower', undefined, undefined, {
+      slotSpan: 2,
+      hotbarOnly: true,
+    }));
+    expect(inventoryWeight(twoSlots.inventory)).toBe(inventoryWeight(oneSlot.inventory));
+    expect(inventoryWeight(oneSlot.inventory)).toBeGreaterThan(inventoryWeight(INITIAL_STATE.inventory));
+
+    const material = 'ballistic-material' as const;
+    const almostFull: CombatState = {
+      ...INITIAL_STATE,
+      inventory: {
+        ...INITIAL_STATE.inventory,
+        materials: {
+          ...INITIAL_STATE.inventory.materials,
+          [material]: MATERIAL_CARRY[material].capacity - 1,
+        },
+      },
+    };
+    const collected = collectMaterialAmount(almostFull, material, AMMO_MATERIALS[material].boxQuantity);
+    expect(collected.collected).toBe(1);
+    expect(collected.state.inventory.materials[material]).toBe(MATERIAL_CARRY[material].capacity);
+    expect(collectMaterialAmount(collected.state, material, 1)).toEqual({ state: collected.state, collected: 0 });
+
+    const comfortable = weightSpeedMultiplier(COMFORTABLE_CARRY_WEIGHT);
+    const overloaded = weightSpeedMultiplier(COMFORTABLE_CARRY_WEIGHT + MATERIAL_CARRY.scrap.capacity);
+    expect(overloaded).toBeLessThan(comfortable);
+    expect(overloaded).toBeGreaterThanOrEqual(MIN_WEIGHT_SPEED_MULTIPLIER);
+    expect(weightedMoveSpeed('gunner', COMFORTABLE_CARRY_WEIGHT + 1)).toBeLessThan(weightedMoveSpeed('gunner', COMFORTABLE_CARRY_WEIGHT));
   });
 
   it('詳細インベントリは武器を移動・交換し、空いた選択quick slotを戦闘に使わない', () => {
@@ -477,7 +559,7 @@ describe('戦闘ルール', () => {
     expect(fireWeapon(moved, 0)).toEqual({ state: moved, fired: false });
     expect(startReload(moved)).toBe(moved);
 
-    const restored = moveInventoryWeapon(moved, { container: 'backpack', index: 0 }, { container: 'quick', index: 1 });
+    const restored = moveInventoryWeapon(moved, { container: 'quick', index: 3 }, { container: 'quick', index: 1 });
     expect(restored.inventory.selectedQuickSlot).toBe(1);
     expect(activeWeapon(restored)).toMatchObject({ model: 'compact-pistol' });
     const swapped = moveInventoryWeapon(restored, { container: 'quick', index: 2 }, { container: 'backpack', index: 1 });
