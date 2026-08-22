@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SCRAP_VISUAL_TIER_THRESHOLDS, scrapVisualTierFor } from '../src/game-data';
+import { SCRAP_PLAYER_DROP_QUANTITY, SCRAP_VISUAL_TIER_THRESHOLDS, scrapVisualTierFor } from '../src/scrap-data';
 import {
   AMMO_BOX_RESPAWN_MS,
   BACKPACK_SLOT_COUNT,
@@ -66,7 +66,7 @@ import {
   startReload,
   type CombatState,
 } from '../src/rules';
-import { COMFORTABLE_CARRY_WEIGHT, MATERIAL_CARRY, MIN_WEIGHT_SPEED_MULTIPLIER, SCRAP_PLAYER_DROP_QUANTITY, weightSpeedMultiplier, weightedMoveSpeed } from '../src/weight-data';
+import { COMFORTABLE_CARRY_WEIGHT, MATERIAL_CARRY, MIN_WEIGHT_SPEED_MULTIPLIER, weightSpeedMultiplier, weightedMoveSpeed } from '../src/weight-data';
 
 describe('戦闘ルール', () => {
   it('スクラップ表示tierは調整用の数量境界から決定する', () => {

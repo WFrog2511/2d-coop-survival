@@ -261,6 +261,20 @@ h1 {
   color: #ffef76;
 }
 
+#hp-panel .armor-resource {
+  color: #8fd8ff;
+}
+
+#hp-panel [data-testid='armor'] {
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+#hp-panel .armor-bar {
+  height: 0.55rem;
+  accent-color: #8fd8ff;
+}
+
 #hp-panel [data-testid='scrap'] {
   font-size: 0.95rem;
   font-variant-numeric: tabular-nums;
@@ -429,6 +443,31 @@ h1 {
 #inventory-detail .inventory-scrap[draggable='false'] {
   color: #9ba9b4;
   cursor: default;
+}
+
+#inventory-detail .scrap-armor-craft {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px;
+  align-items: center;
+  color: #8fd8ff;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+#inventory-detail .scrap-armor-craft button {
+  padding: 5px 7px;
+  border: 1px solid #6ca9c7;
+  border-radius: 4px;
+  color: #d7f4ff;
+  background: #17344a;
+  font-size: 0.72rem;
+}
+
+#inventory-detail .scrap-armor-craft button:disabled {
+  border-color: #53616b;
+  color: #8998a3;
+  background: #252d34;
 }
 
 #inventory-detail output[draggable='true'] {

@@ -2,11 +2,12 @@ import { expect, test } from '@playwright/test';
 import { MAX_NORMAL_SOUND_WAVE_VIEWS } from '../src/acoustic-data';
 import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, SPAWN_PHASE_MS, TILE_SIZE, WORLD_WEAPON_DROP_MAX_PATH_DISTANCE, enemyVisibility, findPath, generateArenaMap, hasLineOfSight, hiddenRecycleThresholdFor, primarySpawnDirection, recycleDelayFor, respawnDelayFor, selectAmmoBoxTiles, spawnDirectionForSlot, type SpawnDirection, type TilePosition, viewportTileRect } from '../src/arena-map';
 import { formatSurvivalTime } from '../src/arena/hud';
-import { INITIAL_WORLD_WEAPON_MODELS, SCRAP_DROP_AMOUNTS, SCRAP_VISUAL_TIER_THRESHOLDS, WORLD_SIDEARM_MODELS, scrapVisualTierFor } from '../src/game-data';
+import { INITIAL_WORLD_WEAPON_MODELS, WORLD_SIDEARM_MODELS } from '../src/game-data';
 import { GUNSLINGER_BOOT_KNIFE_DAMAGE, GUNSLINGER_COMBO_PER_EVENT, GUNSLINGER_COMBO_TIMEOUT_MS, PLAYER_DASH_DURATION_MS } from '../src/player-data';
 import { AMMO_BOX_RESPAWN_MS, AMMO_MATERIAL_BOX_CYCLE, AMMO_MATERIAL_ORDER, AMMO_MATERIALS, ENEMY_INSTANCE_IDS, WEAPON_MODELS, WEAPONS, createRunSchedule, runDurationMs, type AmmoMaterial, type WeaponModel } from '../src/rules';
 import { DEFAULT_RUN_PHASE_DURATIONS_MS } from '../src/run-data';
-import { MATERIAL_CARRY, SCRAP_PLAYER_DROP_QUANTITY } from '../src/weight-data';
+import { SCRAP_ARMOR_CAPACITY, SCRAP_ARMOR_COST, SCRAP_ARMOR_PER_CRAFT, SCRAP_DROP_AMOUNTS, SCRAP_PLAYER_DROP_QUANTITY, SCRAP_VISUAL_TIER_THRESHOLDS, scrapVisualTierFor } from '../src/scrap-data';
+import { MATERIAL_CARRY } from '../src/weight-data';
 
 type EnemyId = (typeof ENEMY_INSTANCE_IDS)[number];
 type EnemyPresentation = 'normal' | 'boundary' | 'hidden';
@@ -19,6 +20,10 @@ type WorldItemEntry = {
   visualTier: string;
   worldColor: string;
   texture: string;
+  originEnemy: number;
+  originPlayer: number;
+  originWreck: number;
+  enemyThreat: number;
 };
 type AmmoBoxEntry = {
   boxId: string;
@@ -151,6 +156,7 @@ type ArenaDebugScene = {
   observedTiles: { get: (key: string) => 'wall' | 'floor' | undefined };
   visibleTileKeys: { has: (key: string) => boolean };
   state: {
+    playerArmor: number;
     inventory: {
       quickSlots: readonly ({ id: string; model: WeaponModel; magazine: number; nextFireAt: number } | null)[];
       materials: Record<AmmoMaterial | 'scrap', number>;
@@ -382,7 +388,7 @@ function tileKeysFromAttribute(value: string | null): string[] {
 async function activeWorldItems(page: import('@playwright/test').Page): Promise<WorldItemEntry[]> {
   const value = await page.getByTestId('world-item-count').getAttribute('data-world-items');
   return tileKeysFromAttribute(value).map((entry) => {
-    const [id, kind, item, tile, quantity, visualTier, worldColor, texture] = entry.split(':');
+    const [id, kind, item, tile, quantity, visualTier, worldColor, texture, originEnemy, originPlayer, originWreck, enemyThreat] = entry.split(':');
     const [x, y] = tile?.split(',').map(Number) ?? [];
     if (
       !id
@@ -391,6 +397,10 @@ async function activeWorldItems(page: import('@playwright/test').Page): Promise<
       || !Number.isInteger(x)
       || !Number.isInteger(y)
       || !Number.isSafeInteger(Number(quantity))
+      || !Number.isSafeInteger(Number(originEnemy))
+      || !Number.isSafeInteger(Number(originPlayer))
+      || !Number.isSafeInteger(Number(originWreck))
+      || !Number.isSafeInteger(Number(enemyThreat))
     ) throw new Error(`world itemの観測値が不正です: ${entry}`);
     return {
       id,
@@ -401,6 +411,10 @@ async function activeWorldItems(page: import('@playwright/test').Page): Promise<
       visualTier: visualTier ?? '',
       worldColor: worldColor ?? '',
       texture: texture ?? '',
+      originEnemy: Number(originEnemy),
+      originPlayer: Number(originPlayer),
+      originWreck: Number(originWreck),
+      enemyThreat: Number(enemyThreat),
     };
   });
 }
@@ -1673,6 +1687,9 @@ test('Issue #57: QMの6枠Hotbar、重量、Scrapの分割配置を試遊でき�
     throw new Error('worldへ置いたスクラップが必要です。');
   expect(firstDroppedScrap.item).toBe('scrap');
   expect(firstDroppedScrap.quantity).toBe(SCRAP_PLAYER_DROP_QUANTITY);
+  expect(firstDroppedScrap.originPlayer).toBe(firstDroppedScrap.quantity);
+  expect(firstDroppedScrap.originEnemy).toBe(0);
+  expect(firstDroppedScrap.enemyThreat).toBe(0);
   await expect(page.getByTestId('pickup-target')).toHaveText(`スクラップ ${SCRAP_PLAYER_DROP_QUANTITY}個`);
 
   const worldItemsBeforeRemainderDrop = await activeWorldItems(page);
@@ -1691,6 +1708,7 @@ test('Issue #57: QMの6枠Hotbar、重量、Scrapの分割配置を試遊でき�
   if (!remainderDrop)
     throw new Error('10個未満の残りScrapを置いたworld itemが必要です。');
   expect(remainderDrop.quantity).toBe(remainingScrap);
+  expect(remainderDrop.originPlayer).toBe(remainingScrap);
 
   await page.keyboard.press('e');
   await page.keyboard.press('e');
@@ -2291,6 +2309,10 @@ test('同じtileのスクラップは数量と見た目を集約しEで取得で
   if (!firstScrap || !secondScrap) throw new Error('集約後のスクラップpickupが必要です。');
   expect(secondScrap.quantity).toBe(dropsToMediumTier * SCRAP_DROP_AMOUNTS.basic);
   expect(secondScrap.visualTier).toBe(scrapVisualTierFor(secondScrap.quantity));
+  expect(secondScrap.originEnemy).toBe(secondScrap.quantity);
+  expect(secondScrap.originPlayer).toBe(0);
+  expect(secondScrap.originWreck).toBe(0);
+  expect(secondScrap.enemyThreat).toBe(secondScrap.quantity);
   if (dropsToMediumTier > 1)
     expect(secondScrap.visualTier).not.toBe(firstScrap.visualTier);
 
@@ -2305,6 +2327,40 @@ test('同じtileのスクラップは数量と見た目を集約しEで取得で
   await page.keyboard.press('e');
   await expect(page.getByTestId('scrap')).toHaveAttribute('data-count', /[1-9]/);
   expect((await activeWorldItems(page)).filter(item => item.id === secondScrap.id)).toHaveLength(0);
+});
+
+test('詳細InventoryでScrap Armorを一回のtransactionとして作成できる', async ({ page }) => {
+  await page.goto(devStartUrl('/?enemyInitialCount=0'));
+  await setArenaPhysics(page, 'pause');
+  await page.evaluate((scrapCost) => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.state.inventory.materials.scrap = scrapCost;
+    scene.refreshHud();
+  }, SCRAP_ARMOR_COST);
+
+  await expect(page.getByTestId('armor')).toHaveAttribute('data-count', '0');
+  await page.keyboard.press('Tab');
+  const craft = page.getByTestId('scrap-armor-craft');
+  await expect(craft).toBeVisible();
+  await expect(craft).toBeEnabled();
+  await expect(craft).toHaveAttribute('data-cost', String(SCRAP_ARMOR_COST));
+  await expect(craft).toHaveAttribute('data-armor', String(SCRAP_ARMOR_PER_CRAFT));
+  await craft.click();
+
+  await expect(page.getByTestId('armor')).toHaveAttribute('data-count', String(SCRAP_ARMOR_PER_CRAFT));
+  await expect(page.getByTestId('armor-bar')).toHaveAttribute(
+    'aria-valuetext',
+    `${SCRAP_ARMOR_PER_CRAFT}/${SCRAP_ARMOR_CAPACITY}`,
+  );
+  await expect(page.getByTestId('inventory-armor')).toHaveText(
+    `${SCRAP_ARMOR_PER_CRAFT}/${SCRAP_ARMOR_CAPACITY}`,
+  );
+  await expect(page.getByTestId('inventory-scrap')).toHaveAttribute('data-quantity', '0');
+  await expect(craft).toBeDisabled();
+  await expect(page.getByTestId('feedback')).toHaveText(
+    `スクラップ${SCRAP_ARMOR_COST}個でアーマーを${SCRAP_ARMOR_PER_CRAFT}作成しました`,
+  );
 });
 
 test('world itemを置けない場合はinventoryとworldを変えずに通知する', async ({ page }) => {

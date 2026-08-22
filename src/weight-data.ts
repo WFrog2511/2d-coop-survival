@@ -29,9 +29,6 @@ export const MATERIAL_CARRY: Record<WeightedMaterialId, MaterialCarryDefinition>
   'special-cell': { unitWeight: 0.06, capacity: 150 },
 };
 
-/** Inventoryからworldへ1回で置くScrapの試遊調整単位。 */
-export const SCRAP_PLAYER_DROP_QUANTITY = 10;
-
 /** Role固有補正と重量補正を分離する基礎歩行速度。 */
 export const ROLE_BASE_MOVE_SPEED: Record<PlayerRoleId, number> = {
   gunner: 210,

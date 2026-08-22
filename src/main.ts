@@ -7,7 +7,7 @@ import { ArenaHud, type AcousticDebugView, type InventoryDragSource, type Invent
 import { createSoundPropagationRenderSnapshot, createSoundPropagationSnapshot, soundWaveLifetimeMs, soundWaveTilesAt, type SoundPropagationRenderSnapshot, type SoundPropagationSnapshot, type SoundWaveTile } from './runtime-acoustic-graph';
 import { createRuntimeAreaGraph, type RuntimeAreaGraph } from './runtime-area-graph';
 import { applyRuntimeTopologyMutations, createRuntimeTopology, type RuntimeTopology, type RuntimeTopologyMutation } from './runtime-topology';
-import { ENEMIES, ENEMY_DEFEAT_HIT_STOP_MS, ENEMY_HIT_STOP_MS, ENEMY_IDS, ENEMY_LABELS, ENEMY_SPAWN_ORDER, INITIAL_ENEMY_IDS, INITIAL_WORLD_WEAPON_MODELS, PLAYER_HIT_STOP_MS, SCRAP_DROP_AMOUNTS, STAGGERED_ENEMIES, scrapVisualTierFor, type ScrapVisualTier } from './game-data';
+import { ENEMIES, ENEMY_DEFEAT_HIT_STOP_MS, ENEMY_HIT_STOP_MS, ENEMY_IDS, ENEMY_LABELS, ENEMY_SPAWN_ORDER, INITIAL_ENEMY_IDS, INITIAL_WORLD_WEAPON_MODELS, PLAYER_HIT_STOP_MS, STAGGERED_ENEMIES } from './game-data';
 import { GUNSLINGER_BOOT_KNIFE_DAMAGE, GUNSLINGER_COMBO_TIMEOUT_MS, PLAYER_DASH_DURATION_MS, PLAYER_ROLES, canDashAt, canFireWhileDashing, dashCooldownUntil, dashDirectionFor, dashSpeedFor, gunslingerComboAfterEvent, gunslingerSpeedBuffUntil, gunslingerSpeedMultiplierAt, reloadDurationForWorldWeapon, type DashDirection, type PlayerRole } from './player-data';
 import { selectNearbyPickup } from './pickups';
 import {
@@ -24,6 +24,7 @@ import {
   collectMaterialAmount,
   collectWeapon,
   completeReload,
+  craftScrapArmor,
   createRunSchedule,
   createWeaponInstance,
   currentRunPhase,
@@ -69,6 +70,19 @@ import {
   type WeaponModel,
 } from './rules';
 import { DEFAULT_RUN_PHASE_DURATIONS_MS } from './run-data';
+import {
+  SCRAP_DROP_AMOUNTS,
+  SCRAP_PLAYER_DROP_QUANTITY,
+  addScrapToPile,
+  createScrapOriginQuantities,
+  enemyOriginScrapQuantity,
+  scrapPileQuantity,
+  scrapVisualTierFor,
+  takeScrapFromPile,
+  type ScrapOrigin,
+  type ScrapOriginQuantities,
+  type ScrapVisualTier,
+} from './scrap-data';
 import { MATERIAL_CARRY, weightedMoveSpeed } from './weight-data';
 
 const WIDTH = 800;
@@ -130,6 +144,7 @@ type MaterialWorldItem = {
   tile: TilePosition;
   quantity: number;
   material: MaterialId;
+  origins: ScrapOriginQuantities;
   visualTier: ScrapVisualTier;
   sprite: Phaser.Physics.Arcade.Image;
 };
@@ -390,6 +405,7 @@ class Arena extends Phaser.Scene {
   create(): void {
     resetArena = () => this.reset();
     arenaHud.setInventoryDropListener((source, target) => this.handleInventoryDrop(source, target));
+    arenaHud.setScrapArmorCraftListener(() => this.craftInventoryScrapArmor());
     this.createTextures();
     this.effects = new ArenaEffects(this, arenaHud.playerHitVignette, this.playerRole.tint);
     this.soundWaveGraphics = this.add.graphics().setDepth(1.5);
@@ -438,6 +454,7 @@ class Arena extends Phaser.Scene {
       window.removeEventListener('keydown', this.onTabKeyDown, true);
       arenaHud.clearInventoryDrag(true);
       arenaHud.setInventoryDropListener(undefined);
+      arenaHud.setScrapArmorCraftListener(undefined);
     });
     this.input.keyboard?.on('keydown-R', () => {
       if (!isSoundWaveModeFocused()) this.reload();
@@ -1023,36 +1040,53 @@ class Arena extends Phaser.Scene {
     });
   }
 
-  private dropScrap(tile: TilePosition, quantity: number): void {
+  private syncScrapWorldItem(item: MaterialWorldItem): void {
+    item.quantity = scrapPileQuantity(item.origins);
+    item.visualTier = scrapVisualTierFor(item.quantity);
+    item.sprite.setData('quantity', item.quantity);
+    item.sprite.setData('visualTier', item.visualTier);
+    item.sprite.setData('originEnemy', item.origins.enemy);
+    item.sprite.setData('originPlayer', item.origins.player);
+    item.sprite.setData('originWreck', item.origins.wreck);
+    item.sprite.setData('enemyThreat', enemyOriginScrapQuantity(item.origins));
+    item.sprite.setTexture(`material-scrap-${item.visualTier}`);
+  }
+
+  private dropScrap(tile: TilePosition, quantity: number, origin: ScrapOrigin): number {
     if (!Number.isSafeInteger(quantity) || quantity <= 0)
-      return;
+      return 0;
     const id = `material-scrap-${tileKey(tile)}`;
     const current = this.worldItemStates.get(id);
     if (current?.kind === 'material') {
-      current.quantity += quantity;
-      current.visualTier = scrapVisualTierFor(current.quantity);
-      current.sprite.setData('quantity', current.quantity);
-      current.sprite.setData('visualTier', current.visualTier);
-      current.sprite.setTexture(`material-scrap-${current.visualTier}`);
-      return;
+      const result = addScrapToPile(current.origins, origin, quantity);
+      if (result.added === 0)
+        return 0;
+      current.origins = result.origins;
+      this.syncScrapWorldItem(current);
+      return result.added;
     }
+    const result = addScrapToPile(createScrapOriginQuantities(), origin, quantity);
+    if (result.added === 0)
+      return 0;
     const point = this.world(tile);
-    const visualTier = scrapVisualTierFor(quantity);
+    const visualTier = scrapVisualTierFor(result.added);
     const sprite = this.physics.add.staticImage(point.x, point.y, `material-scrap-${visualTier}`).setDepth(1);
     sprite.setData('worldItemId', id);
     sprite.setData('tile', { ...tile });
-    sprite.setData('quantity', quantity);
-    sprite.setData('visualTier', visualTier);
     this.worldItems.add(sprite);
-    this.worldItemStates.set(id, {
+    const item: MaterialWorldItem = {
       id,
       kind: 'material',
       tile: { ...tile },
-      quantity,
+      quantity: result.added,
       material: 'scrap',
+      origins: result.origins,
       visualTier,
       sprite,
-    });
+    };
+    this.worldItemStates.set(id, item);
+    this.syncScrapWorldItem(item);
+    return result.added;
   }
 
   private spawnAmmoBox(boxId: string, tile: TilePosition): void {
@@ -1125,7 +1159,9 @@ class Arena extends Phaser.Scene {
         const visualTier = item.kind === 'material' ? item.visualTier : '';
         const worldColor = item.kind === 'ammo-material' ? item.worldColor : '';
         const texture = item.kind === 'ammo-material' ? item.texture : '';
-        return `${item.id}:${item.kind}:${itemType}:${tileKey(item.tile)}:${item.quantity}:${visualTier}:${worldColor}:${texture}`;
+        const origins = item.kind === 'material' ? item.origins : createScrapOriginQuantities();
+        const enemyThreat = item.kind === 'material' ? enemyOriginScrapQuantity(origins) : 0;
+        return `${item.id}:${item.kind}:${itemType}:${tileKey(item.tile)}:${item.quantity}:${visualTier}:${worldColor}:${texture}:${origins.enemy}:${origins.player}:${origins.wreck}:${enemyThreat}`;
       });
   }
 
@@ -1281,8 +1317,8 @@ class Arena extends Phaser.Scene {
 
   /** InventoryのScrapを設定単位以下で、配置成功時だけworldへ移す。 */
   private dropInventoryScrap(): void {
-    const result = dropScrapMaterial(this.state);
-    if (result.dropped === 0)
+    const requested = Math.min(this.state.inventory.materials.scrap, SCRAP_PLAYER_DROP_QUANTITY);
+    if (requested === 0)
       return;
     const tile = selectWorldWeaponDropTile(this.topology, this.tile(this.player), [
       ...this.activeWorldItemTiles(),
@@ -1293,7 +1329,10 @@ class Arena extends Phaser.Scene {
       arenaHud.setInventoryDragMessage('置ける場所がありません');
       return;
     }
-    this.dropScrap(tile, result.dropped);
+    const accepted = this.dropScrap(tile, requested, 'player');
+    const result = dropScrapMaterial(this.state, accepted);
+    if (result.dropped === 0)
+      return;
     this.applyInventoryState(result.state);
     arenaHud.setFeedback(`スクラップを${result.dropped}個置きました`);
     this.updatePickupPrompt();
@@ -2126,7 +2165,7 @@ class Arena extends Phaser.Scene {
     delete this.paths[id];
     delete this.visibilityTiles[id];
     this.respawnCount[id] += 1;
-    this.dropScrap(tile, SCRAP_DROP_AMOUNTS[ENEMIES[id].kind]);
+    this.dropScrap(tile, SCRAP_DROP_AMOUNTS[ENEMIES[id].kind], 'enemy');
     const delay = respawnDelayFor(ENEMIES[id].kind, id, this.respawnCount[id], this.map.seed);
     this.scheduleEnemySpawn(id, 'death', delay);
     if (actor.showDefeatedHitStop(this.time.now))
@@ -2176,8 +2215,9 @@ class Arena extends Phaser.Scene {
     this.contactAt[id] = this.time.now;
     this.startPlayerImpact(ENEMIES[id].kind);
     const previousPlayerHp = this.state.playerHp;
+    const previousPlayerArmor = this.state.playerArmor;
     this.state = damagePlayer(this.state, ENEMIES[id].damage);
-    if (this.state.playerHp < previousPlayerHp)
+    if (this.state.playerHp < previousPlayerHp || this.state.playerArmor < previousPlayerArmor)
       this.resetGunslingerCombo();
     if (!this.state.defeated) {
       this.refreshHud();
@@ -2324,12 +2364,11 @@ class Arena extends Phaser.Scene {
       return;
     this.state = next;
     if (item.kind === 'material' && materialResult) {
-      item.quantity -= materialResult.collected;
+      const pile = takeScrapFromPile(item.origins, materialResult.collected);
+      item.origins = pile.origins;
+      item.quantity = scrapPileQuantity(item.origins);
       if (item.quantity > 0) {
-        item.visualTier = scrapVisualTierFor(item.quantity);
-        item.sprite.setData('quantity', item.quantity);
-        item.sprite.setData('visualTier', item.visualTier);
-        item.sprite.setTexture(`material-scrap-${item.visualTier}`);
+        this.syncScrapWorldItem(item);
       } else {
         this.worldItems.remove(item.sprite, true, true);
         this.worldItemStates.delete(item.id);
@@ -2344,6 +2383,17 @@ class Arena extends Phaser.Scene {
       : `スクラップを${materialResult?.collected ?? 0}取得しました`);
     this.refreshHud();
     this.updatePickupPrompt();
+  }
+
+  /** 詳細Inventoryから一回分の共通Scrap Armorを作成する。 */
+  private craftInventoryScrapArmor(): void {
+    if (!this.inventoryOpen || this.state.defeated || this.state.victory)
+      return;
+    const result = craftScrapArmor(this.state);
+    if (!result.crafted)
+      return;
+    this.applyInventoryState(result.state);
+    arenaHud.setFeedback(`スクラップ${result.spent}個でアーマーを${result.armorAdded}作成しました`);
   }
 
   private collectNearbyPickup(): void {

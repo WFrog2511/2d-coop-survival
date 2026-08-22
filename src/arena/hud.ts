@@ -3,8 +3,9 @@ import { DIRECTION_LABELS, ENEMY_IDS } from '../game-data';
 import { PLAYER_ROLES, type PlayerRoleId } from '../player-data';
 import type { SoundWaveTile } from '../runtime-acoustic-graph';
 import type { RuntimeAreaNodeKind } from '../runtime-area-graph';
-import { AMMO_MATERIAL_ORDER, AMMO_MATERIALS, STABLE_ENEMY_SLOT_COUNT, WEAPONS, activeEnemyCount, activeWeapon, currentRunPhase, currentRunPhaseId, currentRunPhaseLabel, currentWaveNumber, hotbarItemAt, inventoryWeight, isHotbarContinuation, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, type AmmoMaterial, type CombatState, type EnemyInstanceId, type HotbarSlot, type InventorySlotRef, type MaterialId, type RunState } from '../rules';
-import { MATERIAL_CARRY, SCRAP_PLAYER_DROP_QUANTITY } from '../weight-data';
+import { AMMO_MATERIAL_ORDER, AMMO_MATERIALS, STABLE_ENEMY_SLOT_COUNT, WEAPONS, activeEnemyCount, activeWeapon, canCraftScrapArmor, currentRunPhase, currentRunPhaseId, currentRunPhaseLabel, currentWaveNumber, hotbarItemAt, inventoryWeight, isHotbarContinuation, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, type AmmoMaterial, type CombatState, type EnemyInstanceId, type HotbarSlot, type InventorySlotRef, type MaterialId, type RunState } from '../rules';
+import { SCRAP_ARMOR_CAPACITY, SCRAP_ARMOR_COST, SCRAP_ARMOR_PER_CRAFT, SCRAP_PLAYER_DROP_QUANTITY } from '../scrap-data';
+import { MATERIAL_CARRY } from '../weight-data';
 
 export type EnemyHudView = {
   stableId: string;
@@ -215,6 +216,8 @@ export class ArenaHud {
   private minimapTerrainInitialized = false;
   private readonly playerHp = element<HTMLOutputElement>('[data-testid="hp"]');
   private readonly playerHpBar = element<HTMLProgressElement>('[data-testid="hp-bar"]');
+  private readonly playerArmor = element<HTMLOutputElement>('[data-testid="armor"]');
+  private readonly playerArmorBar = element<HTMLProgressElement>('[data-testid="armor-bar"]');
   private readonly scrapHud = element<HTMLOutputElement>('[data-testid="scrap"]');
   private readonly scrapBar = element<HTMLProgressElement>('[data-testid="scrap-bar"]');
   private readonly carryWeightHud = element<HTMLOutputElement>('[data-testid="carry-weight"]');
@@ -251,6 +254,8 @@ export class ArenaHud {
     element<HTMLOutputElement>(`[data-testid="backpack-slot-${index + 1}"]`));
 
   private readonly inventoryScrapHud = element<HTMLOutputElement>('[data-testid="inventory-scrap"]');
+  private readonly inventoryArmorHud = element<HTMLOutputElement>('[data-testid="inventory-armor"]');
+  private readonly scrapArmorCraft = element<HTMLButtonElement>('[data-testid="scrap-armor-craft"]');
   private readonly worldItemCountHud = element<HTMLOutputElement>('[data-testid="world-item-count"]');
   private readonly ammoBoxCountHud = element<HTMLOutputElement>('[data-testid="ammo-box-count"]');
   private readonly playerRoleHud = element<HTMLOutputElement>('[data-testid="role"]');
@@ -285,6 +290,7 @@ export class ArenaHud {
   private readonly retry = element<HTMLButtonElement>('[data-testid="retry"]');
   private readonly enemyHp = enemyRecord(id => element<HTMLOutputElement>(`[data-testid="${id}-hp"]`));
   private inventoryDropListener: ((source: InventoryDragSource, target: InventoryDropTarget) => void) | undefined;
+  private scrapArmorCraftListener: (() => void) | undefined;
   private dragSource: InventoryDragSource | undefined;
   private inventoryDragMessage = false;
 
@@ -362,6 +368,8 @@ export class ArenaHud {
     this.clearInventoryDrag();
   };
 
+  private readonly onScrapArmorCraft = (): void => this.scrapArmorCraftListener?.();
+
   constructor(spawnConfig: string, runConfig: string) {
     this.spawnPhaseHud.dataset.spawnConfig = spawnConfig;
     this.runPanel.dataset.runConfig = runConfig;
@@ -373,6 +381,7 @@ export class ArenaHud {
     this.ammoPouch.addEventListener('dragend', this.onInventoryDragEnd);
     this.game.addEventListener('dragover', this.onGameDragOver);
     this.game.addEventListener('drop', this.onGameDrop);
+    this.scrapArmorCraft.addEventListener('click', this.onScrapArmorCraft);
   }
 
   public onRetry(listener: () => void): void {
@@ -382,6 +391,11 @@ export class ArenaHud {
   /** Sceneごとに差し替える詳細インベントリのdrop処理を登録する。 */
   public setInventoryDropListener(listener: ((source: InventoryDragSource, target: InventoryDropTarget) => void) | undefined): void {
     this.inventoryDropListener = listener;
+  }
+
+  /** Sceneごとに差し替えるScrap Armor作成処理を登録する。 */
+  public setScrapArmorCraftListener(listener: (() => void) | undefined): void {
+    this.scrapArmorCraftListener = listener;
   }
 
   public setPlayerRole(roleId: PlayerRoleId): void {
@@ -584,6 +598,11 @@ export class ArenaHud {
   public refresh(view: ArenaHudView): void {
     this.playerHp.value = String(view.state.playerHp);
     this.playerHpBar.value = view.state.playerHp;
+    this.playerArmor.value = String(view.state.playerArmor);
+    this.playerArmor.dataset.count = String(view.state.playerArmor);
+    this.playerArmorBar.max = SCRAP_ARMOR_CAPACITY;
+    this.playerArmorBar.value = view.state.playerArmor;
+    this.playerArmorBar.setAttribute('aria-valuetext', `${view.state.playerArmor}/${SCRAP_ARMOR_CAPACITY}`);
     ENEMY_IDS.forEach((id) => {
       this.enemyHp[id].value = String(view.state.enemies[id].hp);
     });
@@ -681,6 +700,12 @@ export class ArenaHud {
     this.inventoryScrapHud.dataset.dropQuantity = String(nextScrapDropQuantity);
     this.inventoryScrapHud.dataset.dragKind = 'material';
     this.inventoryScrapHud.draggable = state.inventory.materials.scrap > 0;
+    this.inventoryArmorHud.value = `${state.playerArmor}/${SCRAP_ARMOR_CAPACITY}`;
+    this.scrapArmorCraft.textContent = `作成 Scrap ${SCRAP_ARMOR_COST} → Armor ${SCRAP_ARMOR_PER_CRAFT}`;
+    this.scrapArmorCraft.disabled = !canCraftScrapArmor(state);
+    this.scrapArmorCraft.dataset.cost = String(SCRAP_ARMOR_COST);
+    this.scrapArmorCraft.dataset.armor = String(SCRAP_ARMOR_PER_CRAFT);
+    this.scrapArmorCraft.dataset.capacity = String(SCRAP_ARMOR_CAPACITY);
   }
 
   /** 弾薬ポーチは3素材の所持数とworld drop情報を一覧表示する。 */

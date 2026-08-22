@@ -47,6 +47,8 @@
               <output class="carry-weight" data-testid="carry-weight" data-weight="0">重量 0.0</output>
             </span>
             <progress data-testid="hp-bar" max="100" value="100" aria-label="プレイヤーHP"></progress>
+            <span class="armor-resource">ARMOR <output data-testid="armor" data-count="0">0</output></span>
+            <progress class="armor-bar" data-testid="armor-bar" max="100" value="0" aria-label="スクラップアーマー"></progress>
             <span class="scrap-resource">SCRAP <output data-testid="scrap" data-count="0">0</output></span>
             <progress class="scrap-bar" data-testid="scrap-bar" max="1" value="0" aria-label="スクラップ"></progress>
           </aside>
@@ -98,6 +100,10 @@
             <section aria-label="循環資源">
               <span class="inventory-panel-caption">循環資源</span>
               <output class="inventory-scrap" data-testid="inventory-scrap" data-material="scrap" data-quantity="0" data-drop-quantity="0" data-drag-kind="material" draggable="false">◆ スクラップ 0（0個を置く）</output>
+              <div class="scrap-armor-craft">
+                <span>アーマー <output data-testid="inventory-armor">0/100</output></span>
+                <button data-testid="scrap-armor-craft" type="button" disabled>アーマー作成</button>
+              </div>
             </section>
           </aside>
           <aside id="ammo-pouch" class="game-overlay" data-testid="ammo-pouch" data-open="false" hidden aria-label="弾薬ポーチ">

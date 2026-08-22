@@ -7,7 +7,13 @@ import {
 } from './ammo-data';
 import type { PlayerRoleId } from './player-data';
 import { DEFAULT_RUN_PHASE_DURATIONS_MS } from './run-data';
-import { MATERIAL_CARRY, SCRAP_PLAYER_DROP_QUANTITY, WEAPON_WEIGHTS, type WeightedMaterialId } from './weight-data';
+import {
+  SCRAP_ARMOR_CAPACITY,
+  SCRAP_ARMOR_COST,
+  SCRAP_ARMOR_PER_CRAFT,
+  SCRAP_PLAYER_DROP_QUANTITY,
+} from './scrap-data';
+import { MATERIAL_CARRY, WEAPON_WEIGHTS, type WeightedMaterialId } from './weight-data';
 
 export {
   AMMO_MATERIAL_BOX_CYCLE,
@@ -183,6 +189,7 @@ export type EnemyState = {
 /** プレイヤー、武器、敵をまとめた純粋な戦闘状態。 */
 export type CombatState = {
   playerHp: number;
+  playerArmor: number;
   defeated: boolean;
   victory: boolean;
   inventory: InventoryState;
@@ -200,6 +207,14 @@ export type MaterialDropResult = {
 export type MaterialCollectResult = {
   state: CombatState;
   collected: number;
+};
+
+/** Scrap Armor作成の成否と単一transactionの差分。 */
+export type ScrapArmorCraftResult = {
+  state: CombatState;
+  crafted: boolean;
+  spent: number;
+  armorAdded: number;
 };
 
 /** 発射可否と更新後の状態。 */
@@ -332,6 +347,7 @@ export function createInitialCombatState(roleId: PlayerRoleId = 'gunner'): Comba
   quickSlots[0] = createWeaponInstance('starter-rifle', 'rifle');
   return {
     playerHp: 100,
+    playerArmor: 0,
     defeated: false,
     victory: false,
     inventory: {
@@ -700,7 +716,47 @@ export function completeCombatVictory(state: CombatState): CombatState {
 }
 
 /**
- * プレイヤーへダメージを適用する。
+ * 現在stateで一回分の共通Scrap Armorを作成できるか返す。
+ *
+ * @param state 現在の戦闘状態。
+ * @returns Scrap、Armor空き、terminal条件を満たす場合はtrue。
+ */
+export function canCraftScrapArmor(state: CombatState): boolean {
+  return !state.defeated
+    && !state.victory
+    && state.inventory.materials.scrap >= SCRAP_ARMOR_COST
+    && state.playerArmor + SCRAP_ARMOR_PER_CRAFT <= SCRAP_ARMOR_CAPACITY;
+}
+
+/**
+ * Scrap消費とArmor加算を一つのtransactionとして適用する。
+ *
+ * @param state 現在の戦闘状態。
+ * @returns 作成成否、消費量、追加Armorを含む更新結果。
+ */
+export function craftScrapArmor(state: CombatState): ScrapArmorCraftResult {
+  if (!canCraftScrapArmor(state))
+    return { state, crafted: false, spent: 0, armorAdded: 0 };
+  return {
+    crafted: true,
+    spent: SCRAP_ARMOR_COST,
+    armorAdded: SCRAP_ARMOR_PER_CRAFT,
+    state: {
+      ...state,
+      playerArmor: state.playerArmor + SCRAP_ARMOR_PER_CRAFT,
+      inventory: {
+        ...state.inventory,
+        materials: {
+          ...state.inventory.materials,
+          scrap: state.inventory.materials.scrap - SCRAP_ARMOR_COST,
+        },
+      },
+    },
+  };
+}
+
+/**
+ * プレイヤーへArmor優先でダメージを適用する。
  *
  * @param state 現在の戦闘状態。
  * @param amount 減算する体力量。
@@ -709,8 +765,19 @@ export function completeCombatVictory(state: CombatState): CombatState {
 export function damagePlayer(state: CombatState, amount: number): CombatState {
   if (state.defeated || state.victory)
     return state;
-  const playerHp = Math.max(0, state.playerHp - amount);
-  return { ...state, playerHp, defeated: playerHp === 0, reloading: playerHp === 0 ? null : state.reloading };
+  const damage = Number.isFinite(amount) ? Math.max(0, amount) : 0;
+  if (damage === 0)
+    return state;
+  const armorDamage = Math.min(state.playerArmor, damage);
+  const playerArmor = state.playerArmor - armorDamage;
+  const playerHp = Math.max(0, state.playerHp - (damage - armorDamage));
+  return {
+    ...state,
+    playerHp,
+    playerArmor,
+    defeated: playerHp === 0,
+    reloading: playerHp === 0 ? null : state.reloading,
+  };
 }
 
 function isInventorySlotRef(inventory: InventoryState, slot: InventorySlotRef): boolean {
@@ -1193,12 +1260,17 @@ export function dropAmmoMaterial(state: CombatState, material: AmmoMaterial): Ma
  * 実際のstate反映はworld配置成功後に呼出し側が採用する。
  *
  * @param state 現在の戦闘状態。
+ * @param maximum 一回で取り出す上限。
  * @returns worldへ出すScrap数と候補state。
  */
-export function dropScrapMaterial(state: CombatState): MaterialDropResult {
+export function dropScrapMaterial(
+  state: CombatState,
+  maximum = SCRAP_PLAYER_DROP_QUANTITY,
+): MaterialDropResult {
   if (state.defeated || state.victory)
     return { state, dropped: 0 };
-  const dropped = Math.min(state.inventory.materials.scrap, SCRAP_PLAYER_DROP_QUANTITY);
+  const normalizedMaximum = Number.isSafeInteger(maximum) ? Math.max(0, maximum) : 0;
+  const dropped = Math.min(state.inventory.materials.scrap, normalizedMaximum);
   if (dropped <= 0)
     return { state, dropped: 0 };
   return {
