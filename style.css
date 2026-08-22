@@ -204,9 +204,14 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
-#run-panel:is([data-phase='preparation'], [data-phase='rest']) {
+#run-panel[data-phase='day'] {
   border-color: #e2bb78;
   background: rgb(107 87 59 / 88%);
+}
+
+#run-panel[data-phase='boss-night'] {
+  border-color: #d7a0ff;
+  background: rgb(63 34 84 / 92%);
 }
 
 .gunslinger-combo {

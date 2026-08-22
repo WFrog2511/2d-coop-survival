@@ -15,14 +15,12 @@ import {
   AMMO_MATERIAL_BOX_CYCLE,
   AMMO_MATERIAL_ORDER,
   AMMO_MATERIALS,
-  COMBAT_WAVE_DURATION_MS,
-  REST_DURATION_MS,
   WEAPONS,
   WEAPON_MODEL_ORDER,
   activeWeapon,
   advanceRunState,
-  advanceSurvivalState,
   cancelReload,
+  completeCombatVictory,
   collectMaterialAmount,
   collectWeapon,
   completeReload,
@@ -44,6 +42,7 @@ import {
   isEnemyDefeated,
   moveInventoryWeapon,
   recordEnemyDefeated,
+  recordBossDefeated,
   recordEnemyRecycled,
   recordEnemySpawned,
   remainingSurvivalMs,
@@ -52,6 +51,7 @@ import {
   respawnEnemy,
   retryCombat,
   retryRun,
+  runPhaseStartMs,
   runDurationMs,
   selectQuickSlot,
   startReload,
@@ -68,6 +68,7 @@ import {
   type WeaponInstance,
   type WeaponModel,
 } from './rules';
+import { DEFAULT_RUN_PHASE_DURATIONS_MS } from './run-data';
 import { MATERIAL_CARRY, weightedMoveSpeed } from './weight-data';
 
 const WIDTH = 800;
@@ -80,10 +81,8 @@ const DEFAULT_ENEMY_SPAWN_CANDIDATE_POOL = 10;
 const MIN_ENEMY_STAGGER_INTERVAL_MS = 500;
 const MAX_ENEMY_STAGGER_INTERVAL_MS = 5000;
 const MAX_ENEMY_SPAWN_CANDIDATE_POOL = ARENA_WIDTH_TILES * ARENA_HEIGHT_TILES;
-const MIN_COMBAT_WAVE_DURATION_MS = 1000;
-const MAX_COMBAT_WAVE_DURATION_MS = 300000;
-const MIN_REST_DURATION_MS = 500;
-const MAX_REST_DURATION_MS = 120000;
+const MIN_RUN_PHASE_DURATION_MS = 500;
+const MAX_RUN_PHASE_DURATION_MS = 300000;
 const MAP_PALETTE_FADE_MS = 450;
 const VISIBILITY_MASK_TEXTURE_KEY = 'visibility-mask';
 type EnemySpawnReason = 'initial' | 'stagger' | 'death' | 'recycle' | 'debug';
@@ -199,13 +198,31 @@ function resolveEnemySpawnConfig(): EnemySpawnConfig {
   };
 }
 
-/** DEV用combat/rest queryを安全な既定値へ正規化し、本番では読み取らない。 */
+/** DEV用phase queryを安全な既定値へ正規化し、本番では読み取らない。 */
 function resolveRunSchedule(): RunSchedule {
   const query = IS_DEV ? new URLSearchParams(window.location.search) : new URLSearchParams();
-  return createRunSchedule(
-    readDevIntegerQuery(query, 'combatWaveDurationMs', COMBAT_WAVE_DURATION_MS, MIN_COMBAT_WAVE_DURATION_MS, MAX_COMBAT_WAVE_DURATION_MS),
-    readDevIntegerQuery(query, 'restDurationMs', REST_DURATION_MS, MIN_REST_DURATION_MS, MAX_REST_DURATION_MS),
+  const legacyNightDurationMs = query.has('combatWaveDurationMs')
+    ? readDevIntegerQuery(query, 'combatWaveDurationMs', DEFAULT_RUN_PHASE_DURATIONS_MS.night1DurationMs, MIN_RUN_PHASE_DURATION_MS, MAX_RUN_PHASE_DURATION_MS)
+    : undefined;
+  const legacyDayDurationMs = query.has('restDurationMs')
+    ? readDevIntegerQuery(query, 'restDurationMs', DEFAULT_RUN_PHASE_DURATIONS_MS.day1DurationMs, MIN_RUN_PHASE_DURATION_MS, MAX_RUN_PHASE_DURATION_MS)
+    : undefined;
+  const duration = (key: keyof RunSchedule, fallback: number): number => readDevIntegerQuery(
+    query,
+    key,
+    fallback,
+    MIN_RUN_PHASE_DURATION_MS,
+    MAX_RUN_PHASE_DURATION_MS,
   );
+  return createRunSchedule({
+    day1DurationMs: duration('day1DurationMs', legacyDayDurationMs ?? DEFAULT_RUN_PHASE_DURATIONS_MS.day1DurationMs),
+    night1DurationMs: duration('night1DurationMs', legacyNightDurationMs ?? DEFAULT_RUN_PHASE_DURATIONS_MS.night1DurationMs),
+    day2DurationMs: duration('day2DurationMs', legacyDayDurationMs ?? DEFAULT_RUN_PHASE_DURATIONS_MS.day2DurationMs),
+    night2DurationMs: duration('night2DurationMs', legacyNightDurationMs ?? DEFAULT_RUN_PHASE_DURATIONS_MS.night2DurationMs),
+    day3DurationMs: duration('day3DurationMs', legacyDayDurationMs ?? DEFAULT_RUN_PHASE_DURATIONS_MS.day3DurationMs),
+    night3DurationMs: duration('night3DurationMs', legacyNightDurationMs ?? DEFAULT_RUN_PHASE_DURATIONS_MS.night3DurationMs),
+    finalDayDurationMs: duration('finalDayDurationMs', legacyDayDurationMs ?? DEFAULT_RUN_PHASE_DURATIONS_MS.finalDayDurationMs),
+  });
 }
 
 function readDevIntegerQuery(
@@ -235,7 +252,7 @@ function formatEnemySpawnConfig(config: EnemySpawnConfig): string {
 }
 
 function formatRunSchedule(schedule: RunSchedule): string {
-  return `combatWaveDurationMs=${schedule.combatWaveDurationMs};restDurationMs=${schedule.restDurationMs}`;
+  return Object.entries(schedule).map(([key, value]) => `${key}=${value}`).join(';');
 }
 
 const ENEMY_SPAWN_CONFIG = resolveEnemySpawnConfig();
@@ -643,6 +660,15 @@ class Arena extends Phaser.Scene {
     this.debugPlayerInvulnerable = enabled;
   }
 
+  /** DEV用にBoss撃破eventを発生させ、Boss Nightの勝利境界を検証する。 */
+  public debugDefeatBoss(): void {
+    if (!IS_DEV)
+      throw new Error('debugDefeatBossはDEV環境だけで使用できます。');
+    if (recordBossDefeated(this.runState) === this.runState)
+      throw new Error('Boss Night以外ではBoss撃破を記録できません。');
+    this.enterTerminal('victory');
+  }
+
   public debugMovePlayerTo(tile: TilePosition): void {
     if (!IS_DEV)
       throw new Error('debugMovePlayerToはDEV環境だけで使用できます。');
@@ -890,7 +916,7 @@ class Arena extends Phaser.Scene {
     const wallArt = this.add.graphics().setDepth(-1);
     const world = this.mapWorldSize();
     const tileSize = this.topology.tileSize;
-    const palette = phase === 'combat'
+    const palette = phase !== 'day'
       ? { ground: 0x101827, grid: 0x31516b, wall: 0x26374a, wallEdge: 0x55728b }
       : { ground: 0x6b573b, grid: 0xae8a58, wall: 0x79573a, wallEdge: 0xe2bb78 };
     ground.fillStyle(palette.ground, 1).fillRect(0, 0, world.width, world.height).lineStyle(1, palette.grid, 0.55);
@@ -909,7 +935,7 @@ class Arena extends Phaser.Scene {
       const y = reserve.bounds.top * tileSize;
       const width = (reserve.bounds.right - reserve.bounds.left + 1) * tileSize;
       const height = (reserve.bounds.bottom - reserve.bounds.top + 1) * tileSize;
-      const marker = phase === 'combat' ? 0xc58cff : 0x6d3b0b;
+      const marker = phase !== 'day' ? 0xc58cff : 0x6d3b0b;
       wallArt.fillStyle(marker, 0.22).fillRect(x, y, width, height).lineStyle(3, marker, 1).strokeRect(x + 1.5, y + 1.5, width - 3, height - 3);
       Object.values(reserve.approaches).forEach((approach) => {
         wallArt.fillStyle(marker, 1).fillCircle(
@@ -1317,24 +1343,11 @@ class Arena extends Phaser.Scene {
 
   private updateSurvival(): void {
     const elapsedMs = this.time.now - this.survivalStartedAt;
-    const nextRunState = advanceRunState(this.runState, elapsedMs);
-    this.runState = nextRunState;
+    this.runState = advanceRunState(this.runState, elapsedMs);
     this.updateMapPalette();
     if (this.hasReachedInitialCombat(elapsedMs))
       this.startEnemyLifecycle();
     this.updateSurvivalHud();
-    if (nextRunState.status !== 'victory')
-      return;
-    const nextCombatState = advanceSurvivalState(
-      this.state,
-      this.survivalStartedAt,
-      this.time.now,
-      runDurationMs(nextRunState.schedule),
-    );
-    if (nextCombatState === this.state)
-      return;
-    this.state = nextCombatState;
-    this.enterTerminal('victory');
   }
 
   private updateSurvivalHud(): void {
@@ -1360,7 +1373,7 @@ class Arena extends Phaser.Scene {
       || !this.hasReachedInitialCombat()
     ) return;
     this.enemyLifecycleStarted = true;
-    this.combatStartedAt = this.survivalStartedAt + this.runState.schedule.restDurationMs;
+    this.combatStartedAt = this.survivalStartedAt + runPhaseStartMs(this.runState.schedule, 'night-1');
     initialEnemyIdsFor(ENEMY_SPAWN_CONFIG).forEach((id) => {
       if (!this.spawnEnemy(id, 'initial'))
         this.scheduleEnemySpawn(id, 'initial', 1000);
@@ -1374,7 +1387,7 @@ class Arena extends Phaser.Scene {
 
   private hasReachedInitialCombat(elapsedMs = this.time.now - this.survivalStartedAt): boolean {
     return this.runState.status === 'playing'
-      && elapsedMs >= this.runState.schedule.restDurationMs;
+      && elapsedMs >= runPhaseStartMs(this.runState.schedule, 'night-1');
   }
 
   private currentSpawnPhase(): number {
@@ -2187,11 +2200,16 @@ class Arena extends Phaser.Scene {
   }
 
   private enterTerminal(result: 'defeat' | 'victory'): void {
-    this.runState = result === 'defeat'
+    const nextRunState = result === 'defeat'
       ? defeatRun(this.runState)
-      : advanceRunState(this.runState, runDurationMs(this.runState.schedule));
+      : recordBossDefeated(this.runState);
+    if (result === 'victory' && nextRunState === this.runState)
+      return;
+    this.runState = nextRunState;
     this.stopRunTimers();
-    this.state = cancelReload(this.state);
+    this.state = result === 'victory'
+      ? completeCombatVictory(this.state)
+      : cancelReload(this.state);
     this.resetGunslingerState();
     this.clearSoundWaves();
     this.player.setVelocity(0, 0);

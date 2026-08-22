@@ -25,14 +25,14 @@
           </aside>
           <aside id="survival-panel" class="game-overlay" aria-label="waveとフェーズ残り時間">
             <span>Wave <output data-testid="wave" data-state="playing">1</output></span>
-            <span><output data-testid="run-phase" data-phase="preparation">昼（準備）</output> 残り <output data-testid="phase-remaining">01:00</output></span>
-            <output class="survival-time" data-testid="survival-time" hidden>10:30</output>
+            <span><output data-testid="run-phase" data-phase="day" data-phase-id="day-1">昼1（探索）</output> 残り <output data-testid="phase-remaining" data-timed="true">02:30</output></span>
+            <output class="survival-time" data-testid="survival-time" hidden>14:30</output>
             <output data-testid="wave-remaining" hidden>00:00</output>
           </aside>
           <aside id="minimap-panel" class="game-overlay" aria-label="ミニマップ">
             <canvas data-testid="minimap" width="226" height="142"></canvas>
           </aside>
-          <aside id="run-panel" class="game-overlay" data-testid="run-panel" data-phase="preparation" aria-label="撃破数">
+          <aside id="run-panel" class="game-overlay" data-testid="run-panel" data-phase="day" data-phase-id="day-1" aria-label="撃破数">
             <span>撃破 <output data-testid="kills">0</output></span>
             <span class="gunslinger-combo" data-testid="gunslinger-combo-panel" hidden>コンボ <output data-testid="gunslinger-combo" data-active="false" data-speed-multiplier="1">0</output></span>
             <div hidden>

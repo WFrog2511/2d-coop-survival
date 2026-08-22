@@ -6,6 +6,7 @@ import {
   type WeaponModel,
 } from './ammo-data';
 import type { PlayerRoleId } from './player-data';
+import { DEFAULT_RUN_PHASE_DURATIONS_MS } from './run-data';
 import { MATERIAL_CARRY, SCRAP_PLAYER_DROP_QUANTITY, WEAPON_WEIGHTS, type WeightedMaterialId } from './weight-data';
 
 export {
@@ -112,36 +113,53 @@ export const ENEMY_INSTANCE_IDS = [
 /** 安定した敵枠を表す個別識別子。 */
 export type EnemyInstanceId = (typeof ENEMY_INSTANCE_IDS)[number];
 export const WAVE_COUNT = 3;
-export const COMBAT_WAVE_DURATION_MS = 150000;
-export const REST_DURATION_MS = 60000;
-export const WAVE_DURATION_MS = COMBAT_WAVE_DURATION_MS;
-export const SURVIVAL_LIMIT_MS = COMBAT_WAVE_DURATION_MS * WAVE_COUNT + REST_DURATION_MS * WAVE_COUNT;
 export const STABLE_ENEMY_SLOT_COUNT = ENEMY_INSTANCE_IDS.length;
 export const AMMO_BOX_RESPAWN_MS = 30000;
 
 /** runの継続中またはterminalの状態を表す。 */
 export type RunStatus = 'playing' | 'victory' | 'defeat';
 
-/** 初回準備、戦闘、wave間休憩を表す。 */
-export type RunPhase = 'preparation' | 'combat' | 'rest';
+/** 昼、通常夜、時間制限のないBoss夜を表す。 */
+export type RunPhase = 'day' | 'night' | 'boss-night';
 
-/** 初回準備、3 combat wave、2 restを決めるrun時間設定。 */
+/** run内で一意な昼夜phaseの識別子。 */
+export type RunPhaseId = 'day-1' | 'night-1' | 'day-2' | 'night-2' | 'day-3' | 'night-3' | 'final-day' | 'boss-night';
+
+/** 7つの時間制phaseを個別に調整するrun時間設定。 */
 export type RunSchedule = {
-  combatWaveDurationMs: number;
-  restDurationMs: number;
+  day1DurationMs: number;
+  night1DurationMs: number;
+  day2DurationMs: number;
+  night2DurationMs: number;
+  day3DurationMs: number;
+  night3DurationMs: number;
+  finalDayDurationMs: number;
 };
 
-/** URL未指定時に使う3 combat waveと共通の昼時間設定。 */
-export const DEFAULT_RUN_SCHEDULE: RunSchedule = {
-  combatWaveDurationMs: COMBAT_WAVE_DURATION_MS,
-  restDurationMs: REST_DURATION_MS,
-};
+type RunScheduleKey = keyof RunSchedule;
+
+type TimedRunPhaseDefinition = Readonly<{
+  id: Exclude<RunPhaseId, 'boss-night'>;
+  kind: Exclude<RunPhase, 'boss-night'>;
+  wave: 1 | 2 | 3 | null;
+  scheduleKey: RunScheduleKey;
+}>;
+
+const TIMED_RUN_PHASES: readonly TimedRunPhaseDefinition[] = [
+  { id: 'day-1', kind: 'day', wave: 1, scheduleKey: 'day1DurationMs' },
+  { id: 'night-1', kind: 'night', wave: 1, scheduleKey: 'night1DurationMs' },
+  { id: 'day-2', kind: 'day', wave: 2, scheduleKey: 'day2DurationMs' },
+  { id: 'night-2', kind: 'night', wave: 2, scheduleKey: 'night2DurationMs' },
+  { id: 'day-3', kind: 'day', wave: 3, scheduleKey: 'day3DurationMs' },
+  { id: 'night-3', kind: 'night', wave: 3, scheduleKey: 'night3DurationMs' },
+  { id: 'final-day', kind: 'day', wave: null, scheduleKey: 'finalDayDurationMs' },
+];
 
 /** stableな敵枠がspawn、撃破、recycleのどの段階にあるかを表す。 */
 export type RunEnemySlotStatus = 'waiting' | 'active' | 'respawning' | 'recycling';
 
 /**
- * 3 waveの時間進行と敵枠の観測値をまとめた純粋なrun状態。
+ * 3回の昼夜とBoss夜の進行、敵枠の観測値をまとめた純粋なrun状態。
  *
  * `enemySlots`は実際にspawn成功した枠だけを`active`にするため、
  * strict spawnの再試行中もHUDの現在数とPhaser spriteを一致させられる。
@@ -352,31 +370,50 @@ function normalizedRunDurationMs(value: number, fallback: number): number {
   return Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
 
+/** URL未指定時に使う7つの時間制phase設定。 */
+export const DEFAULT_RUN_SCHEDULE: RunSchedule = { ...DEFAULT_RUN_PHASE_DURATIONS_MS };
+
 /**
  * run設定を正の安全な整数へ正規化する。
  *
- * @param combatWaveDurationMs 1 combat waveの時間。
- * @param restDurationMs wave間restの時間。
+ * 数値2引数は既存DEVテスト用に、全Nightと全Dayへ同じ時間を適用する。
+ * object指定では7 phaseを個別に上書きできる。
+ *
+ * @param input phase別上書き、または全Nightへ使う時間。
+ * @param uniformDayDurationMs 数値指定時に全Dayへ使う時間。
  * @returns 正規化済みのrun時間設定。
  */
 export function createRunSchedule(
-  combatWaveDurationMs = COMBAT_WAVE_DURATION_MS,
-  restDurationMs = REST_DURATION_MS,
+  input: Partial<RunSchedule> | number = {},
+  uniformDayDurationMs: number = DEFAULT_RUN_PHASE_DURATIONS_MS.day1DurationMs,
 ): RunSchedule {
-  return {
-    combatWaveDurationMs: normalizedRunDurationMs(combatWaveDurationMs, COMBAT_WAVE_DURATION_MS),
-    restDurationMs: normalizedRunDurationMs(restDurationMs, REST_DURATION_MS),
-  };
+  const overrides: Partial<RunSchedule> = typeof input === 'number'
+    ? {
+        day1DurationMs: uniformDayDurationMs,
+        night1DurationMs: input,
+        day2DurationMs: uniformDayDurationMs,
+        night2DurationMs: input,
+        day3DurationMs: uniformDayDurationMs,
+        night3DurationMs: input,
+        finalDayDurationMs: uniformDayDurationMs,
+      }
+    : input;
+  return Object.fromEntries(
+    Object.entries(DEFAULT_RUN_PHASE_DURATIONS_MS).map(([key, fallback]) => {
+      const scheduleKey = key as RunScheduleKey;
+      return [scheduleKey, normalizedRunDurationMs(overrides[scheduleKey] ?? fallback, fallback)];
+    }),
+  ) as RunSchedule;
 }
 
 /**
- * 初回準備、3 combat wave、wave間休憩を含むrun総時間を返す。
+ * Boss Night開始までの7つの時間制phase総時間を返す。
  *
  * @param schedule 対象runの時間設定。
- * @returns victory境界となる総ミリ秒。
+ * @returns Boss Night開始境界となる総ミリ秒。
  */
 export function runDurationMs(schedule: RunSchedule): number {
-  return schedule.combatWaveDurationMs * WAVE_COUNT + schedule.restDurationMs * WAVE_COUNT;
+  return TIMED_RUN_PHASES.reduce((total, phase) => total + schedule[phase.scheduleKey], 0);
 }
 
 function normalizedRunElapsedMs(elapsedMs: number, schedule: RunSchedule): number {
@@ -385,16 +422,13 @@ function normalizedRunElapsedMs(elapsedMs: number, schedule: RunSchedule): numbe
 }
 
 /**
- * 新しいrunを未spawnの12 stable slotと初回準備時間設定とともに作成する。
+ * 新しいrunを未spawnの12 stable slotとDay 1時間設定とともに作成する。
  *
- * @param schedule combat/restの時間設定。
+ * @param schedule 7つの時間制phase設定。
  * @returns 初期化済みのrun状態。
  */
 export function createRunState(schedule: RunSchedule = DEFAULT_RUN_SCHEDULE): RunState {
-  const normalizedSchedule = createRunSchedule(
-    schedule.combatWaveDurationMs,
-    schedule.restDurationMs,
-  );
+  const normalizedSchedule = createRunSchedule(schedule);
   return {
     status: 'playing',
     schedule: normalizedSchedule,
@@ -405,100 +439,154 @@ export function createRunState(schedule: RunSchedule = DEFAULT_RUN_SCHEDULE): Ru
 }
 
 /**
- * run開始からの絶対経過時間を使い、waveと勝利境界へ決定的に進める。
+ * run開始からの絶対経過時間を使い、Boss Night境界まで決定的に進める。
  *
  * @param state 現在のrun状態。
  * @param elapsedMs run開始からの絶対経過ミリ秒。
- * @returns 経過時間と必要な勝利状態を反映したrun状態。
+ * @returns 経過時間を反映したrun状態。時間だけでは勝利しない。
  */
 export function advanceRunState(state: RunState, elapsedMs: number): RunState {
   if (state.status !== 'playing') return state;
   const nextElapsedMs = Math.max(state.elapsedMs, normalizedRunElapsedMs(elapsedMs, state.schedule));
-  const status: RunStatus = nextElapsedMs >= runDurationMs(state.schedule) ? 'victory' : 'playing';
-  if (nextElapsedMs === state.elapsedMs && status === state.status)
+  if (nextElapsedMs === state.elapsedMs)
     return state;
-  return { ...state, elapsedMs: nextElapsedMs, status };
+  return { ...state, elapsedMs: nextElapsedMs };
+}
+
+function timedRunPhaseAt(state: RunState): { definition: TimedRunPhaseDefinition; startMs: number; endMs: number } | undefined {
+  let startMs = 0;
+  for (const definition of TIMED_RUN_PHASES) {
+    const endMs = startMs + state.schedule[definition.scheduleKey];
+    if (state.elapsedMs < endMs)
+      return { definition, startMs, endMs };
+    startMs = endMs;
+  }
+  return undefined;
 }
 
 /**
- * 初回準備または現在phaseが属する1始まりのwave番号を返す。
+ * 指定phaseが始まるrun経過時間を返す。
  *
- * @param state 現在のrun状態。
- * @returns 1から3の範囲に収めたwave番号。
+ * @param schedule 対象runの時間設定。
+ * @param phaseId 探すphase ID。
+ * @returns run開始からphase開始までのミリ秒。
  */
-export function currentWaveNumber(state: RunState): number {
-  if (state.elapsedMs < state.schedule.restDurationMs)
-    return 1;
-  const cycleDuration = state.schedule.combatWaveDurationMs + state.schedule.restDurationMs;
-  const combatElapsedMs = state.elapsedMs - state.schedule.restDurationMs;
-  return Math.min(WAVE_COUNT, Math.floor(combatElapsedMs / cycleDuration) + 1);
+export function runPhaseStartMs(schedule: RunSchedule, phaseId: RunPhaseId): number {
+  let startMs = 0;
+  for (const definition of TIMED_RUN_PHASES) {
+    if (definition.id === phaseId)
+      return startMs;
+    startMs += schedule[definition.scheduleKey];
+  }
+  return startMs;
 }
 
 /**
- * 現在の初回準備、combat、rest phaseを返す。
+ * 現在phaseの安定IDを返す。
  *
  * @param state 現在のrun状態。
- * @returns 現在のphase。
+ * @returns day/night番号またはBoss NightのID。
+ */
+export function currentRunPhaseId(state: RunState): RunPhaseId {
+  return timedRunPhaseAt(state)?.definition.id ?? 'boss-night';
+}
+
+/**
+ * 現在の昼、通常夜、Boss夜種別を返す。
+ *
+ * @param state 現在のrun状態。
+ * @returns 現在phaseの種別。
  */
 export function currentRunPhase(state: RunState): RunPhase {
-  if (state.elapsedMs >= runDurationMs(state.schedule))
-    return 'combat';
-  if (state.elapsedMs < state.schedule.restDurationMs)
-    return 'preparation';
-  const cycleElapsedMs = (state.elapsedMs - state.schedule.restDurationMs)
-    % (state.schedule.combatWaveDurationMs + state.schedule.restDurationMs);
-  return cycleElapsedMs < state.schedule.combatWaveDurationMs ? 'combat' : 'rest';
+  return timedRunPhaseAt(state)?.definition.kind ?? 'boss-night';
 }
 
 /**
- * 現在の初回準備、combat、rest phaseが終わるまでの残り時間を返す。
+ * 現在phaseが対応する通常Night番号を返す。
+ *
+ * Final DayとBoss Nightでは既存HUD互換の3を返す。
  *
  * @param state 現在のrun状態。
- * @returns 0から現在phaseの設定時間までの残りミリ秒。
+ * @returns 1から3の通常Night番号。
  */
-export function remainingPhaseMs(state: RunState): number {
-  if (state.elapsedMs >= runDurationMs(state.schedule))
-    return 0;
-  const phase = currentRunPhase(state);
-  if (phase === 'preparation')
-    return state.schedule.restDurationMs - state.elapsedMs;
-  const cycleElapsedMs = (state.elapsedMs - state.schedule.restDurationMs)
-    % (state.schedule.combatWaveDurationMs + state.schedule.restDurationMs);
-  return phase === 'combat'
-    ? state.schedule.combatWaveDurationMs - cycleElapsedMs
-    : state.schedule.combatWaveDurationMs + state.schedule.restDurationMs - cycleElapsedMs;
+export function currentWaveNumber(state: RunState): number {
+  return timedRunPhaseAt(state)?.definition.wave ?? WAVE_COUNT;
 }
 
 /**
- * 現在combat waveが終わるまでの残り時間を返す。
- *
- * 初回準備とrest中は次waveを開始するまで戦闘残り時間を0とし、既存HUDのdata-testidを維持する。
+ * HUDへ表示する現在phase名を返す。
  *
  * @param state 現在のrun状態。
- * @returns 0からcombat wave設定時間までの残りミリ秒。
+ * @returns 昼夜番号を含む日本語phase名。
+ */
+export function currentRunPhaseLabel(state: RunState): string {
+  const labels: Record<RunPhaseId, string> = {
+    'day-1': '昼1（探索）',
+    'night-1': '夜1（戦闘）',
+    'day-2': '昼2（準備）',
+    'night-2': '夜2（戦闘）',
+    'day-3': '昼3（準備）',
+    'night-3': '夜3（戦闘）',
+    'final-day': '最終昼（ボス準備）',
+    'boss-night': 'ボス夜',
+  };
+  return labels[currentRunPhaseId(state)];
+}
+
+/**
+ * 現在の時間制phaseが終わるまでの残り時間を返す。
+ *
+ * @param state 現在のrun状態。
+ * @returns 時間制phaseの残りミリ秒。Boss Nightはnull。
+ */
+export function remainingPhaseMs(state: RunState): number | null {
+  const phase = timedRunPhaseAt(state);
+  return phase ? phase.endMs - state.elapsedMs : null;
+}
+
+/**
+ * 現在の通常Nightが終わるまでの残り時間を返す。
+ *
+ * @param state 現在のrun状態。
+ * @returns 通常Night以外は0。
  */
 export function remainingWaveMs(state: RunState): number {
-  return currentRunPhase(state) === 'combat' ? remainingPhaseMs(state) : 0;
+  return currentRunPhase(state) === 'night' ? remainingPhaseMs(state) ?? 0 : 0;
+}
+
+/**
+ * Boss撃破eventでだけrunを勝利terminalへ遷移する。
+ *
+ * @param state 現在のrun状態。
+ * @returns Boss Night中なら勝利、それ以外は元の状態。
+ */
+export function recordBossDefeated(state: RunState): RunState {
+  return state.status === 'playing' && currentRunPhaseId(state) === 'boss-night'
+    ? { ...state, status: 'victory' }
+    : state;
 }
 
 /**
  * 通常移動へ一度だけ適用するphase別の敵速度倍率を返す。
  *
- * @param phase 現在の初回準備、combatまたはrest phase。
- * @returns combatは1.5、restは0.75の速度倍率。
+ * 昼夜差は敵の量と構成で表現するため、基礎速度は変更しない。
+ *
+ * @param phase 現在の昼夜phase。
+ * @returns 常に1。
  */
 export function enemySpeedMultiplierForPhase(phase: RunPhase): number {
-  return phase === 'combat' ? 1.5 : 0.75;
+  void phase;
+  return 1;
 }
 
 /**
  * hidden recycleを許可する最小path距離をphase別に返す。
  *
- * @param phase 現在の初回準備、combatまたはrest phase。
- * @returns combatは10、restは5 tileの最小距離。
+ * @param phase 現在の昼夜phase。
+ * @returns Nightは10、Dayは5 tileの最小距離。
  */
 export function hiddenRecyclePathDistanceForPhase(phase: RunPhase): number {
-  return phase === 'combat' ? 10 : 5;
+  return phase === 'day' ? 5 : 10;
 }
 
 /**
@@ -584,53 +672,29 @@ export function retryRun(schedule: RunSchedule = DEFAULT_RUN_SCHEDULE): RunState
 }
 
 /**
- * 生存制限までの残り時間を範囲内に丸めて返す。
+ * Boss Night開始までの残り時間を範囲内に丸めて返す。
  *
  * @param startedAt 生存計測を開始した時刻。
  * @param now 現在時刻。
- * @param survivalLimitMs 対象runの総時間。
- * @returns 0から生存制限までの残りミリ秒。
+ * @param bossNightStartMs 対象runのBoss Night開始時間。
+ * @returns 0からBoss Night開始までの残りミリ秒。
  */
 export function remainingSurvivalMs(
   startedAt: number,
   now: number,
-  survivalLimitMs = SURVIVAL_LIMIT_MS,
+  bossNightStartMs = runDurationMs(DEFAULT_RUN_SCHEDULE),
 ): number {
-  return Math.min(survivalLimitMs, Math.max(0, startedAt + survivalLimitMs - now));
+  return Math.min(bossNightStartMs, Math.max(0, startedAt + bossNightStartMs - now));
 }
 
 /**
- * 現在時刻が生存制限に到達したかを判定する。
- *
- * @param startedAt 生存計測を開始した時刻。
- * @param now 現在時刻。
- * @param survivalLimitMs 対象runの総時間。
- * @returns 生存制限に到達していれば真。
- */
-export function hasReachedSurvivalLimit(
-  startedAt: number,
-  now: number,
-  survivalLimitMs = SURVIVAL_LIMIT_MS,
-): boolean {
-  return now >= startedAt + survivalLimitMs;
-}
-
-/**
- * 生存制限到達時の勝利状態を反映する。
+ * Boss撃破後の勝利を戦闘状態へ一度だけ反映する。
  *
  * @param state 現在の戦闘状態。
- * @param startedAt 生存計測を開始した時刻。
- * @param now 現在時刻。
- * @param survivalLimitMs 対象runの総時間。
  * @returns 勝利状態を反映した戦闘状態。
  */
-export function advanceSurvivalState(
-  state: CombatState,
-  startedAt: number,
-  now: number,
-  survivalLimitMs = SURVIVAL_LIMIT_MS,
-): CombatState {
-  if (state.defeated || state.victory || !hasReachedSurvivalLimit(startedAt, now, survivalLimitMs))
+export function completeCombatVictory(state: CombatState): CombatState {
+  if (state.defeated || state.victory)
     return state;
   return { ...state, victory: true, reloading: null };
 }

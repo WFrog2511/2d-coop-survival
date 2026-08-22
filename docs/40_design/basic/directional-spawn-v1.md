@@ -16,9 +16,9 @@ specification: SPEC-DIRECTIONAL-SPAWN
 - 敵循環・balance・HUDは[Issue #38](https://github.com/WFrog2511/2d-coop-survival/issues/38)のfollow-upを適用する。
 - 既存のmap生成、enemy visibility、有限弾薬、3分勝利、弾薬箱respawnを維持し、方向付きspawnに必要な差分だけを加える。
 
-### Issue #58の時間契約移行
+### Issue #78の時間契約移行
 
-[DESIGN-BASIC-WAVE-PROGRESSION](wave-progression-v1.md)（Issue #71条件変更後）は、Issue #34由来の180000ms（3分）生存timerだけでなく、本書の`run開始`時initial/stagger・phase epochの設計を限定的にsupersedeする。既定はenemy-free初回準備60000ms、3 combat wave各150000msとwave 1/2後のrest各60000ms、総630000msである。本書中の3分勝利と旧run開始時initial/stagger設計は#71前の履歴として残し、現在のrun時間・phase残り・victory境界はDESIGN-BASIC-WAVE-PROGRESSIONを正本とする。60000ms spawn phaseは初回combat開始をepochとし、`status=playing && elapsedMs >= restDurationMs`を満たす最初のupdateでcurrent phaseにかかわらず一度だけlifecycleを開始する。方向規則、terminal/retryのtimer停止とgeneration guard、ammo box respawn契約は維持する。
+[DESIGN-BASIC-WAVE-PROGRESSION](wave-progression-v1.md)は、旧3分期限、630000ms自動勝利、preparation/combat/rest設計、run開始時のenemy epochをsupersedeする。8 phaseのNight 1開始時だけinitial/staggerとdirectional spawn lifecycleを開始する。Boss Nightは明示Boss撃破まで継続する。方向規則、60秒spawn phase、terminal/retryのtimer停止とgeneration guard、ammo box respawn契約は維持する。
 
 ## 責務
 

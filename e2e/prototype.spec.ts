@@ -4,7 +4,8 @@ import { ARENA_HEIGHT_TILES, ARENA_WIDTH_TILES, SPAWN_PHASE_MS, TILE_SIZE, WORLD
 import { formatSurvivalTime } from '../src/arena/hud';
 import { INITIAL_WORLD_WEAPON_MODELS, SCRAP_DROP_AMOUNTS, SCRAP_VISUAL_TIER_THRESHOLDS, WORLD_SIDEARM_MODELS, scrapVisualTierFor } from '../src/game-data';
 import { GUNSLINGER_BOOT_KNIFE_DAMAGE, GUNSLINGER_COMBO_PER_EVENT, GUNSLINGER_COMBO_TIMEOUT_MS, PLAYER_DASH_DURATION_MS } from '../src/player-data';
-import { AMMO_BOX_RESPAWN_MS, AMMO_MATERIAL_BOX_CYCLE, AMMO_MATERIAL_ORDER, AMMO_MATERIALS, COMBAT_WAVE_DURATION_MS, ENEMY_INSTANCE_IDS, WEAPON_MODELS, WEAPONS, createRunSchedule, runDurationMs, type AmmoMaterial, type WeaponModel } from '../src/rules';
+import { AMMO_BOX_RESPAWN_MS, AMMO_MATERIAL_BOX_CYCLE, AMMO_MATERIAL_ORDER, AMMO_MATERIALS, ENEMY_INSTANCE_IDS, WEAPON_MODELS, WEAPONS, createRunSchedule, runDurationMs, type AmmoMaterial, type WeaponModel } from '../src/rules';
+import { DEFAULT_RUN_PHASE_DURATIONS_MS } from '../src/run-data';
 import { MATERIAL_CARRY, SCRAP_PLAYER_DROP_QUANTITY } from '../src/weight-data';
 
 type EnemyId = (typeof ENEMY_INSTANCE_IDS)[number];
@@ -161,6 +162,7 @@ type ArenaDebugScene = {
   debugRespawnEnemy: (id: EnemyId) => void;
   debugSetHiddenRecycleEnabled: (enabled: boolean) => void;
   debugSetPlayerInvulnerable: (enabled: boolean) => void;
+  debugDefeatBoss: () => void;
   debugMovePlayerTo: (tile: TilePosition) => void;
   debugMoveWorldItemTo: (id: string, tile: TilePosition) => void;
   debugOpenWall: (tile: TilePosition) => void;
@@ -178,7 +180,15 @@ async function startInitialCombat(
   preparationDurationMs: number,
 ): Promise<void> {
   await page.clock.fastForward(preparationDurationMs);
-  await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase', 'combat');
+  await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase', 'night');
+}
+
+async function defeatBoss(page: import('@playwright/test').Page): Promise<void> {
+  await page.evaluate(() => {
+    const scene = (window as Window & { __arenaScene?: ArenaDebugScene }).__arenaScene;
+    if (!scene) throw new Error('DEV用Arena Sceneがwindowへ公開されていません。');
+    scene.debugDefeatBoss();
+  });
 }
 
 async function soundWaveModeRendering(page: import('@playwright/test').Page): Promise<{
@@ -906,7 +916,7 @@ test('Issue #64: retryはミニマップ探索を初期化し、表示はキー�
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
   await page.goto(devStartUrl(
-    `/?enemyInitialCount=0&combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+    `/?enemyInitialCount=0&combatWaveDurationMs=${schedule.night1DurationMs}&restDurationMs=${schedule.day1DurationMs}`,
   ));
   await expect(page.locator('#game canvas')).toBeVisible();
   const minimap = page.getByTestId('minimap');
@@ -924,6 +934,7 @@ test('Issue #64: retryはミニマップ探索を初期化し、表示はキー�
 
   const previousSeed = await page.getByTestId('map-seed').textContent();
   await page.clock.fastForward(runDurationMs(schedule));
+  await defeatBoss(page);
   await expect(page.getByTestId('victory')).toBeVisible();
   await page.getByTestId('retry').click();
   await expect(page.getByTestId('map-seed')).not.toHaveText(previousSeed ?? '');
@@ -939,10 +950,10 @@ test('Issue #98 / #100: DEVの通常wall変更はcurrent terrainとarea graphを
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
   await page.goto(devStartUrl(
-    `/?enemyInitialCount=1&enemyStaggerIntervalMs=5000&combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+    `/?enemyInitialCount=1&enemyStaggerIntervalMs=5000&combatWaveDurationMs=${schedule.night1DurationMs}&restDurationMs=${schedule.day1DurationMs}`,
   ));
   await expect(page.locator('#game canvas')).toBeVisible();
-  await startInitialCombat(page, schedule.restDurationMs);
+  await startInitialCombat(page, schedule.day1DurationMs);
   const activeEnemyId: EnemyId = 'basic-1';
   await expect(page.getByTestId(`${activeEnemyId}-hp`)).toHaveAttribute('data-active', 'true');
   await setHiddenRecycle(page, false);
@@ -1063,6 +1074,7 @@ test('Issue #98 / #100: DEVの通常wall変更はcurrent terrainとarea graphを
 
   const previousSeed = await page.getByTestId('map-seed').textContent();
   await page.clock.fastForward(runDurationMs(schedule));
+  await defeatBoss(page);
   await expect(page.getByTestId('victory')).toBeVisible();
   await page.getByTestId('retry').click();
   await expect(page.getByTestId('map-seed')).not.toHaveText(previousSeed ?? '');
@@ -1499,8 +1511,8 @@ test('Issue #102: 壁密着dashは移動も音波も発生させずdurationで�
 });
 
 test('開始前のSpace選択を保ち、開始後のキーボード移動を受け付ける', async ({ page }) => {
-  const schedule = createRunSchedule(COMBAT_WAVE_DURATION_MS, 500);
-  await page.goto(`/?restDurationMs=${schedule.restDurationMs}`);
+  const schedule = createRunSchedule(DEFAULT_RUN_PHASE_DURATIONS_MS.night1DurationMs, 500);
+  await page.goto(`/?restDurationMs=${schedule.day1DurationMs}`);
   await expect(page.getByTestId('start-gate')).toBeVisible();
   await expect(page.locator('#game canvas')).toHaveCount(0);
   await expect(page.getByTestId('role-options').locator('input')).toHaveCount(5);
@@ -1515,7 +1527,7 @@ test('開始前のSpace選択を保ち、開始後のキーボード移動を受
 
   await expect(page.getByTestId('start-gate')).toBeHidden();
   await expect(page.locator('#game canvas')).toBeVisible();
-  await page.waitForTimeout(schedule.restDurationMs + 100);
+  await page.waitForTimeout(schedule.day1DurationMs + 100);
   await expect(page.getByTestId('role')).toHaveText('スナイパー（紫）');
   await expect(page.getByTestId('role')).toHaveAttribute('data-role', 'sniper');
   const playerTint = await page.evaluate(() => {
@@ -1819,10 +1831,10 @@ test('モデル別world weapon、クイックスロット、詳細インベン�
   await page.clock.install({ time: 15 });
   await page.clock.pauseAt(15);
   await page.goto(devStartUrl(
-    `/?enemyInitialCount=1&enemyStaggerIntervalMs=30000&combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+    `/?enemyInitialCount=1&enemyStaggerIntervalMs=30000&combatWaveDurationMs=${schedule.night1DurationMs}&restDurationMs=${schedule.day1DurationMs}`,
   ));
   await setArenaPhysics(page, 'pause');
-  await startInitialCombat(page, schedule.restDurationMs);
+  await startInitialCombat(page, schedule.day1DurationMs);
   const quickSlot1 = page.getByTestId('quick-slot-1');
   const quickSlot2 = page.getByTestId('quick-slot-2');
   const quickSlot3 = page.getByTestId('quick-slot-3');
@@ -2255,10 +2267,10 @@ test('同じtileのスクラップは数量と見た目を集約しEで取得で
   await page.clock.install({ time: 15 });
   await page.clock.pauseAt(15);
   await page.goto(devStartUrl(
-    `/?enemyInitialCount=${dropsToMediumTier}&enemyStaggerIntervalMs=30000&combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+    `/?enemyInitialCount=${dropsToMediumTier}&enemyStaggerIntervalMs=30000&combatWaveDurationMs=${schedule.night1DurationMs}&restDurationMs=${schedule.day1DurationMs}`,
   ));
   await setArenaPhysics(page, 'pause');
-  await startInitialCombat(page, schedule.restDurationMs);
+  await startInitialCombat(page, schedule.day1DurationMs);
   const mapSeed = Number(await page.getByTestId('map-seed').textContent());
   const anchor = generateArenaMap(mapSeed).start;
 
@@ -2301,10 +2313,10 @@ test('world itemを置けない場合はinventoryとworldを変えずに通知�
   await page.clock.install({ time: 15 });
   await page.clock.pauseAt(15);
   await page.goto(devStartUrl(
-    `/?enemyInitialCount=${ENEMY_INSTANCE_IDS.length}&enemyStaggerIntervalMs=30000&combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+    `/?enemyInitialCount=${ENEMY_INSTANCE_IDS.length}&enemyStaggerIntervalMs=30000&combatWaveDurationMs=${schedule.night1DurationMs}&restDurationMs=${schedule.day1DurationMs}`,
   ));
   await setArenaPhysics(page, 'pause');
-  await startInitialCombat(page, schedule.restDurationMs);
+  await startInitialCombat(page, schedule.day1DurationMs);
   await expect(page.getByTestId('enemy-current')).toHaveText(String(ENEMY_INSTANCE_IDS.length));
   const map = generateArenaMap(Number(await page.getByTestId('map-seed').textContent()));
   const shotgun = (await activeWorldItems(page)).find(item => item.kind === 'weapon' && item.item === 'shotgun');
@@ -2385,10 +2397,10 @@ test('素材箱と同tileのスクラップをEで取得できる', async ({ pag
   await page.clock.install({ time: 15 });
   await page.clock.pauseAt(15);
   await page.goto(devStartUrl(
-    `/?enemyInitialCount=1&enemyStaggerIntervalMs=30000&combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+    `/?enemyInitialCount=1&enemyStaggerIntervalMs=30000&combatWaveDurationMs=${schedule.night1DurationMs}&restDurationMs=${schedule.day1DurationMs}`,
   ));
   await setArenaPhysics(page, 'pause');
-  await startInitialCombat(page, schedule.restDurationMs);
+  await startInitialCombat(page, schedule.day1DurationMs);
   const mapSeed = Number(await page.getByTestId('map-seed').textContent());
   const targetBox = selectAmmoBoxTiles(generateArenaMap(mapSeed))[0];
   if (!targetBox)
@@ -2420,7 +2432,7 @@ test('terminal中はpickupを止め、retryで所持品とworld itemを初期化
   await page.clock.install({ time: 15 });
   await page.clock.pauseAt(15);
   await page.goto(devStartUrl(
-    `/?combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+    `/?combatWaveDurationMs=${schedule.night1DurationMs}&restDurationMs=${schedule.day1DurationMs}`,
   ));
   await setPlayerInvulnerable(page, true);
   const shotgun = (await activeWorldItems(page)).find(item => item.kind === 'weapon' && item.item === 'shotgun');
@@ -2443,6 +2455,7 @@ test('terminal中はpickupを止め、retryで所持品とworld itemを初期化
   await beginInventoryDrag(page, 'inventory-quick-slot-1');
   await expect(inventoryDetail).toHaveAttribute('data-drag-source', 'quick:0');
   await page.clock.fastForward(runDurationMs(schedule));
+  await defeatBoss(page);
   await expect(page.getByTestId('victory')).toBeVisible();
   await expect(page.getByTestId('pickup-prompt')).toBeHidden();
   await expect(inventoryDetail).toBeHidden();
@@ -2495,11 +2508,11 @@ test('ガンスリンガーは回避中の敵を一度だけブーツナイフ�
   const staggerIntervalMs = runDurationMs(schedule) + 1;
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
-  await page.goto(`/?enemyInitialCount=1&enemyStaggerIntervalMs=${staggerIntervalMs}&combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`);
+  await page.goto(`/?enemyInitialCount=1&enemyStaggerIntervalMs=${staggerIntervalMs}&combatWaveDurationMs=${schedule.night1DurationMs}&restDurationMs=${schedule.day1DurationMs}`);
   await page.getByTestId('role-gunslinger').check();
   await page.getByTestId('start').click();
   await expect(page.locator('#game canvas')).toBeVisible();
-  await startInitialCombat(page, schedule.restDurationMs);
+  await startInitialCombat(page, schedule.day1DurationMs);
   const combo = page.getByTestId('gunslinger-combo');
   const basicEnemyHp = page.getByTestId('basic-1-hp');
   await expect(page.getByTestId('gunslinger-combo-panel')).toBeVisible();
@@ -2542,10 +2555,11 @@ test('ガンスリンガーは回避中の敵を一度だけブーツナイフ�
   expect(Number(await combo.textContent())).toBe(expectedFirstDash.combo);
 
   await page.clock.fastForward(runDurationMs(schedule));
+  await defeatBoss(page);
   await expect(page.getByTestId('victory')).toBeVisible();
   await page.getByTestId('retry').click();
   await expect(page.getByTestId('victory')).toBeHidden();
-  await startInitialCombat(page, schedule.restDurationMs);
+  await startInitialCombat(page, schedule.day1DurationMs);
   await expect(combo).toHaveText('0');
   await expect(combo).toHaveAttribute('data-speed-multiplier', '1');
   await expect(basicEnemyHp).toHaveAttribute('data-active', 'true');
@@ -2585,11 +2599,11 @@ test('ガンスリンガーのコンボ期限は有効命中で更新され、�
   const beforeExpiryMs = GUNSLINGER_COMBO_TIMEOUT_MS - deadlineMarginMs;
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
-  await page.goto(`/?enemyInitialCount=4&combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`);
+  await page.goto(`/?enemyInitialCount=4&combatWaveDurationMs=${schedule.night1DurationMs}&restDurationMs=${schedule.day1DurationMs}`);
   await page.getByTestId('role-gunslinger').check();
   await page.getByTestId('start').click();
   await expect(page.locator('#game canvas')).toBeVisible();
-  await startInitialCombat(page, schedule.restDurationMs);
+  await startInitialCombat(page, schedule.day1DurationMs);
   const combo = page.getByTestId('gunslinger-combo');
   const playerHp = page.getByTestId('hp');
   await expect(page.getByTestId('gunslinger-combo-panel')).toBeVisible();
@@ -2648,14 +2662,14 @@ test('ガンスリンガーのコンボ期限は有効命中で更新され、�
 test('自動射撃、ショットガンの発射待ち、リロード、視界遮蔽と再挑戦を確認できる', async ({ page }) => {
   // 標準mapのLOS検査を含む代表経路に、実時間の余裕を持たせる。
   test.setTimeout(60_000);
-  const schedule = createRunSchedule(COMBAT_WAVE_DURATION_MS, 500);
+  const schedule = createRunSchedule(DEFAULT_RUN_PHASE_DURATIONS_MS.night1DurationMs, 500);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto(devStartUrl(`/?restDurationMs=${schedule.restDurationMs}`));
+  await page.goto(devStartUrl(`/?restDurationMs=${schedule.day1DurationMs}`));
   await setPlayerInvulnerable(page, true);
   const gameCanvas = page.locator('#game canvas');
   await expect(gameCanvas).toBeVisible();
-  await page.waitForTimeout(schedule.restDurationMs + 100);
+  await page.waitForTimeout(schedule.day1DurationMs + 100);
   // 初期spawn metadataと可視状態を同じ時点で観測するため、敵移動前に止める。
   await setArenaPhysics(page, 'pause');
   const initialCanvasBounds = await gameCanvas.boundingBox();
@@ -2692,7 +2706,7 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expect.poll(async () => hpBar.evaluate(element => (element as HTMLProgressElement).value)).toBe(100);
   const survivalPanel = page.locator('#survival-panel');
   await expect(survivalPanel.getByTestId('wave')).toHaveText('1');
-  await expect(survivalPanel.getByTestId('run-phase')).toHaveText('夜（戦闘）');
+  await expect(survivalPanel.getByTestId('run-phase')).toHaveText('夜1（戦闘）');
   await expect(survivalPanel.getByTestId('phase-remaining')).toHaveText(/^02:(?:[0-2]\d|30)$/);
   await expect(page.getByTestId('survival-time')).toBeHidden();
   await expect(page.getByTestId('enemy-current')).toBeHidden();
@@ -2850,12 +2864,12 @@ test('自動射撃、ショットガンの発射待ち、リロード、視界�
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-respawn-tiles', '');
   expect(await documentBounds(gameCanvas)).toEqual(initialCanvasDocumentBounds);
   await page.getByTestId('retry').click();
-  await page.waitForTimeout(schedule.restDurationMs + 100);
+  await page.waitForTimeout(schedule.day1DurationMs + 100);
   await expect(page.getByTestId('wave')).toHaveText('1');
-  await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(schedule.combatWaveDurationMs));
-  await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase', 'combat');
-  await expect(page.getByTestId('run-phase')).toHaveText('夜（戦闘）');
-  await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(schedule.combatWaveDurationMs));
+  await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(schedule.night1DurationMs));
+  await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase', 'night');
+  await expect(page.getByTestId('run-phase')).toHaveText('夜1（戦闘）');
+  await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(schedule.night1DurationMs));
   await setArenaPhysics(page, 'pause');
   await expect(page.getByTestId('defeat')).toBeHidden();
   await expect(page.getByTestId('victory')).toBeHidden();
@@ -2899,7 +2913,7 @@ test('初期8体を段階的に12体へ増やし、spawn phaseとcombat/rest境�
   const staggerIntervalMs = 500;
   const staggerMarginMs = Math.max(1, Math.floor(staggerIntervalMs / 10));
   const schedule = createRunSchedule(SPAWN_PHASE_MS + boundaryMarginMs, boundaryMarginMs);
-  const { combatWaveDurationMs: combatDurationMs, restDurationMs } = schedule;
+  const { night1DurationMs: combatDurationMs, day1DurationMs: restDurationMs } = schedule;
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
   await page.goto(devStartUrl(
@@ -2917,8 +2931,8 @@ test('初期8体を段階的に12体へ増やし、spawn phaseとcombat/rest境�
   await expect(primaryHud).toHaveAttribute('data-direction', phaseZeroPrimary);
   await expect(page.getByTestId('wave')).toHaveText('1');
   await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(0));
-  await expect(runPanel).toHaveAttribute('data-phase', 'preparation');
-  await expect(page.getByTestId('run-phase')).toHaveText('昼（準備）');
+  await expect(runPanel).toHaveAttribute('data-phase', 'day');
+  await expect(page.getByTestId('run-phase')).toHaveText('昼1（探索）');
   await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(restDurationMs));
   for (const id of ENEMY_INSTANCE_IDS)
     await expect(page.getByTestId(`${id}-hp`)).toHaveAttribute('data-active', 'false');
@@ -2935,8 +2949,8 @@ test('初期8体を段階的に12体へ増やし、spawn phaseとcombat/rest境�
   // 固定seedでinitial strict spawnが成功したことを確認してからHUDを比較する。
   await expect(page.getByTestId('wave')).toHaveText('1');
   await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(combatDurationMs));
-  await expect(runPanel).toHaveAttribute('data-phase', 'combat');
-  await expect(page.getByTestId('run-phase')).toHaveText('夜（戦闘）');
+  await expect(runPanel).toHaveAttribute('data-phase', 'night');
+  await expect(page.getByTestId('run-phase')).toHaveText('夜1（戦闘）');
   await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(combatDurationMs));
   await expect(page.getByTestId('enemy-current')).toHaveText(String(INITIAL_ACTIVE_IDS.length));
   await expect(page.getByTestId('enemy-goal')).toHaveText(String(ENEMY_INSTANCE_IDS.length));
@@ -2965,7 +2979,7 @@ test('初期8体を段階的に12体へ増やし、spawn phaseとcombat/rest境�
   await expect(phaseHud).toHaveText('2');
   await expect(phaseHud).toHaveAttribute('data-phase', '1');
   await expect(primaryHud).toHaveAttribute('data-direction', phaseOnePrimary);
-  await expect(runPanel).toHaveAttribute('data-phase', 'combat');
+  await expect(runPanel).toHaveAttribute('data-phase', 'night');
   expect(phaseOnePrimary).not.toBe(phaseZeroPrimary);
   expect(await allEnemySpawnMetadata(page)).toEqual(phaseZero);
 
@@ -2997,19 +3011,19 @@ test('初期8体を段階的に12体へ増やし、spawn phaseとcombat/rest境�
     hp: await page.getByTestId(`${id}-hp`).textContent(),
   })));
   await page.clock.fastForward(boundaryMarginMs);
-  await expect(page.getByTestId('wave')).toHaveText('1');
+  await expect(page.getByTestId('wave')).toHaveText('2');
   await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(0));
-  await expect(runPanel).toHaveAttribute('data-phase', 'rest');
-  await expect(page.getByTestId('run-phase')).toHaveText('昼（休憩）');
+  await expect(runPanel).toHaveAttribute('data-phase', 'day');
+  await expect(page.getByTestId('run-phase')).toHaveText('昼2（準備）');
   await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(restDurationMs));
   expect(await allEnemySpawnMetadata(page)).toEqual(phaseOne);
   for (const { id, hp } of hitPointsBeforeRest)
     await expect(page.getByTestId(`${id}-hp`)).toHaveText(hp ?? '');
 });
 
-test('DEV queryでspawnとcombat/rest scheduleを開始前に固定する', async ({ page }) => {
+test('DEV queryでspawnと昼夜scheduleを開始前に固定する', async ({ page }) => {
   const schedule = createRunSchedule(1_000, 500);
-  const { combatWaveDurationMs, restDurationMs } = schedule;
+  const { night1DurationMs: combatWaveDurationMs, day1DurationMs: restDurationMs } = schedule;
   const staggerIntervalMs = 500;
   const boundaryMarginMs = 100;
   await page.clock.install({ time: 1 });
@@ -3027,13 +3041,13 @@ test('DEV queryでspawnとcombat/rest scheduleを開始前に固定する', asyn
   const runPanel = page.getByTestId('run-panel');
   await expect(runPanel).toHaveAttribute(
     'data-run-config',
-    `combatWaveDurationMs=${combatWaveDurationMs};restDurationMs=${restDurationMs}`,
+    Object.entries(schedule).map(([key, value]) => `${key}=${value}`).join(';'),
   );
   await expect(page.getByTestId('survival-time')).toHaveText(formatSurvivalTime(runDurationMs(schedule)));
   await expect(page.getByTestId('wave')).toHaveText('1');
   await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(0));
-  await expect(runPanel).toHaveAttribute('data-phase', 'preparation');
-  await expect(page.getByTestId('run-phase')).toHaveText('昼（準備）');
+  await expect(runPanel).toHaveAttribute('data-phase', 'day');
+  await expect(page.getByTestId('run-phase')).toHaveText('昼1（探索）');
   await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(restDurationMs));
   for (const id of ENEMY_SPAWN_ORDER) {
     await expect(page.getByTestId(`${id}-hp`)).toHaveAttribute('data-active', 'false');
@@ -3047,17 +3061,17 @@ test('DEV queryでspawnとcombat/rest scheduleを開始前に固定する', asyn
   await page.clock.runFor(staggerIntervalMs + boundaryMarginMs);
   await expect(page.getByTestId(`${ENEMY_SPAWN_ORDER[1]}-hp`)).toHaveAttribute('data-active', 'true');
   await expect(page.getByTestId(`${ENEMY_SPAWN_ORDER[1]}-hp`)).toHaveAttribute('data-spawn-reason', 'stagger');
-  // frame更新の端数を越えてrestへ入り、境界ちょうどの表示競合を避ける。
+  // frame更新の端数を越えてDay 2へ入り、境界ちょうどの表示競合を避ける。
   await page.clock.runFor(combatWaveDurationMs - staggerIntervalMs);
-  await expect(runPanel).toHaveAttribute('data-phase', 'rest');
-  await expect(page.getByTestId('run-phase')).toHaveText('昼（休憩）');
-  await expect(page.getByTestId('wave')).toHaveText('1');
+  await expect(runPanel).toHaveAttribute('data-phase', 'day');
+  await expect(page.getByTestId('run-phase')).toHaveText('昼2（準備）');
+  await expect(page.getByTestId('wave')).toHaveText('2');
   await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(0));
   await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(restDurationMs - boundaryMarginMs));
   await page.clock.runFor(restDurationMs);
   await expect(page.getByTestId('wave')).toHaveText('2');
   await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(combatWaveDurationMs - boundaryMarginMs));
-  await expect(runPanel).toHaveAttribute('data-phase', 'combat');
+  await expect(runPanel).toHaveAttribute('data-phase', 'night');
 });
 
 test('初回combat境界を越えて最初のrestへ大きく進めてもenemy lifecycleを一度だけ開始する', async ({ page }) => {
@@ -3067,20 +3081,20 @@ test('初回combat境界を越えて最初のrestへ大きく進めてもenemy l
     SPAWN_PHASE_MS - preparationDurationMs - boundaryMarginMs * 2,
     preparationDurationMs,
   );
-  const firstRestElapsedMs = schedule.restDurationMs + schedule.combatWaveDurationMs + boundaryMarginMs;
+  const firstRestElapsedMs = schedule.day1DurationMs + schedule.night1DurationMs + boundaryMarginMs;
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
   await page.goto(devStartUrl(
-    `/?enemyInitialCount=1&enemyStaggerIntervalMs=30000&combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+    `/?enemyInitialCount=1&enemyStaggerIntervalMs=30000&combatWaveDurationMs=${schedule.night1DurationMs}&restDurationMs=${schedule.day1DurationMs}`,
   ));
   await setArenaPhysics(page, 'pause');
   await setHiddenRecycle(page, false);
-  await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase', 'preparation');
+  await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase', 'day');
   await expect(page.getByTestId('basic-1-hp')).toHaveAttribute('data-active', 'false');
 
   await page.clock.fastForward(firstRestElapsedMs);
 
-  await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase', 'rest');
+  await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase', 'day');
   await expect(page.getByTestId('basic-1-hp')).toHaveAttribute('data-active', 'true');
   await expect(page.getByTestId('basic-1-hp')).toHaveAttribute('data-spawn-reason', 'initial');
   await expect(page.getByTestId('spawn-phase')).toHaveAttribute('data-phase', '0');
@@ -3090,28 +3104,28 @@ test('初回combat境界を越えて最初のrestへ大きく進めてもenemy l
 });
 
 test('不正なDEV spawnとschedule queryは既定値へ戻す', async ({ page }) => {
-  await page.goto(devStartUrl(`/?enemyInitialCount=13&enemyStaggerIntervalMs=0&enemySpawnCandidatePool=${ARENA_WIDTH_TILES * ARENA_HEIGHT_TILES + 1}&combatWaveDurationMs=999&restDurationMs=120001`));
+  await page.goto(devStartUrl(`/?enemyInitialCount=13&enemyStaggerIntervalMs=0&enemySpawnCandidatePool=${ARENA_WIDTH_TILES * ARENA_HEIGHT_TILES + 1}&combatWaveDurationMs=0&restDurationMs=300001`));
   await expect(page.getByTestId('spawn-phase')).toHaveAttribute(
     'data-spawn-config',
     'enemyInitialCount=8;enemyStaggerIntervalMs=3000;enemySpawnCandidatePool=10',
   );
   await expect(page.getByTestId('run-panel')).toHaveAttribute(
     'data-run-config',
-    'combatWaveDurationMs=150000;restDurationMs=60000',
+    Object.entries(createRunSchedule()).map(([key, value]) => `${key}=${value}`).join(';'),
   );
 });
 
 test('hidden recycleはHPを維持し、deathだけ全回復し、retry後に旧callbackを残さない', async ({ page }) => {
   // 標準mapの再出現・retry仮想時計処理に、実時間の余裕を持たせる。
   test.setTimeout(90_000);
-  const schedule = createRunSchedule(COMBAT_WAVE_DURATION_MS, 500);
+  const schedule = createRunSchedule(DEFAULT_RUN_PHASE_DURATIONS_MS.night1DurationMs, 500);
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
   await page.goto(devStartUrl(
-    `/?enemyInitialCount=1&enemyStaggerIntervalMs=5000&restDurationMs=${schedule.restDurationMs}`,
+    `/?enemyInitialCount=1&enemyStaggerIntervalMs=5000&restDurationMs=${schedule.day1DurationMs}`,
   ));
   await setArenaPhysics(page, 'pause');
-  await startInitialCombat(page, schedule.restDurationMs);
+  await startInitialCombat(page, schedule.day1DurationMs);
   await expectStrictEnemySpawns(page, ['basic-1'], 'initial');
   const mapSeed = Number(await page.getByTestId('map-seed').textContent());
   const map = generateArenaMap(mapSeed);
@@ -3153,7 +3167,7 @@ test('hidden recycleはHPを維持し、deathだけ全回復し、retry後に旧
   await page.getByTestId('retry').dispatchEvent('click');
   await setHiddenRecycle(page, false);
   await setArenaPhysics(page, 'pause');
-  await startInitialCombat(page, schedule.restDurationMs);
+  await startInitialCombat(page, schedule.day1DurationMs);
   await expect(basicEnemyHp).toHaveAttribute('data-active', 'true');
   await expect(basicEnemyHp).toHaveAttribute('data-spawn-reason', 'initial');
   await expectOutputValue(basicEnemyHp, String(initialHp));
@@ -3169,12 +3183,12 @@ test('restではpath距離5 tile以上のhidden敵をrecycleできる', async ({
   await page.clock.install({ time: 1 });
   await page.clock.pauseAt(1);
   await page.goto(devStartUrl(
-    `/?enemyInitialCount=1&enemyStaggerIntervalMs=30000&combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+    `/?enemyInitialCount=1&enemyStaggerIntervalMs=30000&combatWaveDurationMs=${schedule.night1DurationMs}&restDurationMs=${schedule.day1DurationMs}`,
   ));
   await setArenaPhysics(page, 'pause');
   await setHiddenRecycle(page, false);
   const target: EnemyId = 'basic-1';
-  await startInitialCombat(page, schedule.restDurationMs);
+  await startInitialCombat(page, schedule.day1DurationMs);
   await expectStrictEnemySpawns(page, [target], 'initial');
   const mapSeed = Number(await page.getByTestId('map-seed').textContent());
   const map = generateArenaMap(mapSeed);
@@ -3200,7 +3214,7 @@ test('restではpath距離5 tile以上のhidden敵をrecycleできる', async ({
   }, restPlayerTile);
   await setHiddenRecycle(page, true);
   await page.clock.runFor(1_100);
-  await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase', 'rest');
+  await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase', 'day');
   await expect(page.getByTestId('phase-remaining')).toHaveText(/^00:(?:[12]\d|30)$/);
   for (let elapsed = 0; elapsed < 15_000; elapsed += 1_000) {
     if ((await enemySpawnMetadata(page, target)).recycleCount === '1') break;
@@ -3212,12 +3226,12 @@ test('restではpath距離5 tile以上のhidden敵をrecycleできる', async ({
   expect(recycled.spawnReason).toBe('recycle');
 });
 
-test('DEV scheduleの終端で勝利し、再挑戦でcombat phaseを初期化できる', async ({ page }) => {
+test('DEV scheduleはBoss夜で止まり、Boss撃破後の再挑戦でDay 1を初期化できる', async ({ page }) => {
   const schedule = createRunSchedule(1_000, 500);
   await page.clock.install({ time: 15 });
   await page.clock.pauseAt(15);
   await page.goto(devStartUrl(
-    `/?combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+    `/?combatWaveDurationMs=${schedule.night1DurationMs}&restDurationMs=${schedule.day1DurationMs}`,
   ));
   await setPlayerInvulnerable(page, true);
   await expect(page.getByTestId('survival-time')).toHaveText(formatSurvivalTime(runDurationMs(schedule)));
@@ -3225,17 +3239,24 @@ test('DEV scheduleの終端で勝利し、再挑戦でcombat phaseを初期化�
   const beforeTerminalTile = await playerTile.textContent();
   await page.clock.fastForward(runDurationMs(schedule));
   await expect(page.getByTestId('survival-time')).toHaveText(formatSurvivalTime(0));
-  await expect(page.getByTestId('wave')).toHaveText('3');
+  await expect(page.getByTestId('wave')).toHaveText('BOSS');
+  await expect(page.getByTestId('wave')).toHaveAttribute('data-state', 'playing');
+  await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase-id', 'boss-night');
+  await expect(page.getByTestId('phase-remaining')).toHaveText('--:--');
+  await expect(page.getByTestId('victory')).toBeHidden();
+  await page.clock.fastForward(schedule.night1DurationMs);
+  await expect(page.getByTestId('victory')).toBeHidden();
+  await defeatBoss(page);
   await expect(page.getByTestId('wave')).toHaveAttribute('data-state', 'victory');
   await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(0));
-  await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(0));
+  await expect(page.getByTestId('phase-remaining')).toHaveText('--:--');
   await expect(page.getByTestId('victory')).toBeVisible();
   await expect(page.getByTestId('ammo-box-count')).toHaveAttribute('data-respawn-tiles', '');
   await expect(page.getByTestId('defeat')).toBeHidden();
   await page.keyboard.press('2');
   await expect(page.getByTestId('weapon')).toHaveText('アサルトライフル');
   await page.keyboard.down('d');
-  await page.clock.fastForward(schedule.restDurationMs);
+  await page.clock.fastForward(schedule.day1DurationMs);
   await page.keyboard.up('d');
   await expect(playerTile).toHaveText(beforeTerminalTile ?? '');
   await page.getByTestId('retry').click();
@@ -3245,10 +3266,10 @@ test('DEV scheduleの終端で勝利し、再挑戦でcombat phaseを初期化�
   await expect(page.getByTestId('wave')).toHaveText('1');
   await expect(page.getByTestId('wave')).toHaveAttribute('data-state', 'playing');
   await expect(page.getByTestId('wave-remaining')).toHaveText(formatSurvivalTime(0));
-  await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase', 'preparation');
-  await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(schedule.restDurationMs));
+  await expect(page.getByTestId('run-panel')).toHaveAttribute('data-phase', 'day');
+  await expect(page.getByTestId('phase-remaining')).toHaveText(formatSurvivalTime(schedule.day1DurationMs));
   await expect(page.getByTestId('enemy-current')).toHaveText('0');
-  await startInitialCombat(page, schedule.restDurationMs);
+  await startInitialCombat(page, schedule.day1DurationMs);
   const activeAfterVictoryRetry = (await allEnemySpawnMetadata(page))
     .filter(metadata => metadata.active === 'true').length;
   await expect(page.getByTestId('enemy-current')).toHaveText(String(activeAfterVictoryRetry));
@@ -3316,7 +3337,7 @@ test('victoryとretryは弾薬箱の復活待ちをclearし、新しいrunを初
   await page.clock.setFixedTime(15);
   const terminalRunDurationMs = runDurationMs(schedule);
   await page.goto(devStartUrl(
-    `/?combatWaveDurationMs=${schedule.combatWaveDurationMs}&restDurationMs=${schedule.restDurationMs}`,
+    `/?combatWaveDurationMs=${schedule.night1DurationMs}&restDurationMs=${schedule.day1DurationMs}`,
   ));
   await setPlayerInvulnerable(page, true);
   const mapSeed = Number(await page.getByTestId('map-seed').textContent());
@@ -3336,6 +3357,7 @@ test('victoryとretryは弾薬箱の復活待ちをclearし、新しいrunを初
   await expect(boxCount).toHaveAttribute('data-respawn-boxes', boxId);
   await setArenaPhysics(page, 'pause');
   await page.clock.fastForward(terminalRunDurationMs);
+  await defeatBoss(page);
   await expect(page.getByTestId('victory')).toBeVisible();
   await expectAmmoBoxCount(boxCount, 3);
   await expect(boxCount).toHaveAttribute('data-respawn-boxes', '');

@@ -3,7 +3,7 @@ import { DIRECTION_LABELS, ENEMY_IDS } from '../game-data';
 import { PLAYER_ROLES, type PlayerRoleId } from '../player-data';
 import type { SoundWaveTile } from '../runtime-acoustic-graph';
 import type { RuntimeAreaNodeKind } from '../runtime-area-graph';
-import { AMMO_MATERIAL_ORDER, AMMO_MATERIALS, STABLE_ENEMY_SLOT_COUNT, WEAPONS, activeEnemyCount, activeWeapon, currentRunPhase, currentWaveNumber, hotbarItemAt, inventoryWeight, isHotbarContinuation, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, type AmmoMaterial, type CombatState, type EnemyInstanceId, type HotbarSlot, type InventorySlotRef, type MaterialId, type RunState } from '../rules';
+import { AMMO_MATERIAL_ORDER, AMMO_MATERIALS, STABLE_ENEMY_SLOT_COUNT, WEAPONS, activeEnemyCount, activeWeapon, currentRunPhase, currentRunPhaseId, currentRunPhaseLabel, currentWaveNumber, hotbarItemAt, inventoryWeight, isHotbarContinuation, remainingEnemyCount, remainingPhaseMs, remainingWaveMs, type AmmoMaterial, type CombatState, type EnemyInstanceId, type HotbarSlot, type InventorySlotRef, type MaterialId, type RunState } from '../rules';
 import { MATERIAL_CARRY, SCRAP_PLAYER_DROP_QUANTITY } from '../weight-data';
 
 export type EnemyHudView = {
@@ -760,17 +760,18 @@ export class ArenaHud {
 
   public updateRun(state: RunState): void {
     const phase = currentRunPhase(state);
-    this.waveHud.value = String(currentWaveNumber(state));
+    const phaseId = currentRunPhaseId(state);
+    const phaseRemainingMs = remainingPhaseMs(state);
+    this.waveHud.value = phaseId === 'boss-night' ? 'BOSS' : phaseId === 'final-day' ? 'FINAL' : String(currentWaveNumber(state));
     this.waveHud.dataset.state = state.status;
     this.waveRemainingHud.value = formatSurvivalTime(remainingWaveMs(state));
     this.runPanel.dataset.phase = phase;
-    this.runPhaseHud.value = phase === 'combat'
-      ? '夜（戦闘）'
-      : phase === 'preparation'
-        ? '昼（準備）'
-        : '昼（休憩）';
+    this.runPanel.dataset.phaseId = phaseId;
+    this.runPhaseHud.value = currentRunPhaseLabel(state);
     this.runPhaseHud.dataset.phase = phase;
-    this.phaseRemainingHud.value = formatSurvivalTime(remainingPhaseMs(state));
+    this.runPhaseHud.dataset.phaseId = phaseId;
+    this.phaseRemainingHud.value = phaseRemainingMs === null ? '--:--' : formatSurvivalTime(phaseRemainingMs);
+    this.phaseRemainingHud.dataset.timed = String(phaseRemainingMs !== null);
     this.enemyCurrentHud.value = String(activeEnemyCount(state));
     this.enemyGoalHud.value = String(STABLE_ENEMY_SLOT_COUNT);
     this.enemyRemainingHud.value = String(remainingEnemyCount(state));
